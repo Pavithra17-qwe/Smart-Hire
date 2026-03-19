@@ -1,0 +1,16 @@
+{
+  "placeholderImages": [
+    {
+      "id": "logo",
+      "description": "SmartHire Logo (Briefcase Icon Style)",
+      "imageUrl": "https://picsum.photos/seed/smarthire-brand/200/200",
+      "imageHint": "briefcase icon"
+    },
+    {
+      "id": "login-illustration",
+      "description": "AI Recruitment Illustration",
+      "imageUrl": "https://picsum.photos/seed/ai-recruitment-7/800/1000",
+      "imageHint": "ai hiring"
+    }
+  ]
+}

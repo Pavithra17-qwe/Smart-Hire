@@ -1,0 +1,16 @@
+{
+  "placeholderImages": [
+    {
+      "id": "logo",
+      "description": "SmartHire Logo (Blue Square Gift Style)",
+      "imageUrl": "https://picsum.photos/seed/smarthire-blue-gift/200/200",
+      "imageHint": "blue square icon"
+    },
+    {
+      "id": "login-illustration",
+      "description": "AI Robot Recruitment Specialist Illustration",
+      "imageUrl": "/ai-recruitment.png",
+      "imageHint": "robot recruitment"
+    }
+  ]
+}

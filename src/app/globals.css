@@ -1,0 +1,104 @@
+@import "react-day-picker/dist/style.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 260 40% 98%;
+    --foreground: 260 50% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 260 50% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 260 50% 10%;
+    /* Primary brand color: #6C63FF (HSL: 243 100% 69%) */
+    --primary: 243 100% 69%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 260 30% 96%;
+    --secondary-foreground: 260 50% 10%;
+    --muted: 260 30% 96%;
+    --muted-foreground: 260 20% 45%;
+    --accent: 244 100% 72%;
+    --accent-foreground: 260 50% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 260 20% 90%;
+    --input: 260 20% 90%;
+    --ring: 243 100% 69%;
+    --radius: 0.75rem;
+
+    /* Sidebar - SmartHire Purple Theme */
+    --sidebar-background: 246 100% 98%; /* #F4F3FF */
+    --sidebar-foreground: 240 16% 20%;  /* #2B2B3C */
+    --sidebar-primary: 243 100% 69%;    /* #6C63FF */
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 245 100% 95%;     /* #E8E6FF */
+    --sidebar-accent-foreground: 243 100% 69%; /* #6C63FF (Brand color for active icons/text) */
+    --sidebar-border: 245 50% 92%;
+    --sidebar-ring: 243 100% 69%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-body overflow-x-hidden;
+    width: 100%;
+  }
+}
+
+/* Hide native picker indicators but keep them functional and clickable over the whole input */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  left: 0;
+  top: 0;
+}
+
+input[type="date"]::-webkit-inner-spin-button,
+input[type="time"]::-webkit-inner-spin-button,
+input[type="date"]::-webkit-clear-button,
+input[type="time"]::-webkit-clear-button {
+  display: none;
+}
+
+/* Dedicated Horizontal Scroll Container for Upcoming Interviews */
+.interview-scroll {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 16px;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  width: 100%;
+  max-width: 100%;
+  padding-bottom: 12px;
+  scrollbar-width: thin;
+}
+
+.interview-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.interview-scroll::-webkit-scrollbar-thumb {
+  background: #c2c2c2;
+  border-radius: 8px;
+}
+
+.interview-scroll::-webkit-scrollbar-track {
+  background: #f2f2f2;
+}
+
+/* Fixed-width Interview Card to force overflow */
+.interview-card {
+  width: 300px;
+  min-width: 300px;
+  flex: 0 0 auto;
+}
