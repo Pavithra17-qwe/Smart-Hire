@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import { DashboardLayout } from "@/components/layout/dashboard-layout";
 import { useAuth, Role } from "@/hooks/use-auth";
@@ -9,7 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 
-const roleAreaMap: Record<Role, string> = {
+const roleAreaMap: Record<Exclude<Role, null>, string> = {
   admin: "admin",
   agency: "agency",
   hr: "hr",

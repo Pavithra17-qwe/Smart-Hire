@@ -30,7 +30,9 @@ export default function ChangePasswordPage() {
       if (!user) {
         router.replace("/login");
       } else if (firstLogin === false) {
-        router.replace(role === "admin" ? "/admin/dashboard" : "/agency/dashboard");
+        if (role) {
+            router.replace(role === "admin" ? "/admin/dashboard" : "/agency/dashboard");
+        }
       }
     }
   }, [user, firstLogin, role, authLoading, router]);

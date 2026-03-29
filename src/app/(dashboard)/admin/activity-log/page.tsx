@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 
 const ACTION_TYPES = ["Project Created", "Candidate Uploaded", "Interview Scheduled", "Status Updated", "Feedback Provided", "Offer Made", "JD Uploaded", "Candidate moved stage"];
-const ROLE_TYPES = ["admin", "hr", "agency", "panel"];
+const ROLE_TYPES = ["hr", "agency", "panel"];
 
 const ACTION_COLORS: Record<string, string> = {
   "Project Created": "bg-blue-500",

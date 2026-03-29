@@ -1,8 +1,7 @@
-
-"use client";
+'use client';
 
 import { useState, useEffect } from "react";
-import { collection, addDoc, onSnapshot, serverTimestamp, query, where, getDocs } from "firebase/firestore";
+import { collection, addDoc, onSnapshot, serverTimestamp, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -20,28 +19,33 @@ import { candidateMatchScoring } from "@/ai/flows/candidate-match-scoring-flow";
 import { Textarea } from "@/components/ui/textarea";
 import { logActivity } from "@/lib/activity-logger";
 
-const NOTICE_PERIOD_OPTIONS = ["Immediate", "15 Days", "30 Days", "60 Days", "90 Days"];
+const NOTICE_PERIOD_OPTIONS = ["Immediate", "0-15 days", "15-30 days", "30-60 days", "60+ days"];
+const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+const phoneRegex = /^[6-9]\d{9}$/;
 
 export default function CandidateEvaluation() {
-  const { user, role, agencyId: loggedInAgencyId, name: loggedInName } = useAuth();
+  const { user, role, name: loggedInName } = useAuth();
   const [projects, setProjects] = useState<any[]>([]);
-  const [agencies, setAgencies] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingExtracting, setIsLoadingExtracting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const router = useRouter();
 
+  const [hrProjectFilter, setHrProjectFilter] = useState<string | null>(null);
+
   const [formData, setFormData] = useState({
     candidateName: "",
     candidateEmail: "",
     phoneNumber: "",
-    projectId: "",
-    agencyId: "",
-    role: "",
+    candidateLocation: "",
     experience: "",
+    candidateDesignation: "",
     currentCtc: "",
     expectedCtc: "",
+    projectId: "",
+    role: "",
+    location: "",
     noticePeriod: "",
     isComfortableOnsite: "",
     comments: "",
@@ -49,327 +53,302 @@ export default function CandidateEvaluation() {
   });
 
   useEffect(() => {
-    if (role === "agency" && loggedInAgencyId) {
-      setFormData(prev => ({ ...prev, agencyId: loggedInAgencyId }));
+    if (!role || !user) {
+      setProjects([]);
+      return;
     }
-  }, [role, loggedInAgencyId]);
 
-  useEffect(() => {
-    const unsubProjects = onSnapshot(collection(db, "job_requisitions"), (snap) => {
-      const allProjects = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setProjects(allProjects.filter((p: any) => p.status === "Active" || p.status === "Open" || !p.status));
-    });
+    let unsub: (() => void) | undefined;
+    let q;
 
-    if (role === "admin") {
-      const unsubAgencies = onSnapshot(collection(db, "agencies"), (snap) => {
-        const allAgencies = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setAgencies(allAgencies.filter((a: any) => a.status === "Active" || !a.status));
+    if (role === 'admin') {
+      q = query(collection(db, "job_requisitions"), where("status", "==", "Active"));
+    } else if (role === 'hr') {
+      if (!hrProjectFilter) {
+        setProjects([]);
+        return; 
+      }
+      const baseQuery = query(collection(db, "job_requisitions"), where("status", "==", "Active"));
+      if (hrProjectFilter === 'admin') {
+        q = query(baseQuery, where("createdByRole", "==", "admin"));
+      } else if (hrProjectFilter === 'my') {
+        q = query(baseQuery, where("createdBy", "==", user.uid));
+      } else { // 'all_hr'
+        q = query(baseQuery, where("createdByRole", "==", "hr"));
+      }
+    } else if (role === 'agency') {
+      q = query(collection(db, "requirements"), where("createdBy", "==", user.uid));
+    }
+
+    if (q) {
+      unsub = onSnapshot(q, (snap) => {
+        const data = snap.docs.map(d => ({ ...d.data(), id: d.id, isReq: role === 'agency' }));
+        setProjects(data);
+      }, (error) => {
+        console.error("Error fetching projects: ", error);
+        setProjects([]);
       });
-      return () => { unsubProjects(); unsubAgencies(); };
-    } else if (role === "agency" && loggedInAgencyId) {
-      const fetchCurrentAgency = async () => {
-        const q = query(collection(db, "agencies"), where("agencyId", "==", loggedInAgencyId));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-            setAgencies(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        }
-      };
-      fetchCurrentAgency();
     }
-    
-    return () => unsubProjects();
-  }, [role, loggedInAgencyId]);
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [role, user, hrProjectFilter]);
 
   const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => {
-      const next = { ...prev, [field]: value };
-      if (field === "projectId") {
-        next.role = "";
-      }
-      return next;
-    });
+    let processedValue = value;
+    if (field === 'phoneNumber') {
+      processedValue = value.replace(/[^0-9]/g, '').slice(0, 10);
+    }
+    setFormData((prev) => ({ ...prev, [field]: processedValue }));
+
+    if (field === 'projectId') {
+        const project = projects.find(p => p.id === value);
+        if (role === 'hr' && project) {
+            const newRole = project.roles ? project.roles.join(', ') : '';
+            const newLocation = project.locations ? project.locations.join(', ') : '';
+            setFormData((prev) => ({ ...prev, role: newRole, location: newLocation }));
+        } else if (!value) {
+            setFormData((prev) => ({ ...prev, role: '', location: '' }));
+        }
+    }
+
     if (errors[field]) {
-      setErrors(prev => {
-        const next = { ...prev };
-        delete next[field];
-        return next;
-      });
+      setErrors((prev) => ({ ...prev, [field]: "" }));
     }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setErrors({});
-      const allowedTypes = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"];
-      if (!allowedTypes.includes(file.type)) {
-        toast({ variant: "destructive", title: "Invalid Format", description: "Please upload a PDF, DOC, or DOCX file." });
-        e.target.value = "";
-        return;
-      }
-      if (file.size > 1024 * 1024) {
-        toast({ variant: "destructive", title: "File too large", description: "File size must be less than 1MB" });
-        e.target.value = "";
-        return;
-      }
-      setIsLoadingExtracting(true);
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = (reader.result as string).split(",")[1];
-        setFormData(prev => ({ ...prev, resumeFile: { name: file.name, type: file.type, data: base64 } }));
-        try {
-          const extractedData = await candidateResumeExtraction({ fileName: file.name, fileType: file.type, fileDataB64: base64 });
-          if (extractedData) {
-            setFormData(prev => ({
-              ...prev,
-              candidateName: extractedData.candidateName || prev.candidateName,
-              candidateEmail: extractedData.candidateEmail || prev.candidateEmail,
-              phoneNumber: extractedData.phoneNumber || prev.phoneNumber,
-              experience: extractedData.experience || prev.experience,
-              currentCtc: extractedData.currentCtc || prev.currentCtc,
-              expectedCtc: extractedData.expectedCtc || prev.expectedCtc,
-              noticePeriod: extractedData.noticePeriod || prev.noticePeriod,
-            }));
-            toast({ title: "Resume Parsed Successfully", className: "bg-green-50 border-green-200", description: "Extracted details have been filled into the form." });
-          }
-        } catch (error: any) {
-          toast({ variant: "destructive", title: "Extraction Failed", description: "Could not parse resume automatically." });
-        } finally {
-          setIsLoadingExtracting(false);
+    if (!file) return;
+
+    setErrors(prev => ({ ...prev, resumeFile: ""}));
+
+    setIsLoadingExtracting(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(",")[1];
+      setFormData((prev) => ({ ...prev, resumeFile: { name: file.name, type: file.type, data: base64 } }));
+      try {
+        const extractedData = await candidateResumeExtraction({ fileName: file.name, fileType: file.type, fileDataB64: base64 });
+        if (extractedData) {
+          setFormData((prev) => ({ ...prev, ...extractedData, experience: String(extractedData.experience || '') }));
+          toast({ title: "Resume Parsed", description: "Extracted details have been auto-filled." });
         }
-      };
-      reader.readAsDataURL(file);
-    }
+      } catch (error) {
+        toast({ variant: "destructive", title: "Extraction Failed", description: "Unable to extract details from resume. Please fill manually." });
+      } finally {
+        setIsLoadingExtracting(false);
+      }
+    };
+    reader.readAsDataURL(file);
   };
-
-  const selectedProject = projects.find(p => p.id === formData.projectId);
-  const selectedAgency = agencies.find(a => a.agencyId === formData.agencyId) || (role === "agency" ? { name: loggedInName, agencyId: loggedInAgencyId } : null);
-
-  const validate = () => {
+  
+  const validateForm = () => {
     const newErrors: Record<string, string> = {};
-    if (!formData.candidateName) newErrors.candidateName = "Required";
-    if (!formData.candidateEmail) newErrors.candidateEmail = "Required";
-    if (!formData.phoneNumber || formData.phoneNumber.length !== 10) newErrors.phoneNumber = "Invalid phone";
-    if (!formData.projectId) newErrors.projectId = "Required";
-    if (!formData.role) newErrors.role = "Required";
-    if (!formData.agencyId) newErrors.agencyId = "Required";
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+    if (!formData.candidateName.trim()) newErrors.candidateName = "Candidate name is required.";
+    if (!formData.candidateEmail.trim() || !emailRegex.test(formData.candidateEmail)) newErrors.candidateEmail = "A valid email is required.";
+    if (!formData.phoneNumber.trim() || !phoneRegex.test(formData.phoneNumber)) newErrors.phoneNumber = "A valid 10-digit Indian phone number is required.";
+    if (!formData.candidateLocation.trim()) newErrors.candidateLocation = "Candidate location is required.";
+    if (!formData.experience) newErrors.experience = "Experience is required.";
+    if (!formData.candidateDesignation.trim()) newErrors.candidateDesignation = "Candidate designation is required.";
+    if (!formData.currentCtc) newErrors.currentCtc = "Current CTC is required.";
+    if (!formData.expectedCtc) newErrors.expectedCtc = "Expected CTC is required.";
+    if (!formData.projectId) newErrors.projectId = "Project is mandatory.";
+    if (!formData.noticePeriod) newErrors.noticePeriod = "Notice period is required.";
+    if (!formData.isComfortableOnsite) newErrors.isComfortableOnsite = "This field is required.";
+    if (!formData.resumeFile) newErrors.resumeFile = "Resume is mandatory.";
+    
+    if (!(role === 'hr' && formData.projectId)) {
+        if (!formData.role) newErrors.role = "Designation is required.";
+        if (!formData.location) newErrors.location = "Location is required.";
+    }
+
+    return newErrors;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validate()) {
-      toast({ variant: "destructive", title: "Validation Error", description: "Please fill all mandatory fields." });
+    const formErrors = validateForm();
+    if (Object.keys(formErrors).length > 0) {
+      setErrors(formErrors);
       return;
     }
+
     setIsLoading(true);
+
     try {
-      const q = query(collection(db, "candidates"), where("candidateName", "==", formData.candidateName), where("role", "==", formData.role));
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
-        toast({ variant: "destructive", title: "Duplicate Candidate", description: "Candidate already exists with the same name and role." });
-        setIsLoading(false);
-        return;
-      }
-      let matchScore = 0, matchSummary = "No scoring data available.";
-      if (selectedProject?.jdFileData && formData.resumeFile?.data) {
+      const selectedSource = projects.find(p => p.id === formData.projectId);
+      if (!selectedSource) throw new Error("Selected project not found.");
+      
+      let matchScore = null;
+      let matchSummary = "Not scored.";
+
+      if (selectedSource.jdFileData && formData.resumeFile?.data) {
+        toast({ title: 'AI Scoring Started', description: 'Parsing resume and generating match score...' });
         try {
-          const result = await candidateMatchScoring({ jdFileDataB64: selectedProject.jdFileData, jdFileType: selectedProject.jdFileType, resumeFileDataB64: formData.resumeFile.data, resumeFileType: formData.resumeFile.type });
+          const result = await candidateMatchScoring({
+            jdFileDataB64: selectedSource.jdFileData,
+            jdFileType: selectedSource.jdFileType,
+            resumeFileDataB64: formData.resumeFile.data,
+            resumeFileType: formData.resumeFile.type
+          });
           matchScore = result.matchScore;
           matchSummary = result.summary;
-        } catch (err) { console.error("AI Scoring failed", err); }
+          toast({ title: 'AI Scoring Complete', description: `Candidate match score is ${result.matchScore}%.` });
+        } catch (err) {
+          toast({ variant: 'destructive', title: 'AI Scoring Failed', description: "Could not generate match score." });
+        }
       }
-      const candidateData = {
-        candidateName: formData.candidateName,
-        candidateEmail: formData.candidateEmail,
-        phoneNumber: formData.phoneNumber,
-        projectId: formData.projectId,
-        projectName: selectedProject?.projectName || "Unknown Project",
-        projectLocations: selectedProject?.locations || [],
-        role: formData.role,
-        agencyId: formData.agencyId,
-        agencyName: selectedAgency?.name || "Agency",
-        experience: formData.experience,
-        currentCtc: formData.currentCtc,
-        expectedCtc: formData.expectedCtc,
-        noticePeriod: formData.noticePeriod,
-        isComfortableOnsite: formData.isComfortableOnsite,
-        comments: formData.comments,
-        resumeFileName: formData.resumeFile?.name || "",
-        resumeFileType: formData.resumeFile?.type || "",
-        resumeFileData: formData.resumeFile?.data || "",
+
+      const { projectId, ...restFormData } = formData;
+
+      const candidateData: any = {
+        ...restFormData,
+        candidateDesignation: formData.candidateDesignation.trim() || "N/A",
         matchScore,
         matchSummary,
-        r1Status: "Pending",
-        r2Status: "Pending",
-        hrStatus: "Pending",
-        offerStatus: "Offer Pending",
-        finalStatus: "In Progress",
+        projectName: selectedSource.projectName,
+        projectLocation: selectedSource.location || "N/A",
         createdDate: serverTimestamp(),
-        createdBy: user?.uid
+        createdBy: user?.uid,
+        createdByRole: role,
+        status: "Submitted"
       };
+      
+      if (role === 'agency') {
+        candidateData.requirementId = selectedSource.id;
+        candidateData.agencyName = loggedInName;
+      } else {
+        candidateData.jobRequisitionId = selectedSource.id;
+      }
+
+      const historyCollection = collection(db, "candidate_history");
       const newDocRef = await addDoc(collection(db, "candidates"), candidateData);
 
-      await logActivity({
-        userId: user!.uid,
-        userName: loggedInName!,
-        userRole: role!,
-        action: "Candidate Uploaded",
-        stage: "Sourcing",
-        targetType: "Candidate",
-        targetId: newDocRef.id,
-        targetName: candidateData.candidateName,
+      await addDoc(historyCollection, {
+        candidateId: newDocRef.id,
+        ...candidateData
       });
+
+      if (user && loggedInName && role) {
+        await logActivity({
+            userId: user.uid,
+            userName: loggedInName,
+            userRole: role,
+            action: "Candidate Uploaded",
+            stage: "Sourcing",
+            targetType: "Candidate",
+            targetId: newDocRef.id,
+            targetName: candidateData.candidateName
+        });
+      }
 
       toast({ title: "Success", description: "Candidate profile created successfully" });
       router.push("/candidates/history");
+
     } catch (error: any) {
-      toast({ variant: "destructive", title: "Error", description: error.message || "Failed to add candidate." });
+      console.error("Submission Error: ", error);
+      toast({ variant: "destructive", title: "Submission Failed", description: error.message });
     } finally {
       setIsLoading(false);
     }
   };
+  
+  const isHrProjectSelected = role === 'hr' && !!formData.projectId;
 
   return (
     <div className="max-w-3xl mx-auto py-8">
       <Card className="shadow-lg border-t-4 border-t-primary">
         <CardHeader>
           <div className="flex items-center gap-3 mb-2">
-            <div className="p-2 bg-primary/10 rounded-lg"><UserPlus className="w-6 h-6 text-primary" /></div>
-            <CardTitle className="text-2xl font-headline font-bold tracking-tight">New Candidate Profile</CardTitle>
+            <UserPlus className="w-6 h-6 text-primary" />
+            <CardTitle className="text-2xl font-bold">New Candidate Profile</CardTitle>
           </div>
           <CardDescription>Start by uploading a resume to auto-fill the evaluation form.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form onSubmit={handleSubmit} className="space-y-8">
             <div className="space-y-2">
-              <Label className="flex items-center gap-2 font-bold text-foreground">1. Upload Resume (Max 1MB) <Sparkles className="w-4 h-4 text-primary animate-pulse" /></Label>
+              <Label className="font-bold flex items-center gap-2">Upload Resume <Sparkles className="w-4 h-4 text-primary" /></Label>
               <div className="flex items-center justify-center w-full">
-                <label className={cn("flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors", formData.resumeFile ? "bg-green-50/50 border-green-200" : "bg-muted/50 border-border hover:bg-muted")}>
+                <label className={cn("flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer", {"border-red-500": errors.resumeFile, "bg-green-50/50 border-green-200": formData.resumeFile, "bg-muted/50 border-border hover:bg-muted": !formData.resumeFile})}>
                   <div className="flex flex-col items-center justify-center pt-5 pb-6 px-4 text-center">
-                    {isLoadingExtracting ? (
-                      <div className="flex flex-col items-center gap-2"><Loader2 className="w-10 h-10 text-primary animate-spin" /><p className="text-sm font-medium text-primary">AI is parsing your document...</p></div>
-                    ) : formData.resumeFile ? (
-                      <div className="flex flex-col items-center gap-2"><FileCheck className="w-10 h-10 text-green-600" /><p className="text-sm font-medium text-green-600 line-clamp-1">{formData.resumeFile.name}</p></div>
-                    ) : (
-                      <><Upload className="w-10 h-10 text-muted-foreground mb-2" /><p className="text-sm text-muted-foreground font-medium">Click to upload or drag and drop</p></>
-                    )}
+                    {isLoadingExtracting ? <Loader2 className="w-10 h-10 text-primary animate-spin" /> : formData.resumeFile ? <FileCheck className="w-10 h-10 text-green-600" /> : <Upload className={cn("w-10 h-10 text-muted-foreground mb-2")} />}
+                    <p className={cn("text-sm text-muted-foreground font-medium")}>{formData.resumeFile ? formData.resumeFile.name : 'Click to upload or drag and drop'}</p>
                   </div>
-                  <input type="file" className="hidden" accept=".pdf,.doc,.docx" onChange={handleFileChange} disabled={isLoadingExtracting} />
+                  <input type="file" className="hidden" accept=".pdf,.docx" onChange={handleFileChange} disabled={isLoadingExtracting} />
                 </label>
               </div>
+              {errors.resumeFile && <p className="text-xs text-red-500 mt-2">{errors.resumeFile}</p>}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6">
-              <div className="space-y-2">
-                <Label className="font-bold">Candidate Name</Label>
-                <Input value={formData.candidateName} onChange={e => handleInputChange('candidateName', e.target.value)} placeholder="Full Name" className={cn(errors.candidateName && "border-destructive")} />
-                {errors.candidateName && <p className="text-xs text-destructive">{errors.candidateName}</p>}
-              </div>
-              <div className="space-y-2">
-                <Label className="font-bold">Candidate Email</Label>
-                <Input type="email" value={formData.candidateEmail} onChange={e => handleInputChange('candidateEmail', e.target.value)} placeholder="email@example.com" className={cn(errors.candidateEmail && "border-destructive")} />
-                {errors.candidateEmail && <p className="text-xs text-destructive">{errors.candidateEmail}</p>}
-              </div>
-              <div className="space-y-2">
-                <Label className="font-bold">Phone Number</Label>
-                <Input value={formData.phoneNumber} onChange={e => handleInputChange('phoneNumber', e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="10 digit number" className={cn(errors.phoneNumber && "border-destructive")} />
-                {errors.phoneNumber && <p className="text-xs text-destructive">{errors.phoneNumber}</p>}
-              </div>
-              <div className="space-y-2">
-                <Label className="font-bold">Experience (Years)</Label>
-                <Input type="number" step="0.1" value={formData.experience} onChange={e => handleInputChange('experience', e.target.value)} placeholder="e.g. 5.5" />
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-8">
+              <div className="md:col-span-2 space-y-2">
+                
+                {role === 'hr' && (
+                  <div className="mb-4 p-3 rounded-md bg-muted/50">
+                    <Label className="font-bold text-sm">Filter Projects</Label>
+                    <RadioGroup value={hrProjectFilter || ""} onValueChange={setHrProjectFilter} className="flex items-center gap-4 mt-2">
+                      <div className="flex items-center space-x-2"><RadioGroupItem value="my" id="my" /><Label htmlFor="my">My Projects</Label></div>
+                      <div className="flex items-center space-x-2"><RadioGroupItem value="all_hr" id="all_hr" /><Label htmlFor="all_hr">All HR Projects</Label></div>
+                      <div className="flex items-center space-x-2"><RadioGroupItem value="admin" id="admin" /><Label htmlFor="admin">Admin Projects</Label></div>
+                    </RadioGroup>
+                  </div>
+                )}
 
-              <div className="space-y-2">
-                <Label className="font-bold">Current CTC</Label>
-                <Input type="number" value={formData.currentCtc} onChange={e => handleInputChange('currentCtc', e.target.value)} placeholder="Enter Current CTC" />
-              </div>
-              <div className="space-y-2">
-                <Label className="font-bold">Expected CTC</Label>
-                <Input type="number" value={formData.expectedCtc} onChange={e => handleInputChange('expectedCtc', e.target.value)} placeholder="Enter Expected CTC" />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="font-bold">Notice Period</Label>
-                <Select value={formData.noticePeriod} onValueChange={v => handleInputChange('noticePeriod', v)}>
-                  <SelectTrigger><SelectValue placeholder="Select Availability" /></SelectTrigger>
-                  <SelectContent>{NOTICE_PERIOD_OPTIONS.map(opt => (<SelectItem key={opt} value={opt}>{opt}</SelectItem>))}</SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="font-bold">Hiring Project</Label>
-                <Select value={formData.projectId} onValueChange={v => handleInputChange('projectId', v)}>
-                  <SelectTrigger className={cn(errors.projectId && "border-destructive")}>
-                    <SelectValue placeholder="Select Project" />
-                  </SelectTrigger>
-                  <SelectContent>{projects.map(p => (<SelectItem key={p.id} value={p.id}>{p.projectName}</SelectItem>))}</SelectContent>
-                </Select>
-                {errors.projectId && <p className="text-xs text-destructive">{errors.projectId}</p>}
-              </div>
-
-              <div className="space-y-2">
-                <Label className="font-bold">Designation</Label>
-                <Select value={formData.role} onValueChange={v => handleInputChange('role', v)} disabled={!selectedProject}>
-                  <SelectTrigger className={cn(errors.role && "border-destructive")}>
-                    <SelectValue placeholder={selectedProject ? "Select Role" : "Select Project first"} />
-                  </SelectTrigger>
-                  <SelectContent>{(selectedProject?.roles || []).map((r: string) => (<SelectItem key={r} value={r}>{r}</SelectItem>))}</SelectContent>
-                </Select>
-                {errors.role && <p className="text-xs text-destructive">{errors.role}</p>}
-              </div>
-              <div className="space-y-2">
-                <Label className="font-bold">Project Location</Label>
-                <Input 
-                  readOnly 
-                  value={selectedProject?.locations?.join(", ") || ""} 
-                  placeholder="Auto-filled from project" 
-                  className="bg-muted/30 cursor-not-allowed font-medium"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="font-bold">Sourcing Agency</Label>
-                <Select 
-                  value={formData.agencyId} 
-                  onValueChange={v => handleInputChange('agencyId', v)}
-                  disabled={role === "agency"}
-                >
-                  <SelectTrigger className={cn(errors.agencyId && "border-destructive")}>
-                    <SelectValue placeholder="Select Sourcing Agency" />
+                <Label htmlFor="project" className="font-bold">Job Requisition (Project)</Label>
+                <Select value={formData.projectId} onValueChange={v => handleInputChange('projectId', v)} disabled={role === 'hr' && !hrProjectFilter}>
+                  <SelectTrigger id="project" className={cn({"border-red-500": errors.projectId})}>
+                     <SelectValue placeholder={role === 'hr' && !hrProjectFilter ? "Select a filter above to see projects" : "Select a project..."} />
                   </SelectTrigger>
                   <SelectContent>
-                    {agencies.map(a => (
-                      <SelectItem key={a.agencyId} value={a.agencyId}>{a.name}</SelectItem>
-                    ))}
+                    {projects.length > 0 ? (
+                      projects.map(p => (
+                        <SelectItem key={p.id} value={p.id}>{p.projectName} {role !== 'agency' ? `(${p.createdByRole})` : ''}</SelectItem>
+                      ))
+                    ) : (
+                       (role === 'hr' && hrProjectFilter) || role === 'admin' || role === 'agency' ? (
+                        <div className="px-4 py-2 text-sm text-muted-foreground">No projects available.</div>
+                       ) : null
+                    )}
                   </SelectContent>
                 </Select>
-                {errors.agencyId && <p className="text-xs text-destructive">{errors.agencyId}</p>}
+                {errors.projectId && <p className="text-xs text-red-500 mt-1">{errors.projectId}</p>}
               </div>
-              <div className="space-y-3">
-                <Label className="font-bold">Are you comfortable working onsite?</Label>
-                <RadioGroup value={formData.isComfortableOnsite} onValueChange={v => handleInputChange('isComfortableOnsite', v)} className="flex items-center gap-6 pt-1">
-                  <div className="flex items-center space-x-2"><RadioGroupItem value="Yes" id="y" /><Label htmlFor="y" className="cursor-pointer">Yes</Label></div>
-                  <div className="flex items-center space-x-2"><RadioGroupItem value="No" id="n" /><Label htmlFor="n" className="cursor-pointer">No</Label></div>
-                </RadioGroup>
-              </div>
+
+              <div className="md:col-span-2"><hr /></div>
+
+              {/* Row 1 */}
+              <div className="space-y-2"><Label className="font-bold">Candidate Name</Label><Input value={formData.candidateName} onChange={e => handleInputChange('candidateName', e.target.value)} className={cn({"border-red-500": errors.candidateName})} />{errors.candidateName && <p className="text-xs text-red-500 mt-1">{errors.candidateName}</p>}</div>
+              <div className="space-y-2"><Label className="font-bold">Candidate Email</Label><Input type="email" value={formData.candidateEmail} onChange={e => handleInputChange('candidateEmail', e.target.value)} className={cn({"border-red-500": errors.candidateEmail})} />{errors.candidateEmail && <p className="text-xs text-red-500 mt-1">{errors.candidateEmail}</p>}</div>
+
+              {/* Row 2 */}
+              <div className="space-y-2"><Label className="font-bold">Phone Number</Label><Input value={formData.phoneNumber} onChange={e => handleInputChange('phoneNumber', e.target.value)} maxLength={10} className={cn({"border-red-500": errors.phoneNumber})} />{errors.phoneNumber && <p className="text-xs text-red-500 mt-1">{errors.phoneNumber}</p>}</div>
+              <div className="space-y-2"><Label className="font-bold">Candidate Location</Label><Input value={formData.candidateLocation} onChange={e => handleInputChange('candidateLocation', e.target.value)} className={cn({"border-red-500": errors.candidateLocation})} />{errors.candidateLocation && <p className="text-xs text-red-500 mt-1">{errors.candidateLocation}</p>}</div>
+
+              {/* Row 3 */}
+              <div className="space-y-2"><Label className="font-bold">Experience (Years)</Label><Input type="number" step="0.1" value={formData.experience} onChange={e => handleInputChange('experience', e.target.value)} className={cn({"border-red-500": errors.experience})} />{errors.experience && <p className="text-xs text-red-500 mt-1">{errors.experience}</p>}</div>
+              <div className="space-y-2"><Label className="font-bold">Candidate Designation</Label><Input value={formData.candidateDesignation} onChange={e => handleInputChange('candidateDesignation', e.target.value)} className={cn({"border-red-500": errors.candidateDesignation})} />{errors.candidateDesignation && <p className="text-xs text-red-500 mt-1">{errors.candidateDesignation}</p>}</div>
+
+              {/* Row 4 */}
+              <div className="space-y-2"><Label className="font-bold">Current CTC</Label><Input type="number" value={formData.currentCtc} onChange={e => handleInputChange('currentCtc', e.target.value)} className={cn({"border-red-500": errors.currentCtc})} />{errors.currentCtc && <p className="text-xs text-red-500 mt-1">{errors.currentCtc}</p>}</div>
+              <div className="space-y-2"><Label className="font-bold">Expected CTC</Label><Input type="number" value={formData.expectedCtc} onChange={e => handleInputChange('expectedCtc', e.target.value)} className={cn({"border-red-500": errors.expectedCtc})} />{errors.expectedCtc && <p className="text-xs text-red-500 mt-1">{errors.expectedCtc}</p>}</div>
+
+              {/* Row 5 */}
+              <div className="space-y-2"><Label className="font-bold">Project Designation</Label><Input value={formData.role} onChange={e => handleInputChange('role', e.target.value)} disabled={isHrProjectSelected} className={cn({"border-red-500": errors.role, 'bg-muted/30 cursor-not-allowed': isHrProjectSelected})} />{errors.role && <p className="text-xs text-red-500 mt-1">{errors.role}</p>}</div>
+              <div className="space-y-2"><Label className="font-bold">Project Location</Label><Input value={formData.location} onChange={e => handleInputChange('location', e.target.value)} disabled={isHrProjectSelected} className={cn({"border-red-500": errors.location, 'bg-muted/30 cursor-not-allowed': isHrProjectSelected})} />{errors.location && <p className="text-xs text-red-500 mt-1">{errors.location}</p>}</div>
+
+              {/* Row 6 */}
+              <div className="space-y-2"><Label className="font-bold">Notice Period</Label><Select value={formData.noticePeriod} onValueChange={v => handleInputChange('noticePeriod', v)}><SelectTrigger className={cn({"border-red-500": errors.noticePeriod})}><SelectValue placeholder="Select..." /></SelectTrigger><SelectContent>{NOTICE_PERIOD_OPTIONS.map(opt => (<SelectItem key={opt} value={opt}>{opt}</SelectItem>))}</SelectContent></Select>{errors.noticePeriod && <p className="text-xs text-red-500 mt-1">{errors.noticePeriod}</p>}</div>
+              <div className="space-y-3"><Label className={cn("font-bold", {"text-red-500": errors.isComfortableOnsite})}>Comfortable working onsite?</Label><RadioGroup value={formData.isComfortableOnsite} onValueChange={v => handleInputChange('isComfortableOnsite', v)} className="flex items-center gap-6 pt-2"><div className="flex items-center space-x-2"><RadioGroupItem value="Yes" id="y" /><Label htmlFor="y">Yes</Label></div><div className="flex items-center space-x-2"><RadioGroupItem value="No" id="n" /><Label htmlFor="n">No</Label></div></RadioGroup>{errors.isComfortableOnsite && <p className="text-xs text-red-500 mt-1">{errors.isComfortableOnsite}</p>}</div>
+
+              {/* Row 7 */}
+              <div className="md:col-span-2 space-y-2"><Label className="font-bold">Comments</Label><Textarea value={formData.comments} onChange={e => handleInputChange('comments', e.target.value)} /></div>
             </div>
 
-            {(role === 'hr' || role === 'agency') && (
-              <div className="space-y-2 pt-4">
-                  <Label className="font-bold">Comments (Optional)</Label>
-                  <Textarea
-                      value={formData.comments}
-                      onChange={e => handleInputChange('comments', e.target.value)}
-                      placeholder="Add any additional comments or feedback here..."
-                      rows={4}
-                  />
-              </div>
-            )}
-
-            <Button type="submit" className="w-full h-12 text-lg font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98]" disabled={isLoading || isLoadingExtracting || !formData.resumeFile}>
-              {isLoading ? (<><Loader2 className="mr-2 h-5 w-5 animate-spin" />Processing...</>) : ("Submit Candidate")}
+            <Button type="submit" className="w-full h-12 text-lg" disabled={isLoading || isLoadingExtracting}>
+              {isLoading ? <Loader2 className="animate-spin" /> : 'Submit Candidate'}
             </Button>
           </form>
         </CardContent>

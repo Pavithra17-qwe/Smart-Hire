@@ -33,21 +33,39 @@ const sendWelcomeEmailFlow = ai.defineFlow(
     }),
   },
   async (input) => {
-    const emailBody = `Welcome to SmartHire!
+    // Ensure all required SMTP environment variables are set
+    const requiredEnvVars = [
+      'SMTP_HOST',
+      'SMTP_PORT',
+      'SMTP_USER',
+      'SMTP_PASS',
+      'SMTP_FROM',
+    ];
+    const missingVars = requiredEnvVars.filter((key) => !process.env[key]);
 
-Your agency account has been created successfully.
+    if (missingVars.length > 0) {
+      const errorMessage = `Missing required environment variables for sending email: ${missingVars.join(', ')}`;
+      console.error(`[Welcome Email Error] ${errorMessage}`);
+      
+      // Log the configuration error to Firestore
+      try {
+        await addDoc(collection(db, 'notifications'), {
+          type: 'Welcome Email',
+          agencyName: input.agencyName,
+          recipientEmail: input.agencyEmail,
+          status: 'Failed',
+          error: errorMessage,
+          sentAt: serverTimestamp(),
+        });
+      } catch (logErr) {
+        console.error('Failed to log configuration error to Firestore:', logErr);
+      }
+      
+      // Return failure without trying to send an email
+      return { success: false };
+    }
 
-Login Details:
-Email: ${input.agencyEmail}
-Temporary Password: ${input.tempPassword}
-
-Login to SmartHire:
-https://smart-hire-swart.vercel.app/
-
-Please log in using the above credentials and change your password after your first login.
-
-Best regards,
-The SmartHire Team`;
+    const emailBody = `Welcome to SmartHire!\n\nYour agency account has been created successfully.\n\nLogin Details:\nEmail: ${input.agencyEmail}\nTemporary Password: ${input.tempPassword}\n\nLogin to SmartHire:\nhttps://smart-hire-swart.vercel.app/\n\nPlease log in using the above credentials and change your password after your first login.\n\nBest regards,\nThe SmartHire Team`;
 
     try {
       const transporter = nodemailer.createTransport({

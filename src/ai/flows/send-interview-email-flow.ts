@@ -1,34 +1,36 @@
 'use server';
 /**
- * @fileOverview A flow for sending real interview schedule notifications using Nodemailer.
+ * @fileOverview A flow for sending interview emails to candidates.
  *
- * - sendInterviewEmail - A function that handles the email notification logic.
+ * - sendInterviewEmail - A function that handles the interview email logic.
  * - SendInterviewEmailInput - The input type for the notification.
  */
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
-import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import {db} from '@/lib/firebase';
+import {collection, addDoc, serverTimestamp} from 'firebase/firestore';
 import nodemailer from 'nodemailer';
 
+// Define the input schema for the interview email flow
 const SendInterviewEmailInputSchema = z.object({
   candidateName: z.string().describe('Full name of the candidate.'),
-  role: z.string().describe('The job role the candidate is applying for.'),
-  agencyName: z.string().describe('The name of the recruitment agency.'),
-  agentName: z.string().describe('Name of the assigned agent/contact person.'),
-  agentEmail: z.string().email().describe('Email of the assigned agent.'),
-  scheduledDate: z.string().describe('The date selected for the interview.'),
-  scheduledTime: z.string().describe('The time selected for the interview.'),
-  round: z.string().describe('The interview round (e.g., L1, L2, HR Round).'),
-  adminName: z.string().describe('Name of the assigned admin.'),
+  candidateEmail: z.string().email().describe('Email of the candidate.'),
+  jobRole: z.string().describe('The job role the candidate is being interviewed for.'),
+  interviewerName: z.string().describe('Name of the interviewer.'),
+  interviewDate: z.string().describe('Date of the interview (e.g., Monday, July 29, 2024).'),
+  interviewTime: z.string().describe('Time of the interview (e.g., 10:00 AM PST).'),
+  interviewLink: z.string().url().describe('URL for the video call (e.g., Google Meet link).'),
 });
+
 export type SendInterviewEmailInput = z.infer<typeof SendInterviewEmailInputSchema>;
 
+// Export a function to be called by the application
 export async function sendInterviewEmail(input: SendInterviewEmailInput): Promise<{ success: boolean; logId?: string }> {
   return sendInterviewEmailFlow(input);
 }
 
+// Define the Genkit flow
 const sendInterviewEmailFlow = ai.defineFlow(
   {
     name: 'sendInterviewEmailFlow',
@@ -39,73 +41,74 @@ const sendInterviewEmailFlow = ai.defineFlow(
     }),
   },
   async (input) => {
-    const subject = `Schedule ${input.round} Interview – ${input.candidateName} (${input.role})`;
-    
-    const emailBody = `Hi ${input.agencyName},
+    // Ensure all required SMTP environment variables are set
+    const requiredEnvVars = [
+      'SMTP_HOST',
+      'SMTP_PORT',
+      'SMTP_USER',
+      'SMTP_PASS',
+      'SMTP_FROM',
+    ];
+    const missingVars = requiredEnvVars.filter((key) => !process.env[key]);
 
-Please schedule the ${input.round} interview for the candidate below.
+    if (missingVars.length > 0) {
+      const errorMessage = `Missing required SMTP configuration: ${missingVars.join(', ')}`;
+      console.error(`[Interview Email Error] ${errorMessage}`);
+      try {
+        await addDoc(collection(db, 'notifications'), {
+          type: 'Interview Email',
+          recipientEmail: input.candidateEmail,
+          status: 'Failed',
+          error: errorMessage,
+          sentAt: serverTimestamp(),
+        });
+      } catch (logErr) {
+        console.error('Failed to log configuration error to Firestore:', logErr);
+      }
+      return { success: false };
+    }
 
-Candidate Name: ${input.candidateName}
-Role: ${input.role}
-Interview Date: ${input.scheduledDate}
-Interview Time: ${input.scheduledTime}
-
-Kindly confirm once the interview has been scheduled.
-
-Best regards,
-${input.adminName}`;
+    const emailBody = `Dear ${input.candidateName},\n\nThank you for your interest in the ${input.jobRole} position.\n\nWe are pleased to invite you for an interview with ${input.interviewerName}.\n\nDate: ${input.interviewDate}\nTime: ${input.interviewTime}\nLink: ${input.interviewLink}\n\nPlease be prepared to discuss your experience and qualifications.\n\nBest regards,\nThe SmartHire Team`;
 
     try {
-      // Configuration for real email sending via SMTP
       const transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,
         port: parseInt(process.env.SMTP_PORT || '587'),
-        secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+        secure: process.env.SMTP_SECURE === 'true',
         auth: {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASS,
         },
       });
 
-      // Send the actual email
       const info = await transporter.sendMail({
-        from: `"${input.adminName} via SmartHire" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-        to: input.agentEmail,
-        subject: subject,
+        from: `"SmartHire" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+        to: input.candidateEmail,
+        subject: `Interview Invitation: ${input.jobRole} at SmartHire`,
         text: emailBody,
       });
 
-      console.log(`[Email Success] MessageId: ${info.messageId} - Recipient: ${input.agentEmail}`);
+      console.log(`[Interview Email Success] MessageId: ${info.messageId} - Recipient: ${input.candidateEmail}`);
 
-      // Log the activity to Firestore
       const logRef = await addDoc(collection(db, 'notifications'), {
-        type: 'Interview Schedule',
+        type: 'Interview Email',
         candidateName: input.candidateName,
-        recipientEmail: input.agentEmail,
-        recipientName: input.agentName,
-        round: input.round,
-        adminName: input.adminName,
-        subject: subject,
-        body: emailBody,
-        sentAt: serverTimestamp(),
+        recipientEmail: input.candidateEmail,
+        jobRole: input.jobRole,
         status: 'Sent',
+        sentAt: serverTimestamp(),
         messageId: info.messageId,
-        providerResponse: info.response
       });
 
       return { success: true, logId: logRef.id };
     } catch (error: any) {
-      console.error('[Email Error] Failed to send real email:', error);
+      console.error('[Interview Email Error] Failed to send email:', error);
       
-      // Log the failure to Firestore for auditing
       try {
         await addDoc(collection(db, 'notifications'), {
-          type: 'Interview Schedule',
+          type: 'Interview Email',
           candidateName: input.candidateName,
-          recipientEmail: input.agentEmail,
-          recipientName: input.agentName,
-          round: input.round,
-          adminName: input.adminName,
+          recipientEmail: input.candidateEmail,
           status: 'Failed',
           error: error.message,
           sentAt: serverTimestamp()

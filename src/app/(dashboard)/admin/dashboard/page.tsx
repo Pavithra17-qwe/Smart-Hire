@@ -34,6 +34,14 @@ import {
   CarouselPrevious,
 } from "@/components/ui/carousel";
 
+interface MonthlyData {
+  month: string;
+  monthNum: number;
+  year: number;
+  evaluations: number;
+  hires: number;
+}
+
 const pipelineConfig = {
   l1: { label: "L1 Selected", color: "#6366F1" },
   l2: { label: "L2 Selected", color: "#3B82F6" },
@@ -186,7 +194,7 @@ export default function AdminDashboard() {
   [stats]);
 
   const hiringTrendData = useMemo(() => {
-    const last6Months = [];
+    const last6Months: MonthlyData[] = [];
     for (let i = 5; i >= 0; i--) {
       const d = new Date();
       d.setMonth(d.getMonth() - i);

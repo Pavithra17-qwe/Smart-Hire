@@ -47,6 +47,14 @@ const hiringTrendConfig = {
   hires: { label: "Hires", color: "#10B981" },
 } satisfies ChartConfig;
 
+interface MonthlyData {
+  month: string;
+  monthNum: number;
+  year: number;
+  evaluations: number;
+  hires: number;
+}
+
 export default function AgencyDashboard() {
   const { agencyId } = useAuth();
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -182,7 +190,7 @@ export default function AgencyDashboard() {
   [stats]);
 
   const hiringTrendData = useMemo(() => {
-    const last6Months = [];
+    const last6Months: MonthlyData[] = [];
     for (let i = 5; i >= 0; i--) {
       const d = new Date();
       d.setMonth(d.getMonth() - i);
