@@ -29,7 +29,7 @@ const formatFirestoreTimestamp = (timestamp: Timestamp | undefined): string => {
 
 export default function CandidateListPage() {
     const { candidates, loading, error } = useCandidate();
-    const [filters, setFilters] = useState({ name: '', createdBy: '' });
+    const [filters, setFilters] = useState({ name: ''});
     const [page, setPage] = useState(0);
     const [rowsPerPage, setRowsPerPage] = useState(10);
 
@@ -39,7 +39,7 @@ export default function CandidateListPage() {
     };
 
     const clearFilters = () => {
-        setFilters({ name: '', createdBy: '' });
+        setFilters({ name: ''});
         setPage(0);
     };
 
@@ -47,8 +47,7 @@ export default function CandidateListPage() {
         if (!Array.isArray(candidates)) return [];
         return (candidates as Candidate[]).filter(candidate => {
             const nameMatch = filters.name ? (candidate.candidateName || '').toLowerCase().includes(filters.name.toLowerCase()) : true;
-            const createdByMatch = filters.createdBy ? (candidate.createdByName || '').toLowerCase().includes(filters.createdBy.toLowerCase()) : true;
-            return nameMatch && createdByMatch;
+            return nameMatch;
         });
     }, [candidates, filters]);
 
@@ -79,10 +78,6 @@ export default function CandidateListPage() {
                             <Label htmlFor="filter-name">Candidate Name</Label>
                             <Input id="filter-name" placeholder="Search by name..." value={filters.name} onChange={e => handleFilterChange('name', e.target.value)} />
                         </div>
-                        <div className="space-y-1">
-                            <Label htmlFor="filter-createdBy">Created By</Label>
-                            <Input id="filter-createdBy" placeholder="Search by creator..." value={filters.createdBy} onChange={e => handleFilterChange('createdBy', e.target.value)} />
-                        </div>
                         <div className="flex h-full items-end">
                            {isFiltered && <Button variant="ghost" onClick={clearFilters} className="w-full">Clear Filters</Button>}
                         </div>
@@ -95,8 +90,9 @@ export default function CandidateListPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="w-[120px]">Date</TableHead>
                                 <TableHead className="w-[250px]">Candidate</TableHead>
+                                <TableHead className="w-[150px]">Experience</TableHead>
+                                <TableHead className="w-[200px]">Location</TableHead>
                                 <TableHead className="w-[200px]">Created By</TableHead>
                                 <TableHead>Final Status</TableHead>
                                 <TableHead className="text-right">Actions</TableHead>
@@ -106,9 +102,9 @@ export default function CandidateListPage() {
                             {loading ? (
                                 <CandidateSkeleton />
                             ) : error ? (
-                                <TableRow><TableCell colSpan={5} className="h-60 text-center text-red-500">{(error as Error).message}</TableCell></TableRow>
+                                <TableRow><TableCell colSpan={6} className="h-60 text-center text-red-500">{error.message}</TableCell></TableRow>
                             ) : paginatedCandidates.length === 0 ? (
-                                <TableRow><TableCell colSpan={5} className="h-60 text-center text-gray-500">
+                                <TableRow><TableCell colSpan={6} className="h-60 text-center text-gray-500">
                                     <Search className="mx-auto h-12 w-12 text-gray-300" />
                                     <p className="mt-3 font-medium">No candidates found</p>
                                     <p className="mt-1 text-sm text-gray-400">{isFiltered ? "Try adjusting your filters." : ""}</p>
@@ -116,16 +112,23 @@ export default function CandidateListPage() {
                             ) : (
                                 paginatedCandidates.map(candidate => (
                                     <TableRow key={candidate.id}>
-                                        <TableCell className="text-sm text-muted-foreground align-top">{formatFirestoreTimestamp(candidate.createdDate)}</TableCell>
                                         <TableCell className="align-top">
                                             <div className="font-bold">{candidate.candidateName || 'N/A'}</div>
                                             <div className="text-sm text-muted-foreground">{candidate.candidateDesignation || '-'}</div>
+                                            <div className="text-sm text-muted-foreground">{candidate.candidateEmail || '-'}</div>
+                                        </TableCell>
+                                        <TableCell className="text-sm text-muted-foreground align-top">
+                                            {candidate.experience ? `${candidate.experience} years` : 'N/A'}
+                                        </TableCell>
+                                        <TableCell className="text-sm text-muted-foreground align-top">
+                                            {candidate.location || 'N/A'}
                                         </TableCell>
                                         <TableCell className="align-top">
                                             <div className="font-medium">{candidate.createdByName || 'N/A'}</div>
                                             <div className="text-sm text-muted-foreground capitalize">{candidate.createdByRole || '-'}</div>
+                                            <div className="text-sm text-muted-foreground">{formatFirestoreTimestamp(candidate.createdDate)}</div>
                                         </TableCell>
-                                        <TableCell className="align-top">{getFinalStatusBadge(candidate)}</TableCell>
+                                        <TableCell className="align-top">{getFinalStatusBadge(candidate.finalStatus)}</TableCell>
                                         <TableCell className="text-right align-top">
                                             <Button asChild variant="ghost" size="sm">
                                                 <Link href={`/candidates/${candidate.id}`}>View Details</Link>

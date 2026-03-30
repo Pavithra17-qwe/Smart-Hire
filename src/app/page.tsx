@@ -1,46 +1,35 @@
-"use client";
+'use client';
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/hooks/use-auth";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/hooks/use-auth';
+import { Loader2 } from 'lucide-react';
 
-export default function Home() {
-  const { user, role, firstLogin, loading } = useAuth();
+const roleAreaMap = {
+  admin: 'admin',
+  agency: 'agency',
+  hr: 'hr',
+  panel: 'panel',
+};
+
+export default function RootPage() {
+  const { user, role, loading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (!loading) {
-      if (user) {
-        // Handle mandatory first login password change
-        if (firstLogin === true && (role === "agency" || role === "hr" || role === "panel")) {
-          router.replace("/change-password");
-          return;
-        }
-
-        if (role === "admin") {
-          router.replace("/admin/dashboard");
-        } else if (role === "agency") {
-          router.replace("/agency/dashboard");
-        } else if (role === "hr") {
-          router.replace("/hr/dashboard");
-        } else if (role === "panel") {
-          router.replace("/panel/dashboard");
-        } else {
-          router.replace("/login");
-        }
-      } else {
-        router.replace("/login");
+      if (user && role) {
+        const dashboardPath = `/${roleAreaMap[role]}/dashboard`;
+        router.replace(dashboardPath);
+      } else if (!user) {
+        router.replace('/login');
       }
     }
-  }, [user, role, firstLogin, loading, router]);
+  }, [user, role, loading, router]);
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-background p-8">
-      <div className="space-y-4 w-full max-w-md">
-        <Skeleton className="h-12 w-3/4 mx-auto" />
-        <Skeleton className="h-64 w-full" />
-      </div>
+    <div className="h-screen w-full flex items-center justify-center">
+      <Loader2 className="w-8 h-8 animate-spin text-primary" />
     </div>
   );
 }

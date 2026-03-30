@@ -1,4 +1,3 @@
-
 rules_version = '2';
 
 service cloud.firestore {
@@ -29,19 +28,22 @@ service cloud.firestore {
 
     match /candidates/{candidateId} {
       allow read: if isUserAuthenticated();
-
+      
       allow create: if isUserAuthenticated() && (isHR() || isAgency());
-
-      // Allow update access only to the Panel role
-      allow write: if isUserAuthenticated() && isPanel();
-
+      
+      // Allow write access to Panel, HR, and Agency roles for workflow actions
+      allow write: if isUserAuthenticated() && (isPanel() || isHR() || isAgency());
+      
       // No user can delete a candidate record
       allow delete: if false;
     }
 
-    // Closed by default
-    match /{document=**} {
-      allow read, write: if false;
+    match /candidateHistory/{historyId} {
+        allow read, create: if isUserAuthenticated();
+    }
+
+    match /users/{userId} {
+        allow read, write: if request.auth.uid == userId;
     }
   }
 }

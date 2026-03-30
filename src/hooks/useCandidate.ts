@@ -1,21 +1,16 @@
-
 import { useState, useEffect } from 'react';
 import { onSnapshot, FirestoreError } from 'firebase/firestore';
 import { useAuth } from '@/hooks/use-auth';
 import { getCandidatesQuery } from '@/services/candidateService';
-
-// Define a more specific type for a candidate
-interface Candidate {
-    id: string;
-    // Add other expected properties of a candidate here
-    [key: string]: any; // Allow for other properties
-}
+import { Candidate } from '@/types/candidate';
 
 export const useCandidate = () => {
     const { user, role } = useAuth();
     const [candidates, setCandidates] = useState<Candidate[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<FirestoreError | null>(null);
+
+    const canUpdate = role === 'panel' || role === 'hr' || role === 'agency';
 
     useEffect(() => {
         if (!user || !role) {
@@ -32,7 +27,7 @@ export const useCandidate = () => {
         }
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const data: Candidate[] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const data: Candidate[] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Candidate));
             setCandidates(data);
             setLoading(false);
         }, (err) => {
@@ -43,5 +38,5 @@ export const useCandidate = () => {
         return () => unsubscribe();
     }, [user, role]);
 
-    return { candidates, loading, error };
+    return { candidates, loading, error, canUpdate, user, role };
 };

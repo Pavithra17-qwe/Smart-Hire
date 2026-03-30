@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -12,6 +12,13 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Mail, Lock, Eye, EyeOff, Loader2, ArrowLeft, Briefcase } from "lucide-react";
+
+const roleAreaMap: { [key: string]: string } = {
+  admin: 'admin',
+  agency: 'agency',
+  hr: 'hr',
+  panel: 'panel',
+};
 
 function LoginForm() {
   const [email, setEmail] = useState("");
@@ -59,20 +66,30 @@ function LoginForm() {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Check for user status (Deactivation check)
       const userDoc = await getDoc(doc(db, "users", user.uid));
-      if (userDoc.exists() && userDoc.data().status === "Inactive") {
-        await signOut(auth);
-        setLoginError("Your account has been deactivated. Please contact the administrator.");
-        setIsLoading(false);
-        return;
-      }
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        if (userData.status === "Inactive") {
+          await signOut(auth);
+          setLoginError("Your account has been deactivated. Please contact the administrator.");
+          setIsLoading(false);
+          return;
+        }
 
-      toast({
-        title: "Success",
-        description: "Login successful. Welcome to SmartHire.",
-      });
-      router.push("/");
+        toast({
+          title: "Success",
+          description: "Login successful. Welcome to SmartHire.",
+        });
+
+        const role = userData.role;
+        if (role && roleAreaMap[role]) {
+          router.push(`/${roleAreaMap[role]}/dashboard`);
+        } else {
+          router.push("/"); // Fallback to a default page
+        }
+      } else {
+        throw new Error("User data not found.");
+      }
     } catch (error: any) {
       setLoginError("Invalid email or password");
     } finally {

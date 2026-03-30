@@ -26,7 +26,6 @@ const roleNames: Record<Exclude<Role, null>, string> = {
   agency: "Agency Partner",
   hr: "HR Team",
   panel: "Interviewer",
-  interviewer: "Interviewer",
 };
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {

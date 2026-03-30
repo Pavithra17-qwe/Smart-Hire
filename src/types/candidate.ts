@@ -9,13 +9,35 @@ export interface Candidate {
   resumeUrl?: string;
   createdDate?: Timestamp;
   lastUpdated?: Timestamp;
-  resumeStatus?: 'Pending' | 'Accepted' | 'Rejected';
+
+  // Stage Statuses
+  resumeReviewStatus?: 'Pending' | 'Accepted' | 'Rejected';
   l1Status?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected';
   l2Status?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected';
-  hrRoundStatus?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected';
+  hrStatus?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected';
   offerStatus?: 'Locked' | 'Pending' | 'Released' | 'Accepted' | 'Rejected';
-  overallStatus?: string;
+  finalStatus?: string;
+
+  // Feedback
+  resumeFeedback?: string;
+  l1Feedback?: string;
+  l2Feedback?: string;
+  hrFeedback?: string;
+  offerFeedback?: string;
+
+  // Scheduling
+  l1ScheduledDate?: string;
+  l1TimeSlot?: string;
+  l2ScheduledDate?: string;
+  l2TimeSlot?: string;
+  hrScheduledDate?: string;
+  hrTimeSlot?: string;
+
+  // Creator Info
   createdByName?: string;
   createdByRole?: string;
+  createdBy: string;
+
+  // For indexing and other properties
   [key: string]: any;
 }

@@ -6,37 +6,37 @@
 
 @layer base {
   :root {
-    --background: 260 40% 98%;
-    --foreground: 260 50% 10%;
+    --background: 240 5% 96%; /* light grey */
+    --foreground: 240 10% 3.9%; /* dark grey */
     --card: 0 0% 100%;
-    --card-foreground: 260 50% 10%;
+    --card-foreground: 240 10% 3.9%;
     --popover: 0 0% 100%;
-    --popover-foreground: 260 50% 10%;
-    /* Primary brand color: #6C63FF (HSL: 243 100% 69%) */
-    --primary: 243 100% 69%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 260 30% 96%;
-    --secondary-foreground: 260 50% 10%;
-    --muted: 260 30% 96%;
-    --muted-foreground: 260 20% 45%;
-    --accent: 244 100% 72%;
-    --accent-foreground: 260 50% 10%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 260 20% 90%;
-    --input: 260 20% 90%;
-    --ring: 243 100% 69%;
+    --popover-foreground: 240 10% 3.9%;
+    /* Primary brand color: A professional blue */
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 90%;
+    --secondary-foreground: 240 10% 3.9%;
+    --muted: 240 5% 90%;
+    --muted-foreground: 240 4% 46%;
+    --accent: 217 91% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 217 91% 60%;
     --radius: 0.75rem;
 
-    /* Sidebar - SmartHire Purple Theme */
-    --sidebar-background: 246 100% 98%; /* #F4F3FF */
-    --sidebar-foreground: 240 16% 20%;  /* #2B2B3C */
-    --sidebar-primary: 243 100% 69%;    /* #6C63FF */
+    /* Sidebar - Light Blue Theme */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 240 10% 3.9%;
+    --sidebar-primary: 217 91% 60%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 245 100% 95%;     /* #E8E6FF */
-    --sidebar-accent-foreground: 243 100% 69%; /* #6C63FF (Brand color for active icons/text) */
-    --sidebar-border: 245 50% 92%;
-    --sidebar-ring: 243 100% 69%;
+    --sidebar-accent: 217 91% 95%;
+    --sidebar-accent-foreground: 217 91% 60%;
+    --sidebar-border: 240 6% 90%;
+    --sidebar-ring: 217 91% 60%;
   }
 
   * {
