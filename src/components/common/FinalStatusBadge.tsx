@@ -1,7 +1,11 @@
 import { Badge } from "@/components/ui/badge";
 import { Candidate } from "@/types/candidate";
 
-export const getFinalStatusBadge = (candidate: Candidate) => {
+export const getFinalStatusBadge = (candidate?: Candidate) => {
+    if (!candidate) {
+        return <Badge className="!bg-gray-100 !text-gray-700">Pending</Badge>;
+    }
+
     const status = candidate.finalStatus || 'In Progress';
     const normalized = status?.trim().toLowerCase();
 
