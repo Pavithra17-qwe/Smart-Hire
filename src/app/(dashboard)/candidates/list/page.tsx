@@ -1,6 +1,9 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { useEffect } from 'react';
+import { getDoc, doc } from 'firebase/firestore';
+import { db } from '@/lib/firebase'; // adjust if path differs
 import { useCandidate } from '@/hooks/useCandidate';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Search } from 'lucide-react';
@@ -9,7 +12,6 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import Link from 'next/link';
 import { CandidateSkeleton } from '@/components/candidate/CandidateSkeleton';
 import { getFinalStatusBadge } from '@/components/common/FinalStatusBadge';
 import { Candidate } from '@/types/candidate';
@@ -34,6 +36,7 @@ const INITIAL_FILTERS = {
     name: '',
     role: '',
     status: '',
+    experience: '',
 };
 
 export default function CandidateListPage() {
@@ -41,6 +44,8 @@ export default function CandidateListPage() {
     const [filters, setFilters] = useState(INITIAL_FILTERS);
     const [page, setPage] = useState(0);
     const [rowsPerPage, setRowsPerPage] = useState(10);
+    const [creatorMap, setCreatorMap] = useState<Record<string, string>>({});
+    const [dateSort, setDateSort] = useState<'asc' | 'desc'>('desc');
 
     const handleFilterChange = (filterName: string, value: string) => {
         setFilters(prev => ({ ...prev, [filterName]: value }));
@@ -54,21 +59,30 @@ export default function CandidateListPage() {
 
     const filteredCandidates = useMemo(() => {
         if (!Array.isArray(candidates)) return [];
-
-        // Sort by most recently created first
-        const sorted = [...(candidates as Candidate[])].sort((a, b) => {
+    
+        // ✅ Step 1: Filter
+        const filtered = (candidates as Candidate[]).filter(candidate => {
+            const nameMatch   = !filters.name   || (candidate.candidateName || '').toLowerCase().includes(filters.name.toLowerCase());
+            const roleMatch   = !filters.role   || (candidate.createdByRole || '').toLowerCase() === filters.role.toLowerCase();
+            const statusMatch = !filters.status || (candidate.finalStatus || '').toLowerCase() === filters.status.toLowerCase();
+            const expMatch =
+                !filters.experience ||
+                String(candidate.experience || '').includes(filters.experience);
+    
+            return nameMatch && roleMatch && statusMatch && expMatch;
+        });
+    
+        // ✅ Step 2: Sort
+        return filtered.sort((a, b) => {
             const dateA = a.createdDate ? a.createdDate.toMillis() : 0;
             const dateB = b.createdDate ? b.createdDate.toMillis() : 0;
-            return dateB - dateA;
+    
+            return dateSort === 'asc'
+                ? dateA - dateB
+                : dateB - dateA;
         });
-
-        return sorted.filter(candidate => {
-            const nameMatch   = !filters.name   || (candidate.candidateName  || '').toLowerCase().includes(filters.name.toLowerCase());
-            const roleMatch   = !filters.role   || (candidate.createdByRole  || '').toLowerCase() === filters.role.toLowerCase();
-            const statusMatch = !filters.status || (candidate.finalStatus    || '').toLowerCase() === filters.status.toLowerCase();
-            return nameMatch && roleMatch && statusMatch;
-        });
-    }, [candidates, filters]);
+    
+    }, [candidates, filters, dateSort]);
 
     const start = page * rowsPerPage;
     const end = start + rowsPerPage;
@@ -88,7 +102,27 @@ export default function CandidateListPage() {
         () => Array.from(new Set((candidates as Candidate[]).map(c => c.createdByRole).filter(Boolean))),
         [candidates]
     );
-
+    const toggleDateSort = () => {
+        setDateSort(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    };
+    useEffect(() => {
+        const fetchNames = async () => {
+            const map: Record<string, string> = {};
+            for (const c of candidates || []) {
+                if (c.createdBy && !map[c.createdBy]) {
+                    const snap = await getDoc(doc(db, "users", c.createdBy));
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        map[c.createdBy] = data.name || data.displayName || "N/A";
+                    }
+                }
+            }
+    
+            setCreatorMap(map);
+        };
+    
+        fetchNames();
+    }, [candidates]);
     return (
         <div className="p-4 md:p-8 space-y-6">
             <h1 className="text-2xl font-bold">Candidate List</h1>
@@ -120,6 +154,15 @@ export default function CandidateListPage() {
                                 </SelectContent>
                             </Select>
                         </div>
+                        <div className="space-y-1">
+    <Label htmlFor="filter-exp">Experience</Label>
+    <Input
+        id="filter-exp"
+        placeholder="e.g. 3"
+        value={filters.experience}
+        onChange={e => handleFilterChange('experience', e.target.value)}
+    />
+</div>
 
                         <div className="space-y-1">
                             <Label htmlFor="filter-status">Final Status</Label>
@@ -153,10 +196,20 @@ export default function CandidateListPage() {
                         <TableHeader>
                             <TableRow>
                                 <TableHead className="w-[230px]">Candidate</TableHead>
+                                <TableHead className="w-[200px]">Email</TableHead>
                                 <TableHead className="w-[120px]">Experience</TableHead>
                                 <TableHead className="w-[160px]">Location</TableHead>
                                 <TableHead className="w-[160px]">Created By</TableHead>
-                                <TableHead className="w-[130px]">Created Date</TableHead>
+                               <TableHead
+    className="w-[130px] cursor-pointer"
+    onClick={toggleDateSort}
+>
+    <div className="flex items-center gap-1">
+        Created Date
+        {dateSort === 'asc' && '↑'}
+        {dateSort === 'desc' && '↓'}
+    </div>
+</TableHead>
                                 <TableHead>Final Status</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -184,19 +237,18 @@ export default function CandidateListPage() {
                                     <TableRow key={candidate.id}>
                                         {/* Candidate */}
                                         <TableCell className="align-top">
-                                            <Link
-                                                href={`/candidates/${candidate.id}`}
-                                                className="font-bold text-blue-600 hover:underline"
-                                            >
-                                                {candidate.candidateName || 'N/A'}
-                                            </Link>
+                                        <div className="font-bold">
+    {candidate.candidateName || 'N/A'}
+</div>
                                             <div className="text-sm text-muted-foreground">
                                                 {candidate.candidateDesignation || '-'}
                                             </div>
-                                            <div className="text-sm text-muted-foreground">
-                                                {candidate.candidateEmail || '-'}
-                                            </div>
+        
                                         </TableCell>
+                                        {/* Email */}
+<TableCell className="text-sm text-muted-foreground align-top">
+    {candidate.candidateEmail || 'N/A'}
+</TableCell>
 
                                         {/* Experience */}
                                         <TableCell className="text-sm text-muted-foreground align-top">
@@ -210,9 +262,9 @@ export default function CandidateListPage() {
 
                                         {/* Created By — name + role only, no date */}
                                         <TableCell className="align-top">
-                                            <div className="font-medium">
-                                                {candidate.createdByName || 'N/A'}
-                                            </div>
+                                        <div className="font-medium">
+    {creatorMap[candidate.createdBy] || 'N/A'}
+</div>
                                             <div className="text-sm text-muted-foreground capitalize">
                                                 {candidate.createdByRole || '-'}
                                             </div>

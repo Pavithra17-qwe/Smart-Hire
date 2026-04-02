@@ -699,9 +699,13 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
   return (
     <div style={{ fontFamily: 'Segoe UI, system-ui', background: '#F5F6FA', padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <button onClick={() => router.back()} style={{ background: 'none', border: 'none', fontSize: '14px', cursor: 'pointer' }}>
-          ← Back to History
-        </button>
+      <Button
+  variant="outline"
+  onClick={() => router.back()}
+  className="flex items-center gap-2 font-semibold"
+>
+  ← Back to History
+</Button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '30% 70%', gap: '24px' }}>
@@ -772,7 +776,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Full Name</p><p style={{ fontWeight: 'bold' }}>{candidate.candidateName}</p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Email</p><p style={{ fontWeight: 'bold', wordBreak: 'break-all' }}>{candidate.candidateEmail}</p></div>
-              <div><p style={{ color: 'gray', fontSize: '12px' }}>Phone</p><p style={{ fontWeight: 'bold' }}>{candidate.candidatePhone || candidate.phone || '—'}</p></div>
+              <div><p style={{ color: 'gray', fontSize: '12px' }}>Phone</p><p style={{ fontWeight: 'bold' }}>{candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'} </p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Experience</p><p style={{ fontWeight: 'bold' }}>{candidate.experience} Years</p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Current CTC</p><p style={{ fontWeight: 'bold' }}>{candidate.currentCtc}</p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Expected CTC</p><p style={{ fontWeight: 'bold' }}>{candidate.expectedCtc}</p></div>

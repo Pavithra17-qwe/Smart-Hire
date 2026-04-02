@@ -98,14 +98,37 @@ export default function CandidateHistoryPage() {
         });
 
         return sorted.filter(candidate => {
-            const nameMatch        = !filters.name         || (candidate.candidateName     || '').toLowerCase().includes(filters.name.toLowerCase());
-            const roleMatch        = !filters.role         || (candidate.createdByRole     || '').toLowerCase() === filters.role.toLowerCase();
-            const statusMatch      = !filters.status       || (candidate.finalStatus       || '').toLowerCase() === filters.status.toLowerCase();
-            const rrMatch          = !filters.resumeReview || (candidate.resumeReviewStatus|| '').toLowerCase() === filters.resumeReview.toLowerCase();
-            const l1Match          = !filters.l1           || (candidate.l1Status          || '').toLowerCase() === filters.l1.toLowerCase();
-            const l2Match          = !filters.l2           || (candidate.l2Status          || '').toLowerCase() === filters.l2.toLowerCase();
-            const hrMatch          = !filters.hr           || (candidate.hrStatus          || '').toLowerCase() === filters.hr.toLowerCase();
-            const offerMatch       = !filters.offer        || (candidate.offerStatus       || '').toLowerCase() === filters.offer.toLowerCase();
+            const nameMatch =
+            !filters.name ||
+            (candidate.candidateName ?? '').toLowerCase().includes(filters.name.toLowerCase());
+          
+          const roleMatch =
+            !filters.role ||
+            (candidate.createdByRole ?? '').toLowerCase() === filters.role.toLowerCase();
+          
+          const statusMatch =
+            !filters.status ||
+            (candidate.finalStatus ?? '').toLowerCase() === filters.status.toLowerCase();
+          
+          const rrMatch =
+            !filters.resumeReview ||
+            (candidate.resumeReviewStatus ?? 'Pending').toLowerCase() === filters.resumeReview.toLowerCase();
+          
+          const l1Match =
+            !filters.l1 ||
+            (candidate.l1Status ?? 'Pending').toLowerCase() === filters.l1.toLowerCase();
+          
+          const l2Match =
+            !filters.l2 ||
+            (candidate.l2Status ?? 'Pending').toLowerCase() === filters.l2.toLowerCase();
+          
+          const hrMatch =
+            !filters.hr ||
+            (candidate.hrStatus ?? 'Pending').toLowerCase() === filters.hr.toLowerCase();
+          
+          const offerMatch =
+            !filters.offer ||
+            (candidate.offerStatus ?? 'Pending').toLowerCase() === filters.offer.toLowerCase();
             return nameMatch && roleMatch && statusMatch && rrMatch && l1Match && l2Match && hrMatch && offerMatch;
         });
     }, [candidates, filters]);
