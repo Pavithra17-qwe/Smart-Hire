@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from "next/navigation";
 import Link from 'next/link';
 import { useCandidate } from '@/hooks/useCandidate';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -62,10 +63,20 @@ const INITIAL_FILTERS = {
 
 export default function CandidateHistoryPage() {
     const { candidates, loading, error } = useCandidate();
+    const searchParams = useSearchParams();
     const [filters, setFilters] = useState(INITIAL_FILTERS);
     const [showStageFilters, setShowStageFilters] = useState(false);
     const [page, setPage] = useState(0);
     const [rowsPerPage, setRowsPerPage] = useState(10);
+    const [filterStage, setFilterStage] = useState("all");
+const [filterStatus, setFilterStatus] = useState("all");
+useEffect(() => {
+    const stage = searchParams.get("stage");
+    const status = searchParams.get("status");
+  
+    if (stage && stage !== "all") setFilterStage(stage);
+    if (status && status !== "all") setFilterStatus(status);
+  }, [searchParams]);
 
     const handleFilterChange = (filterName: string, value: string) => {
         setFilters(prev => ({ ...prev, [filterName]: value }));
@@ -129,7 +140,26 @@ export default function CandidateHistoryPage() {
           const offerMatch =
             !filters.offer ||
             (candidate.offerStatus ?? 'Pending').toLowerCase() === filters.offer.toLowerCase();
-            return nameMatch && roleMatch && statusMatch && rrMatch && l1Match && l2Match && hrMatch && offerMatch;
+            const stageFieldMap: Record<string, string> = {
+                resume: "resumeReviewStatus",
+                l1: "l1Status",
+                l2: "l2Status",
+                hr: "hrStatus",
+                offer: "offerStatus",
+                final: "finalStatus",
+              };
+              
+              let stageMatch = true;
+              
+              if (filterStage !== "all" && filterStatus !== "all") {
+                const field = stageFieldMap[filterStage];
+                if (field) {
+                  stageMatch =
+                    (candidate[field] ?? "Pending").toLowerCase() ===
+                    filterStatus.toLowerCase();
+                }
+              }
+            return nameMatch && roleMatch && statusMatch && rrMatch && l1Match && l2Match && hrMatch && offerMatch && stageMatch;
         });
     }, [candidates, filters]);
 
