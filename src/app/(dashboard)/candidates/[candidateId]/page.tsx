@@ -418,8 +418,9 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       toEmail: creatorEmail,
       candidateName: candidate.candidateName || 'Candidate',
       jobRole: candidate.candidateDesignation || 'Not specified',
-      interviewerName: user.displayName || 'Hiring Team',
+      interviewerName: user.displayName || user.email || 'Hiring Team',
       interviewLink: 'https://meet.google.com/your-link',
+      senderEmail: user.email || undefined,
     };
 
     // ── Step 4: Send the right email per stage + action ──
