@@ -2,12 +2,16 @@
 /**
  * @fileOverview Sends interview/offer emails via Nodemailer SMTP.
  *
- * From display name:
- *   senderRole='panel'  => "SmartHire (Panel) <panel@email.com>"
- *   senderRole='hr'     => "SmartHire (HR) <hr@email.com>"
- *   fallback            => "SmartHire <smtp_user@email.com>"
+ * Recipient  : Always the uploader (HR or Agency who added the candidate)
+ * From name  :
+ *   senderRole='panel' => "SmartHire (Panel) <smtp_user>"
+ *   senderRole='hr'    => "SmartHire (HR) <smtp_user>"
+ *   fallback           => "SmartHire <smtp_user>"
  *
- * Reply-To is always set to senderEmail so replies go to the right person.
+ * Email body includes:
+ *   - Candidate name + job role
+ *   - Interview date/time (for schedule emails)
+ *   - Panel/HR member name + their email (so uploader knows who to contact)
  */
 
 import { ai } from '@/ai/genkit';
@@ -20,19 +24,18 @@ import nodemailer from 'nodemailer';
 // INPUT SCHEMA
 // ─────────────────────────────────────────────
 const SendInterviewEmailInputSchema = z.object({
-  candidateName:   z.string().describe('Full name of the candidate.'),
-  candidateEmail:  z.string().email().describe('Recipient email address.'),
-  jobRole:         z.string().describe('The job role being interviewed for.'),
-  interviewerName: z.string().describe('Name of the interviewer or hiring team member.'),
-  interviewDate:   z.string().describe('Date of the interview.'),
-  interviewTime:   z.string().describe('Time slot of the interview.'),
-  interviewLink:   z.string().describe('Video call link (can be empty string).'),
+  candidateName:    z.string().describe('Full name of the candidate.'),
+  candidateEmail:   z.string().email().describe('Recipient email address (the uploader — HR or Agency).'),
+  jobRole:          z.string().describe('The job role being interviewed for.'),
+  experience: z.string().optional().default(''),
+location: z.string().optional().default(''),
+  interviewerName:  z.string().describe('Display name of the panel/HR member who performed the action.'),
+  interviewerEmail: z.string().optional().default('').describe('Email of the panel/HR member — shown in body so uploader can contact them.'),
+  interviewDate:    z.string().optional().default('').describe('Date of the interview (for schedule emails, else empty string).'),
+  interviewTime:    z.string().optional().default('').describe('Time slot of the interview (for schedule emails, else empty string).'),
 
-  // 'panel' => "SmartHire (Panel)", 'hr' => "SmartHire (HR)", default => "SmartHire"
+  // Controls From display name
   senderRole: z.enum(['panel', 'hr', 'system']).optional(),
-
-  // Actual email of the logged-in panel/HR user — shown in From & Reply-To
-  senderEmail: z.string().email().optional(),
 
   // Controls subject line and email body content
   emailType: z.enum([
@@ -60,127 +63,163 @@ export async function sendInterviewEmail(
 // HELPERS
 // ─────────────────────────────────────────────
 
-/** Build the From display name using senderRole + senderEmail */
-function buildFromField(senderRole?: string, senderEmail?: string): string {
+/** Build the From display name using senderRole */
+function buildFromField(senderRole?: string): string {
   const smtpUser = process.env.SMTP_FROM || process.env.SMTP_USER || '';
-
-  // Display name based on role
   let displayName = 'SmartHire';
   if (senderRole === 'panel') displayName = 'SmartHire (Panel)';
   if (senderRole === 'hr')    displayName = 'SmartHire (HR)';
-
-  // Use senderEmail in the address if provided, else fall back to SMTP_FROM
-  // NOTE: Gmail SMTP requires the actual sending address to match SMTP_USER.
-  // We show senderEmail in the display label so the recipient can see who sent it.
-  if (senderEmail) {
-    displayName = `${displayName} via ${senderEmail}`;
-  }
-
   return `"${displayName}" <${smtpUser}>`;
 }
 
 /** Subject line per emailType */
-function getSubject(emailType: string | undefined, jobRole: string): string {
+function getSubject(emailType: string | undefined, jobRole: string, candidateName: string): string {
   switch (emailType) {
-    case 'interview_scheduled': return `Interview Scheduled: ${jobRole} at SmartHire`;
-    case 'candidate_selected':  return `You have been Selected - ${jobRole} at SmartHire`;
-    case 'candidate_rejected':  return `Application Update - ${jobRole} at SmartHire`;
-    case 'offer_released':      return `Offer Letter: ${jobRole} at SmartHire`;
-    case 'offer_accepted':      return `Offer Accepted - ${jobRole} at SmartHire`;
-    case 'offer_rejected':      return `Offer Status Update - ${jobRole} at SmartHire`;
-    default:                    return `Interview Invitation: ${jobRole} at SmartHire`;
+    case 'interview_scheduled': return `Interview Scheduled for ${candidateName} — ${jobRole}`;
+    case 'candidate_selected':  return `${candidateName} Selected — ${jobRole}`;
+    case 'candidate_rejected':  return `${candidateName} Rejected — ${jobRole}`;
+    case 'offer_released':      return `Offer Released for ${candidateName} — ${jobRole}`;
+    case 'offer_accepted':      return `${candidateName} Accepted the Offer — ${jobRole}`;
+    case 'offer_rejected':      return `${candidateName} Rejected the Offer — ${jobRole}`;
+    default:                    return `Interview Update for ${candidateName} — ${jobRole}`;
   }
 }
 
-/** Email body per emailType */
+/** Email body per emailType — includes candidate name, job role, date/time (if relevant), interviewer name + email */
 function getEmailBody(input: SendInterviewEmailInput): string {
-  const { candidateName, jobRole, interviewerName, interviewDate, interviewTime, interviewLink, emailType, senderEmail } = input;
-  const contactLine = senderEmail ? `\nFor queries, contact: ${senderEmail}` : '';
+  const {
+    candidateName, jobRole,
+    experience,location,
+    interviewerName, interviewerEmail,
+    interviewDate, interviewTime, 
+    emailType,
+    senderRole,
+  } = input;
+
+  // Contact line always shown so uploader knows who handled this
+  const roleLabel = senderRole === 'hr' ? 'HR' : 'Panel';
+
+  const contactLine = `
+  Handled by :
+  - Name  : ${interviewerName}
+  ${interviewerEmail ? `- Email : ${interviewerEmail}` : ''}
+  - Role  : ${roleLabel}
+  `;
 
   switch (emailType) {
+
+    // ── Interview Scheduled ──
     case 'interview_scheduled':
-      return `Dear ${candidateName},
+      return `Hi,
 
-We are pleased to schedule your interview for the ${jobRole} position.
-
-Interviewer  : ${interviewerName}
-Date         : ${interviewDate}
-Time         : ${interviewTime}
-Meeting Link : ${interviewLink}
-
-Please be prepared to discuss your experience and qualifications.
+An interview has been scheduled for the following candidate.
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience : ${experience || 'N/A'}
+Location   : ${location || 'N/A'}
+Date        : ${interviewDate}
+Time Slot   : ${interviewTime}
 ${contactLine}
+
+Please ensure the candidate is informed and prepared.
 
 Best regards,
 The SmartHire Team`;
 
+    // ── Candidate Selected ──
     case 'candidate_selected':
-      return `Dear ${candidateName},
+      return `Hi,
 
-We are happy to inform you that you have been selected in the ${jobRole} interview round conducted by ${interviewerName}.
-
-Our team will contact you shortly regarding the next steps.
+We are pleased to inform you that the following candidate has been selected and will be moving to the next stage.
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience : ${experience || 'N/A'}
+Location   : ${location || 'N/A'}
 ${contactLine}
+
+Our team will proceed with the next steps accordingly.
 
 Best regards,
 The SmartHire Team`;
 
+    // ── Candidate Rejected ──
     case 'candidate_rejected':
-      return `Dear ${candidateName},
+      return `Hi,
 
-Thank you for your time and effort during the interview process for the ${jobRole} position.
+After careful evaluation, the following candidate has not been selected to proceed further at this stage.
 
-After careful consideration, we regret to inform you that we will not be moving forward with your application at this time.
-
-We appreciate your interest and wish you the very best in your career journey.
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience : ${experience || 'N/A'}
+Location   : ${location || 'N/A'}
 ${contactLine}
+
+Thank you for your support throughout this process.
 
 Best regards,
 The SmartHire Team`;
 
+    // ── Offer Released ──
     case 'offer_released':
-      return `Dear ${candidateName},
+      return `Hi,
 
-Congratulations! We are pleased to extend an offer for the ${jobRole} position at SmartHire.
+An offer has been released for the following candidate. Please follow up with them regarding acceptance.
 
-Please review the offer details and respond at your earliest convenience.
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience : ${experience || 'N/A'}
+Location   : ${location || 'N/A'}
 ${contactLine}
+
+Kindly ensure the candidate receives and reviews the offer at the earliest.
 
 Best regards,
 The SmartHire HR Team`;
 
+    // ── Offer Accepted ──
     case 'offer_accepted':
-      return `Dear ${candidateName},
+      return `Hi,
 
-We are delighted to confirm that you have accepted the offer for the ${jobRole} position at SmartHire.
+Great news! The following candidate has accepted the offer and will be joining us.
 
-Welcome aboard! Our HR team will reach out to you soon with onboarding details.
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience : ${experience || 'N/A'}
+Location   : ${location || 'N/A'}
 ${contactLine}
+
+Our HR team will coordinate the onboarding process. Please keep the candidate informed.
 
 Best regards,
 The SmartHire HR Team`;
 
+    // ── Offer Rejected ──
     case 'offer_rejected':
-      return `Dear ${candidateName},
+      return `Hi,
 
-We have received your response regarding the offer for the ${jobRole} position.
-
-We understand your decision and appreciate all the time you spent with us throughout this process. We wish you the very best.
+The following candidate has declined the offer for the ${jobRole} position.
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience : ${experience || 'N/A'}
+Location   : ${location || 'N/A'}
 ${contactLine}
+
+We appreciate all the effort invested in this process. Please reach out if you have any queries.
 
 Best regards,
 The SmartHire HR Team`;
 
+    // ── Fallback ──
     default:
-      return `Dear ${candidateName},
+      return `Hi,
 
-Thank you for your interest in the ${jobRole} position.
+There has been an update regarding the following candidate.
 
-We are pleased to invite you for an interview with ${interviewerName}.
-
-Date : ${interviewDate}
-Time : ${interviewTime}
-Link : ${interviewLink}
+Candidate Details:
+- Name       : ${candidateName}
+- Role       : ${jobRole}
+- Experience : ${experience || 'N/A'}
+- Location   : ${location || 'N/A'}
 ${contactLine}
 
 Best regards,
@@ -223,14 +262,14 @@ const sendInterviewEmailFlow = ai.defineFlow(
       return { success: false };
     }
 
-    const fromField = buildFromField(input.senderRole, input.senderEmail);
-    const subject   = getSubject(input.emailType, input.jobRole);
+    const fromField = buildFromField(input.senderRole);
+    const subject   = getSubject(input.emailType, input.jobRole, input.candidateName);
     const body      = getEmailBody(input);
 
     console.log(`[SmartHire Email] Sending "${subject}"`);
-    console.log(`[SmartHire Email] From    : ${fromField}`);
-    console.log(`[SmartHire Email] Reply-To: ${input.senderEmail || 'not set'}`);
-    console.log(`[SmartHire Email] To      : ${input.candidateEmail}`);
+    console.log(`[SmartHire Email] From        : ${fromField}`);
+    console.log(`[SmartHire Email] To          : ${input.candidateEmail}`);
+    console.log(`[SmartHire Email] Interviewer : ${input.interviewerName} <${input.interviewerEmail}>`);
 
     try {
       const transporter = nodemailer.createTransport({
@@ -250,27 +289,27 @@ const sendInterviewEmailFlow = ai.defineFlow(
         text:    body,
       };
 
-      // Set Reply-To to the actual panel/HR user's email so replies go to them
-      if (input.senderEmail) {
-        mailOptions.replyTo = input.senderEmail;
+      // Reply-To goes to the actual panel/HR member so uploader can directly reply to them
+      if (input.interviewerEmail) {
+        mailOptions.replyTo = `"${input.interviewerName}" <${input.interviewerEmail}>`;
       }
 
       const info = await transporter.sendMail(mailOptions);
-
       console.log(`[SmartHire Email] SUCCESS - MessageId: ${info.messageId}`);
 
       const logRef = await addDoc(collection(db, 'notifications'), {
-        type:           'Interview Email',
-        emailType:      input.emailType || 'generic',
-        senderRole:     input.senderRole || 'system',
-        senderEmail:    input.senderEmail || null,
-        fromField:      fromField,
-        candidateName:  input.candidateName,
-        recipientEmail: input.candidateEmail,
-        jobRole:        input.jobRole,
-        status:         'Sent',
-        sentAt:         serverTimestamp(),
-        messageId:      info.messageId,
+        type:             'Interview Email',
+        emailType:        input.emailType || 'generic',
+        senderRole:       input.senderRole || 'system',
+        interviewerName:  input.interviewerName,
+        interviewerEmail: input.interviewerEmail,
+        fromField:        fromField,
+        candidateName:    input.candidateName,
+        recipientEmail:   input.candidateEmail,  // uploader's email
+        jobRole:          input.jobRole,
+        status:           'Sent',
+        sentAt:           serverTimestamp(),
+        messageId:        info.messageId,
       });
 
       return { success: true, logId: logRef.id };
@@ -279,14 +318,14 @@ const sendInterviewEmailFlow = ai.defineFlow(
       console.error('[SmartHire Email] FAILED:', error);
       try {
         await addDoc(collection(db, 'notifications'), {
-          type:           'Interview Email',
-          emailType:      input.emailType || 'generic',
-          candidateName:  input.candidateName,
-          recipientEmail: input.candidateEmail,
-          senderEmail:    input.senderEmail || null,
-          status:         'Failed',
-          error:          error.message,
-          sentAt:         serverTimestamp(),
+          type:             'Interview Email',
+          emailType:        input.emailType || 'generic',
+          candidateName:    input.candidateName,
+          recipientEmail:   input.candidateEmail,
+          interviewerEmail: input.interviewerEmail || null,
+          status:           'Failed',
+          error:            error.message,
+          sentAt:           serverTimestamp(),
         });
       } catch (logErr) {
         console.error('[SmartHire Email] Failed to log error:', logErr);

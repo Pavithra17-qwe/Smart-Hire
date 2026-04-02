@@ -39,22 +39,24 @@ interface StageCardProps {
 }
 
 // ─────────────────────────────────────────────
-// HELPER: fetch creator's email from users collection
-// users/{uid} → email field
+// HELPER: fetch uploader's email + name from users collection
+// users/{uid} → { email, displayName }
 // ─────────────────────────────────────────────
-async function getCreatorEmail(createdBy: string): Promise<string | null> {
+async function getUploaderInfo(createdBy: string): Promise<{ email: string | null; name: string | null }> {
   try {
     const userSnap = await getDoc(doc(db, 'users', createdBy));
     if (userSnap.exists()) {
-      const email = userSnap.data().email || null;
+      const data = userSnap.data();
+      const email = data.email || null;
+      const name = data.displayName || data.name || null;
       if (!email) console.warn('⚠️ users doc found but email field is empty for UID:', createdBy);
-      return email;
+      return { email, name };
     }
     console.warn('⚠️ No users doc found for UID:', createdBy);
-    return null;
+    return { email: null, name: null };
   } catch (err) {
-    console.error('❌ Failed to fetch creator email:', err);
-    return null;
+    console.error('❌ Failed to fetch uploader info:', err);
+    return { email: null, name: null };
   }
 }
 
@@ -65,31 +67,53 @@ async function sendEmail(params: {
   toEmail: string;
   candidateName: string;
   jobRole: string;
+  experience?: string;   
+  location?: string; 
   interviewerName: string;
+  interviewerEmail?: string;
   interviewDate?: string;
   interviewTime?: string;
-  interviewLink?: string;
   label: string;
   senderRole?: 'panel' | 'hr' | 'system';
   emailType?: 'interview_scheduled' | 'candidate_selected' | 'candidate_rejected' | 'offer_released' | 'offer_accepted' | 'offer_rejected';
 }) {
-  const { toEmail, label, candidateName, jobRole, interviewerName, interviewDate, interviewTime, interviewLink, senderRole, emailType } = params;
-  console.log(`📧 Sending [${label}] email to: ${toEmail}`);
+  const {
+    toEmail, label, candidateName, jobRole, 
+    experience,location,   
+    interviewerName, interviewerEmail,
+    interviewDate, interviewTime,
+    senderRole, emailType,
+  } = params;
+
+  console.log(`📧 Attempting [${label}] email → to: ${toEmail}, interviewer: ${interviewerName} <${interviewerEmail}>`);
+
+  if (!toEmail || !toEmail.includes('@')) {
+    console.error(`❌ [${label}] Aborted — invalid toEmail: "${toEmail}"`);
+    return;
+  }
+
   try {
-    await sendInterviewEmail({
+    const result = await sendInterviewEmail({
       candidateName,
       candidateEmail: toEmail,
       jobRole,
+      experience: experience || '',   
+      location: location || '', 
       interviewerName,
-      interviewDate: interviewDate || '',
-      interviewTime: interviewTime || '',
-      interviewLink: interviewLink || '',
+      interviewerEmail: interviewerEmail || '',
+      interviewDate:    interviewDate    || '',
+      interviewTime:    interviewTime    || '',
       senderRole,
       emailType,
     });
-    console.log(`✅ [${label}] email sent to: ${toEmail}`);
-  } catch (err) {
-    console.error(`❌ [${label}] email FAILED to: ${toEmail}`, err);
+
+    if (result?.success) {
+      console.log(`✅ [${label}] email sent → to: ${toEmail}`);
+    } else {
+      console.error(`❌ [${label}] flow returned success=false → to: ${toEmail}`);
+    }
+  } catch (err: any) {
+    console.error(`❌ [${label}] exception during sendInterviewEmail:`, err?.message || err);
   }
 }
 
@@ -117,15 +141,26 @@ const ProposeTime: React.FC<ProposeTimeProps> = ({ onPropose }) => {
       <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
         <div style={{ position: 'relative' }}>
           <Calendar className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-            className="pl-10" style={{ background: 'white', borderRadius: '8px' }} min={today} />
+          <Input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="pl-10"
+            style={{ background: 'white', borderRadius: '8px' }}
+            min={today}
+          />
         </div>
-        <select value={slot} onChange={(e) => setSlot(e.target.value)}
-          style={{ borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px', background: 'white', flex: 1 }}>
+        <select
+          value={slot}
+          onChange={(e) => setSlot(e.target.value)}
+          style={{ borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px', background: 'white', flex: 1 }}
+        >
           <option value="">Select a slot</option>
           {timeSlots.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <Button onClick={handlePropose} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>Propose</Button>
+        <Button onClick={handlePropose} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>
+          Propose
+        </Button>
       </div>
     </div>
   );
@@ -183,7 +218,11 @@ const StageCard: React.FC<StageCardProps> = ({
                 )}
                 {canPerformAction() && normalized.name === 'Pending' && (
                   <>
-                    <Textarea placeholder="Enter feedback (optional)..." value={feedback} onChange={(e) => setFeedback(e.target.value)} />
+                    <Textarea
+                      placeholder="Enter feedback (optional)..."
+                      value={feedback}
+                      onChange={(e) => setFeedback(e.target.value)}
+                    />
                     <div className="flex justify-end gap-2">
                       <Button variant="destructive" onClick={() => onAction('reject', { feedback })}>✕ Reject</Button>
                       <Button variant="default" onClick={() => onAction('accept', { feedback })}>✓ Accept</Button>
@@ -209,14 +248,26 @@ const StageCard: React.FC<StageCardProps> = ({
                 {canPerformAction() && (
                   <>
                     {normalized.name === 'Pending' && (
-                      <ProposeTime onPropose={(date, slot) => onAction('schedule', { scheduledDate: date, timeSlot: slot })} />
+                      <ProposeTime
+                        onPropose={(date, slot) => onAction('schedule', { scheduledDate: date, timeSlot: slot })}
+                      />
                     )}
                     {normalized.name === 'Scheduled' && (
                       <>
                         <Textarea placeholder="Enter interview feedback..." ref={postFeedbackRef} />
                         <div className="flex justify-end gap-2">
-                          <Button variant="destructive" onClick={() => onAction('reject', { feedback: postFeedbackRef.current?.value || '' })}>✕ Reject</Button>
-                          <Button variant="default" onClick={() => onAction('select', { feedback: postFeedbackRef.current?.value || '' })}>✓ Select</Button>
+                          <Button
+                            variant="destructive"
+                            onClick={() => onAction('reject', { feedback: postFeedbackRef.current?.value || '' })}
+                          >
+                            ✕ Reject
+                          </Button>
+                          <Button
+                            variant="default"
+                            onClick={() => onAction('select', { feedback: postFeedbackRef.current?.value || '' })}
+                          >
+                            ✓ Select
+                          </Button>
                         </div>
                       </>
                     )}
@@ -241,7 +292,10 @@ const StageCard: React.FC<StageCardProps> = ({
                   <>
                     {normalized.name === 'Pending' && (
                       <div className="flex justify-end">
-                        <Button onClick={() => onAction('release-offer', {})} style={{ background: '#7C3AED', color: 'white' }}>
+                        <Button
+                          onClick={() => onAction('release-offer', {})}
+                          style={{ background: '#7C3AED', color: 'white' }}
+                        >
                           📨 Release Offer
                         </Button>
                       </div>
@@ -250,8 +304,18 @@ const StageCard: React.FC<StageCardProps> = ({
                       <>
                         <Textarea placeholder="Enter feedback..." ref={postFeedbackRef} />
                         <div className="flex justify-end gap-2">
-                          <Button variant="destructive" onClick={() => onAction('offer-reject', { feedback: postFeedbackRef.current?.value || '' })}>✕ Mark Rejected</Button>
-                          <Button variant="default" onClick={() => onAction('offer-accept', { feedback: postFeedbackRef.current?.value || '' })}>✓ Mark Accepted</Button>
+                          <Button
+                            variant="destructive"
+                            onClick={() => onAction('offer-reject', { feedback: postFeedbackRef.current?.value || '' })}
+                          >
+                            ✕ Mark Rejected
+                          </Button>
+                          <Button
+                            variant="default"
+                            onClick={() => onAction('offer-accept', { feedback: postFeedbackRef.current?.value || '' })}
+                          >
+                            ✓ Mark Accepted
+                          </Button>
                         </div>
                       </>
                     )}
@@ -292,17 +356,31 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
   }, [candidateId]);
 
   // ─────────────────────────────────────────────
-  // EMAIL RULES:
-  //   Resume Review  → accept / reject       → ❌ no email
-  //   L1 Interview   → schedule              → ✅ email to createdBy
-  //   L1 Interview   → select / reject       → ✅ email to createdBy
-  //   L2 Interview   → schedule              → ✅ email to createdBy
-  //   L2 Interview   → select / reject       → ✅ email to createdBy
-  //   HR Round       → schedule (propose)    → ✅ email to createdBy
-  //   HR Round       → select / reject       → ❌ no email
-  //   Offer Stage    → release-offer         → ✅ email to createdBy
-  //   Offer Stage    → offer-accept          → ✅ email to createdBy
-  //   Offer Stage    → offer-reject          → ✅ email to createdBy
+  // EMAIL RULES (final):
+  //
+  //   Resume Review  → accept / reject        → ❌ No email
+  //
+  //   L1 Interview   → schedule               → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, date/time, panel name + email
+  //   L1 Interview   → select / reject        → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, panel name + email
+  //
+  //   L2 Interview   → schedule               → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, date/time, panel name + email
+  //   L2 Interview   → select / reject        → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, panel name + email
+  //
+  //   HR Round       → schedule               → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, date/time, HR name + email
+  //   HR Round       → select / reject        → ✅ Email to uploader (HR/Agency)  ← NEW (was missing before)
+  //                                               Body: candidate name, job role, HR name + email
+  //
+  //   Offer Stage    → release-offer          → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, HR name + email
+  //   Offer Stage    → offer-accept           → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, HR name + email
+  //   Offer Stage    → offer-reject           → ✅ Email to uploader (HR/Agency)
+  //                                               Body: candidate name, job role, HR name + email
   // ─────────────────────────────────────────────
   const handleAction = async (stage: string, action: string, payload: any) => {
     if (!candidate || !user) return;
@@ -319,13 +397,18 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       updatedAt: Timestamp.now(),
     };
 
+    // ── Step 1: Build Firestore update ──
     switch (stage) {
       case 'Resume Review':
         if (action === 'accept') {
-          updateData = { resumeReviewStatus: 'Accepted', l1Status: 'Pending' };
+          updateData = { resumeReviewStatus: 'Accepted', resumeFeedback: payload.feedback, l1Status: 'Pending' };
           historyData.status = 'Accepted';
         } else {
-          updateData = { resumeReviewStatus: 'Rejected', finalStatus: 'Rejected', l1Status: 'Locked', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
+          updateData = {
+            resumeReviewStatus: 'Rejected', resumeFeedback: payload.feedback,
+            finalStatus: 'Rejected',
+            l1Status: 'Locked', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked',
+          };
           historyData.status = 'Rejected';
         }
         break;
@@ -338,7 +421,11 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
           updateData = { l1Status: 'Selected', l1Feedback: payload.feedback, l2Status: 'Pending' };
           historyData.status = 'Selected';
         } else {
-          updateData = { l1Status: 'Rejected', l1Feedback: payload.feedback, finalStatus: 'Rejected', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
+          updateData = {
+            l1Status: 'Rejected', l1Feedback: payload.feedback,
+            finalStatus: 'Rejected',
+            l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked',
+          };
           historyData.status = 'Rejected';
         }
         break;
@@ -351,7 +438,11 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
           updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending' };
           historyData.status = 'Selected';
         } else {
-          updateData = { l2Status: 'Rejected', l2Feedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
+          updateData = {
+            l2Status: 'Rejected', l2Feedback: payload.feedback,
+            finalStatus: 'Rejected',
+            hrStatus: 'Locked', offerStatus: 'Locked',
+          };
           historyData.status = 'Rejected';
         }
         break;
@@ -364,7 +455,11 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
           updateData = { hrStatus: 'Selected', hrFeedback: payload.feedback, offerStatus: 'Pending' };
           historyData.status = 'Selected';
         } else {
-          updateData = { hrStatus: 'Rejected', hrFeedback: payload.feedback, finalStatus: 'Rejected', offerStatus: 'Locked' };
+          updateData = {
+            hrStatus: 'Rejected', hrFeedback: payload.feedback,
+            finalStatus: 'Rejected',
+            offerStatus: 'Locked',
+          };
           historyData.status = 'Rejected';
         }
         break;
@@ -383,54 +478,69 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
         break;
     }
 
-    // ── Step 1: Save to Firestore ──
+    // ── Step 2: Save to Firestore ──
     try {
       await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
       await addDoc(collection(db, 'candidate_history'), historyData);
       console.log(`✅ Firestore updated — stage: ${stage}, action: ${action}`);
     } catch (error) {
       console.error('❌ Firestore update failed:', error);
-      return; // do not send email if DB failed
+      return; // Do not send email if DB failed
     }
 
-    // ── Step 2: Determine if email is needed ──
+    // ── Step 3: Determine if this action needs an email ──
     const needsEmail =
       (stage === 'L1 Interview' && ['schedule', 'select', 'reject'].includes(action)) ||
       (stage === 'L2 Interview' && ['schedule', 'select', 'reject'].includes(action)) ||
-      (stage === 'HR Round'     && action === 'schedule') ||
+      (stage === 'HR Round'     && ['schedule', 'select', 'reject'].includes(action)) || // ← select/reject added
       (stage === 'Offer Stage'  && ['release-offer', 'offer-accept', 'offer-reject'].includes(action));
 
-    if (!needsEmail) return;
+    if (!needsEmail) {
+      console.log(`ℹ️ No email needed for stage: ${stage}, action: ${action}`);
+      return;
+    }
 
-    // ── Step 3: Resolve creator's email from users collection ──
+    // ── Step 4: Resolve the uploader's email from Firestore ──
     if (!candidate.createdBy) {
-      console.warn('⚠️ candidate.createdBy is missing — cannot resolve email');
+      console.warn('⚠️ candidate.createdBy is missing — cannot resolve uploader email');
       return;
     }
 
-    const creatorEmail = await getCreatorEmail(candidate.createdBy);
-    if (!creatorEmail) {
-      console.warn('⚠️ Creator email could not be resolved — email not sent');
+    const uploader = await getUploaderInfo(candidate.createdBy);
+    if (!uploader.email || typeof uploader.email !== 'string' || !uploader.email.includes('@')) {
+      console.warn('⚠️ Uploader email is missing or invalid — email not sent. Value:', uploader.email);
       return;
     }
 
+    // ── Step 5: Build the base email payload ──
+    // interviewerName = the logged-in panel/HR member's display name
+    // interviewerEmail = their actual email (shown in body for L1/L2/HR contact)
     const base = {
-      toEmail: creatorEmail,
+      toEmail: uploader.email,
       candidateName: candidate.candidateName || 'Candidate',
       jobRole: candidate.candidateDesignation || 'Not specified',
-      interviewerName: user.displayName || user.email || 'Hiring Team',
-      interviewLink: 'https://meet.google.com/your-link',
-      senderEmail: user.email || undefined,
+      interviewerName:
+        user.displayName ||
+        user.email?.split('@')[0] ||
+        (role === 'hr' ? 'HR' : 'Panel'),
+      interviewerEmail: user.email ?? '',
+      experience: String(candidate.experience || ''),   // ✅ FIX
+      location: String(candidate.location || ''),   
     };
 
-    // ── Step 4: Send the right email per stage + action ──
-    // From name will show:
-    //   L1/L2 → "SmartHire (Panel)"
-    //   HR Round / Offer Stage → "SmartHire (HR)"
+    // ── Step 6: Send the right email per stage + action ──
 
+    // L1 Interview
     if (stage === 'L1 Interview') {
       if (action === 'schedule') {
-        await sendEmail({ ...base, label: 'L1 Scheduled', senderRole: 'panel', emailType: 'interview_scheduled', interviewDate: payload.scheduledDate, interviewTime: payload.timeSlot });
+        await sendEmail({
+          ...base,
+          label: 'L1 Scheduled',
+          senderRole: 'panel',
+          emailType: 'interview_scheduled',
+          interviewDate: payload.scheduledDate,
+          interviewTime: payload.timeSlot,
+        });
       } else if (action === 'select') {
         await sendEmail({ ...base, label: 'L1 Selected', senderRole: 'panel', emailType: 'candidate_selected' });
       } else if (action === 'reject') {
@@ -438,9 +548,17 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       }
     }
 
+    // L2 Interview
     if (stage === 'L2 Interview') {
       if (action === 'schedule') {
-        await sendEmail({ ...base, label: 'L2 Scheduled', senderRole: 'panel', emailType: 'interview_scheduled', interviewDate: payload.scheduledDate, interviewTime: payload.timeSlot });
+        await sendEmail({
+          ...base,
+          label: 'L2 Scheduled',
+          senderRole: 'panel',
+          emailType: 'interview_scheduled',
+          interviewDate: payload.scheduledDate,
+          interviewTime: payload.timeSlot,
+        });
       } else if (action === 'select') {
         await sendEmail({ ...base, label: 'L2 Selected', senderRole: 'panel', emailType: 'candidate_selected' });
       } else if (action === 'reject') {
@@ -448,10 +566,25 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       }
     }
 
-    if (stage === 'HR Round' && action === 'schedule') {
-      await sendEmail({ ...base, label: 'HR Scheduled', senderRole: 'hr', emailType: 'interview_scheduled', interviewDate: payload.scheduledDate, interviewTime: payload.timeSlot });
+    // HR Round — schedule + select + reject all send email now
+    if (stage === 'HR Round') {
+      if (action === 'schedule') {
+        await sendEmail({
+          ...base,
+          label: 'HR Scheduled',
+          senderRole: 'hr',
+          emailType: 'interview_scheduled',
+          interviewDate: payload.scheduledDate,
+          interviewTime: payload.timeSlot,
+        });
+      } else if (action === 'select') {
+        await sendEmail({ ...base, label: 'HR Selected', senderRole: 'hr', emailType: 'candidate_selected' });
+      } else if (action === 'reject') {
+        await sendEmail({ ...base, label: 'HR Rejected', senderRole: 'hr', emailType: 'candidate_rejected' });
+      }
     }
 
+    // Offer Stage
     if (stage === 'Offer Stage') {
       if (action === 'release-offer') {
         await sendEmail({ ...base, label: 'Offer Released', senderRole: 'hr', emailType: 'offer_released' });
@@ -495,11 +628,36 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
   };
 
   const stageDefs: StageCardProps[] = [
-    { title: 'Resume Review', status: resumeReviewStatus, isLocked: false, savedFeedback: candidate.resumeFeedback, onAction: (a, p) => handleAction('Resume Review', a, p), isResume: true, canUpdate: true, role },
-    { title: 'L1 Interview',  status: l1Status,  isLocked: lockedStates.l1,  scheduledDate: candidate.l1ScheduledDate, timeSlot: candidate.l1TimeSlot, savedFeedback: candidate.l1Feedback, onAction: (a, p) => handleAction('L1 Interview', a, p),  canUpdate: true, role },
-    { title: 'L2 Interview',  status: l2Status,  isLocked: lockedStates.l2,  scheduledDate: candidate.l2ScheduledDate, timeSlot: candidate.l2TimeSlot, savedFeedback: candidate.l2Feedback, onAction: (a, p) => handleAction('L2 Interview', a, p),  canUpdate: true, role },
-    { title: 'HR Round',      status: hrStatus,  isLocked: lockedStates.hr,  scheduledDate: candidate.hrScheduledDate, timeSlot: candidate.hrTimeSlot, savedFeedback: candidate.hrFeedback, onAction: (a, p) => handleAction('HR Round', a, p),      canUpdate: true, role },
-    { title: 'Offer Stage',   status: offerStatus, isLocked: lockedStates.offer, savedFeedback: candidate.offerFeedback, onAction: (a, p) => handleAction('Offer Stage', a, p), isOffer: true, canUpdate: true, role },
+    {
+      title: 'Resume Review', status: resumeReviewStatus, isLocked: false,
+      savedFeedback: candidate.resumeFeedback,
+      onAction: (a, p) => handleAction('Resume Review', a, p),
+      isResume: true, canUpdate: true, role,
+    },
+    {
+      title: 'L1 Interview', status: l1Status, isLocked: lockedStates.l1,
+      scheduledDate: candidate.l1ScheduledDate, timeSlot: candidate.l1TimeSlot, savedFeedback: candidate.l1Feedback,
+      onAction: (a, p) => handleAction('L1 Interview', a, p),
+      canUpdate: true, role,
+    },
+    {
+      title: 'L2 Interview', status: l2Status, isLocked: lockedStates.l2,
+      scheduledDate: candidate.l2ScheduledDate, timeSlot: candidate.l2TimeSlot, savedFeedback: candidate.l2Feedback,
+      onAction: (a, p) => handleAction('L2 Interview', a, p),
+      canUpdate: true, role,
+    },
+    {
+      title: 'HR Round', status: hrStatus, isLocked: lockedStates.hr,
+      scheduledDate: candidate.hrScheduledDate, timeSlot: candidate.hrTimeSlot, savedFeedback: candidate.hrFeedback,
+      onAction: (a, p) => handleAction('HR Round', a, p),
+      canUpdate: true, role,
+    },
+    {
+      title: 'Offer Stage', status: offerStatus, isLocked: lockedStates.offer,
+      savedFeedback: candidate.offerFeedback,
+      onAction: (a, p) => handleAction('Offer Stage', a, p),
+      isOffer: true, canUpdate: true, role,
+    },
   ];
 
   return (
@@ -537,10 +695,13 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <p style={{ marginTop: '10px', fontWeight: 'bold' }}>Match Score: {candidate.matchScore ?? 0}%</p>
             <p style={{ marginTop: '10px', fontSize: '13px', color: 'gray' }}>
               {candidate.matchSummary ?? (
-                candidate.matchScore === undefined ? 'Candidate has not been evaluated yet.'
-                : candidate.matchScore === 0 ? 'Candidate is not matched because required skills, experience, or domain knowledge are missing or not evaluated.'
-                : candidate.matchScore > 60 ? 'Candidate is a strong match based on skills, experience, and job requirements.'
-                : 'Candidate partially matches but does not meet all key requirements.'
+                candidate.matchScore === undefined
+                  ? 'Candidate has not been evaluated yet.'
+                  : candidate.matchScore === 0
+                  ? 'Candidate is not matched because required skills, experience, or domain knowledge are missing or not evaluated.'
+                  : candidate.matchScore > 60
+                  ? 'Candidate is a strong match based on skills, experience, and job requirements.'
+                  : 'Candidate partially matches but does not meet all key requirements.'
               )}
             </p>
           </div>
@@ -568,7 +729,9 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
           {/* Interview Workflow */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
             <h2 style={{ fontWeight: 'bold', marginBottom: '6px' }}>Interview Workflow</h2>
-            <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
+            <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>
+              Manage active round. Save details to advance.
+            </p>
             <div className="space-y-4">
               {stageDefs.map((stage) => <StageCard key={stage.title} {...stage} />)}
             </div>
