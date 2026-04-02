@@ -725,12 +725,20 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             </Badge>
             <p style={{ marginTop: '10px', fontWeight: 'bold' }}>Match Score: {candidate.matchScore ?? 0}%</p>
             <p style={{ marginTop: '10px', fontSize: '13px', color: 'gray' }}>
-              {candidate.matchSummary ?? (
-                candidate.matchScore === undefined ? 'Candidate has not been evaluated yet.'
-                : candidate.matchScore === 0 ? 'Candidate is not matched because required skills, experience, or domain knowledge are missing.'
-                : candidate.matchScore > 60 ? 'Candidate is a strong match based on skills, experience, and job requirements.'
-                : 'Candidate partially matches but does not meet all key requirements.'
-              )}
+              {candidate.matchSummary
+                ? candidate.matchSummary
+                : candidate.matchScore === undefined
+                  ? 'This candidate has not been evaluated yet. Please run the AI match to get a score and reason.'
+                  : candidate.matchScore === 0
+                    ? "Match score is 0% — the candidate's resume does not meet the required skills, experience level, or domain knowledge for this role. Key qualifications are missing or insufficient."
+                    : candidate.matchScore <= 40
+                      ? 'Low match (below 40%). The candidate meets only a few required qualifications. Significant gaps exist in skills or experience.'
+                      : candidate.matchScore <= 60
+                        ? 'Partial match (41–60%). The candidate meets some requirements but does not fully qualify. Further evaluation is recommended.'
+                        : candidate.matchScore <= 80
+                          ? 'Good match (61–80%). The candidate meets most required qualifications with minor gaps.'
+                          : 'Strong match (above 80%). The candidate is highly qualified and closely aligns with the role requirements.'
+              }
             </p>
           </div>
 
@@ -764,7 +772,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Full Name</p><p style={{ fontWeight: 'bold' }}>{candidate.candidateName}</p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Email</p><p style={{ fontWeight: 'bold', wordBreak: 'break-all' }}>{candidate.candidateEmail}</p></div>
-              <div><p style={{ color: 'gray', fontSize: '12px' }}>Phone</p><p style={{ fontWeight: 'bold' }}>{candidate.candidatePhone}</p></div>
+              <div><p style={{ color: 'gray', fontSize: '12px' }}>Phone</p><p style={{ fontWeight: 'bold' }}>{candidate.candidatePhone || candidate.phone || '—'}</p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Experience</p><p style={{ fontWeight: 'bold' }}>{candidate.experience} Years</p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Current CTC</p><p style={{ fontWeight: 'bold' }}>{candidate.currentCtc}</p></div>
               <div><p style={{ color: 'gray', fontSize: '12px' }}>Expected CTC</p><p style={{ fontWeight: 'bold' }}>{candidate.expectedCtc}</p></div>
