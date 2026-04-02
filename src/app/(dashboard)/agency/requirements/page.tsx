@@ -12,7 +12,7 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-
+import { useAuth } from "@/hooks/use-auth";
 /* ─────────────────────────────────────────────
    Types — matches your Firestore structure
 ───────────────────────────────────────────── */
@@ -128,12 +128,13 @@ function FieldInput({ label, value, onChange, placeholder, required }: {
    Modal
 ───────────────────────────────────────────── */
 function RequirementModal({
-  open, onClose, editData, onSuccess
+  open, onClose, editData, onSuccess, user
 }: {
   open: boolean;
   onClose: () => void;
   editData?: Requirement | null;
   onSuccess: () => void;
+  user: any;   // ✅ ADD THIS
 }) {
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [customExperience, setCustomExperience] = useState('');
@@ -225,6 +226,7 @@ function RequirementModal({
           ...payload,
           createdAt: serverTimestamp(),
           createdByRole: 'agency',
+          createdBy: user.uid,   // ✅ ADD THIS
         });
       }
       onClose();
@@ -540,6 +542,7 @@ function TableRow({ req, isLast, onEdit }: { req: Requirement; isLast: boolean; 
    Main Page
 ───────────────────────────────────────────── */
 export default function RequirementsPage() {
+  const { user } = useAuth();
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -746,12 +749,11 @@ export default function RequirementsPage() {
       </div>
 
       <RequirementModal 
-      
   open={modalOpen} 
   onClose={closeModal} 
   editData={editTarget}
   onSuccess={() => setShowSuccess(true)}
-  
+  user={user}   // ✅ ADD THIS
 />
 {showSuccess && (
   <div style={{

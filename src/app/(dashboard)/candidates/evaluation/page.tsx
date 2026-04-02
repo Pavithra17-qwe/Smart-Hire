@@ -53,47 +53,62 @@ export default function CandidateEvaluation() {
   });
 
   useEffect(() => {
-    if (!role || !user) {
+  if (!role || !user) {
+    setProjects([]);
+    return;
+  }
+
+  let unsub: (() => void) | undefined;
+  let q;
+
+  if (role === 'admin') {
+    q = query(collection(db, "job_requisitions"), where("status", "==", "Active"));
+
+  } else if (role === 'hr') {
+    if (!hrProjectFilter) {
       setProjects([]);
-      return;
+      return; 
     }
 
-    let unsub: (() => void) | undefined;
-    let q;
+    const baseQuery = query(collection(db, "job_requisitions"), where("status", "==", "Active"));
 
-    if (role === 'admin') {
-      q = query(collection(db, "job_requisitions"), where("status", "==", "Active"));
-    } else if (role === 'hr') {
-      if (!hrProjectFilter) {
-        setProjects([]);
-        return; 
-      }
-      const baseQuery = query(collection(db, "job_requisitions"), where("status", "==", "Active"));
-      if (hrProjectFilter === 'admin') {
-        q = query(baseQuery, where("createdByRole", "==", "admin"));
-      } else if (hrProjectFilter === 'my') {
-        q = query(baseQuery, where("createdBy", "==", user.uid));
-      } else { // 'all_hr'
-        q = query(baseQuery, where("createdByRole", "==", "hr"));
-      }
-    } else if (role === 'agency') {
-      q = query(collection(db, "requirements"), where("createdBy", "==", user.uid));
+    if (hrProjectFilter === 'admin') {
+      q = query(baseQuery, where("createdByRole", "==", "admin"));
+    } else if (hrProjectFilter === 'my') {
+      q = query(baseQuery, where("createdBy", "==", user.uid));
+    } else {
+      q = query(baseQuery, where("createdByRole", "==", "hr"));
     }
 
-    if (q) {
-      unsub = onSnapshot(q, (snap) => {
-        const data = snap.docs.map(d => ({ ...d.data(), id: d.id, isReq: role === 'agency' }));
-        setProjects(data);
-      }, (error) => {
-        console.error("Error fetching projects: ", error);
-        setProjects([]);
-      });
-    }
+  } else if (role === 'agency') {
+    // ✅ FIX ONLY HERE
+    if (!user?.uid) return;
 
-    return () => {
-      if (unsub) unsub();
-    };
-  }, [role, user, hrProjectFilter]);
+    q = query(
+      collection(db, "requirements"),
+      where("createdBy", "==", user.uid)
+    );
+
+    console.log("Agency UID:", user.uid);
+  }
+
+  if (q) {
+    unsub = onSnapshot(q, (snap) => {
+      console.log("Fetched projects:", snap.docs.map(d => d.data())); // DEBUG
+      setProjects(snap.docs.map(d => ({
+        ...d.data(),
+        id: d.id,
+        isReq: role === 'agency'
+      })));
+    });
+  }
+
+  return () => {
+    if (unsub) unsub();
+  };
+
+// ✅ IMPORTANT: conditionally depend on hrProjectFilter
+}, [role, user, role === 'hr' ? hrProjectFilter : null]);
 
   const handleInputChange = (field: string, value: string) => {
     let processedValue = value;
@@ -103,14 +118,37 @@ export default function CandidateEvaluation() {
     setFormData((prev) => ({ ...prev, [field]: processedValue }));
 
     if (field === 'projectId') {
-        const project = projects.find(p => p.id === value);
-        if (role === 'hr' && project) {
-            const newRole = project.roles ? project.roles.join(', ') : '';
-            const newLocation = project.locations ? project.locations.join(', ') : '';
-            setFormData((prev) => ({ ...prev, role: newRole, location: newLocation }));
-        } else if (!value) {
-            setFormData((prev) => ({ ...prev, role: '', location: '' }));
-        }
+      const project = projects.find(p => p.id === value);
+    
+      // ✅ HR AUTO-FILL (existing)
+      if (role === 'hr' && project) {
+        const newRole = project.roles ? project.roles.join(', ') : '';
+        const newLocation = project.locations ? project.locations.join(', ') : '';
+    
+        setFormData((prev) => ({
+          ...prev,
+          role: newRole,
+          location: newLocation
+        }));
+      }
+    
+      // ✅ AGENCY AUTO-FILL (ADD THIS)
+      else if (role === 'agency' && project) {
+        setFormData((prev) => ({
+          ...prev,
+          role: project.jobRole || '',
+          location: project.location || ''
+        }));
+      }
+    
+      // reset when cleared
+      else if (!value) {
+        setFormData((prev) => ({
+          ...prev,
+          role: '',
+          location: ''
+        }));
+      }
     }
 
     if (errors[field]) {
@@ -305,7 +343,10 @@ export default function CandidateEvaluation() {
                   <SelectContent>
                     {projects.length > 0 ? (
                       projects.map(p => (
-                        <SelectItem key={p.id} value={p.id}>{p.projectName} {role !== 'agency' ? `(${p.createdByRole})` : ''}</SelectItem>
+<SelectItem key={p.id} value={p.id}>
+  {p.projectName}
+  {role !== 'agency' && ` (${p.createdByName || p.createdByRole})`}
+</SelectItem>
                       ))
                     ) : (
                        (role === 'hr' && hrProjectFilter) || role === 'admin' || role === 'agency' ? (
@@ -336,8 +377,8 @@ export default function CandidateEvaluation() {
               <div className="space-y-2"><Label className="font-bold">Expected CTC</Label><Input type="number" value={formData.expectedCtc} onChange={e => handleInputChange('expectedCtc', e.target.value)} className={cn({"border-red-500": errors.expectedCtc})} />{errors.expectedCtc && <p className="text-xs text-red-500 mt-1">{errors.expectedCtc}</p>}</div>
 
               {/* Row 5 */}
-              <div className="space-y-2"><Label className="font-bold">Project Designation</Label><Input value={formData.role} onChange={e => handleInputChange('role', e.target.value)} disabled={isHrProjectSelected} className={cn({"border-red-500": errors.role, 'bg-muted/30 cursor-not-allowed': isHrProjectSelected})} />{errors.role && <p className="text-xs text-red-500 mt-1">{errors.role}</p>}</div>
-              <div className="space-y-2"><Label className="font-bold">Project Location</Label><Input value={formData.location} onChange={e => handleInputChange('location', e.target.value)} disabled={isHrProjectSelected} className={cn({"border-red-500": errors.location, 'bg-muted/30 cursor-not-allowed': isHrProjectSelected})} />{errors.location && <p className="text-xs text-red-500 mt-1">{errors.location}</p>}</div>
+              <div className="space-y-2"><Label className="font-bold">Project Designation</Label><Input value={formData.role} onChange={e => handleInputChange('role', e.target.value)} disabled={role === 'agency' || isHrProjectSelected}   className={cn({"border-red-500": errors.role, 'bg-muted/30 cursor-not-allowed': isHrProjectSelected})} />{errors.role && <p className="text-xs text-red-500 mt-1">{errors.role}</p>}</div>
+              <div className="space-y-2"><Label className="font-bold">Project Location</Label><Input value={formData.location} onChange={e => handleInputChange('location', e.target.value)} disabled={role === 'agency' || isHrProjectSelected}   className={cn({"border-red-500": errors.location, 'bg-muted/30 cursor-not-allowed': isHrProjectSelected})} />{errors.location && <p className="text-xs text-red-500 mt-1">{errors.location}</p>}</div>
 
               {/* Row 6 */}
               <div className="space-y-2"><Label className="font-bold">Notice Period</Label><Select value={formData.noticePeriod} onValueChange={v => handleInputChange('noticePeriod', v)}><SelectTrigger className={cn({"border-red-500": errors.noticePeriod})}><SelectValue placeholder="Select..." /></SelectTrigger><SelectContent>{NOTICE_PERIOD_OPTIONS.map(opt => (<SelectItem key={opt} value={opt}>{opt}</SelectItem>))}</SelectContent></Select>{errors.noticePeriod && <p className="text-xs text-red-500 mt-1">{errors.noticePeriod}</p>}</div>
