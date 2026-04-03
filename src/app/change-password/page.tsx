@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { updatePassword } from "firebase/auth";
 import { doc, updateDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

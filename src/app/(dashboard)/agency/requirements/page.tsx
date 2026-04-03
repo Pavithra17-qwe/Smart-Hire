@@ -12,7 +12,7 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 /* ─────────────────────────────────────────────
    Types — matches your Firestore structure
 ───────────────────────────────────────────── */

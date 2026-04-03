@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuth, Role } from "@/hooks/use-auth";
+import { useAuth, Role } from "@/hooks/useAuth";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { LayoutDashboard, Users, ClipboardList, History, LogOut, Briefcase, UserCog, Activity, FileText } from "lucide-react";
 import Link from "next/link";

@@ -1,533 +1,728 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { useAuth } from "@/hooks/use-auth";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
-import { PieChart, Pie, Label, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, Cell } from "recharts";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { useAuth } from "@/hooks/useAuth"; // adjust to your auth hook
 import Link from "next/link";
-import { 
-  Users, 
-  CalendarDays, 
-  History,
-  Clock,
-  XCircle,
-  ArrowUpRight,
-  TrendingDown,
-  Activity,
-  BarChart3,
-  PieChart as PieIcon,
-  UserPlus,
-  Timer,
-  Loader2
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Select, SelectContent, SelectItem,
+  SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
+  ChartContainer, ChartTooltip, ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  PieChart, Pie, Cell, Label,
+} from "recharts";
+import {
+  Users, Send, XCircle, Clock, CheckCircle2,
+  Loader2, CalendarDays, ChevronRight,
+  BarChart3, TrendingUp, PlusCircle, Eye,
+  ClipboardList, ArrowUpRight, Activity,
+  AlertCircle, UserCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  Carousel,
-  CarouselContent,
-  CarouselItem,
-  CarouselNext,
-  CarouselPrevious,
-} from "@/components/ui/carousel";
 
-const pipelineConfig = {
-  l1: { label: "L1 Selected", color: "#6366F1" },
-  l2: { label: "L2 Selected", color: "#3B82F6" },
-  hr: { label: "HR Selected", color: "#F59E0B" },
-  completed: { label: "Completed", color: "#10B981" },
-} satisfies ChartConfig;
-
-const hiringTrendConfig = {
-  evaluations: { label: "Evaluations", color: "hsl(var(--primary))" },
-  hires: { label: "Hires", color: "#10B981" },
-} satisfies ChartConfig;
-
-interface MonthlyData {
-  month: string;
-  monthNum: number;
-  year: number;
-  evaluations: number;
-  hires: number;
+// ─── types ────────────────────────────────────────────────────────────────────
+interface Candidate {
+  id: string;
+  candidateName?: string;
+  candidateDesignation?: string;
+  finalStatus?: string;
+  resumeReviewStatus?: string;
+  l1Status?: string;
+  l2Status?: string;
+  hrStatus?: string;
+  offerStatus?: string;
+  aiScore?: number;
+  createdBy?: string;        // ← agency user uid stored here when they upload
+  jobRequisitionId?: string;
+  requirementTitle?: string;
+  createdAt?: any;
+  l1ScheduledDate?: string;
+  l2ScheduledDate?: string;
 }
 
+interface Requirement {
+  id: string;
+  title?: string;
+  projectName?: string;
+  experienceRequired?: string;
+  status?: string;
+  createdBy?: string;
+}
+
+interface MonthlyData { month: string; monthNum: number; year: number; submitted: number; selected: number; }
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+function normalize(s: any): string {
+  const v = (s || "").toLowerCase().trim();
+  if (v === "accepted")    return "Accepted";
+  if (v === "selected")    return "Selected";
+  if (v === "rejected")    return "Rejected";
+  if (v === "scheduled")   return "Scheduled";
+  if (v === "pending")     return "Pending";
+  if (v === "released")    return "Released";
+  if (v === "completed")   return "Completed";
+  if (v === "in progress") return "In Progress";
+  return s || "Pending";
+}
+
+function getStageLabel(c: Candidate): string {
+  if (c.offerStatus && c.offerStatus !== "Pending")  return `Offer — ${c.offerStatus}`;
+  if (c.hrStatus    && c.hrStatus    !== "Pending")  return `HR — ${c.hrStatus}`;
+  if (c.l2Status    && c.l2Status    !== "Pending")  return `L2 — ${c.l2Status}`;
+  if (c.l1Status    && c.l1Status    !== "Pending")  return `L1 — ${c.l1Status}`;
+  if (c.resumeReviewStatus)                          return `Resume — ${c.resumeReviewStatus}`;
+  return "Submitted";
+}
+
+// ─── chart config ─────────────────────────────────────────────────────────────
+const trendConfig = {
+  submitted: { label: "Submitted", color: "hsl(var(--primary))" },
+  selected:  { label: "Progressed", color: "#10B981" },
+} satisfies ChartConfig;
+
+const FUNNEL_COLORS = ["#6366F1", "#3B82F6", "#F59E0B", "#10B981", "#8B5CF6"];
+
+// ─── sub-components ───────────────────────────────────────────────────────────
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-3">
+      {children}
+    </p>
+  );
+}
+
+function StatCard({ title, value, icon: Icon, accent, href, description, highlight }: {
+  title: string; value: number | string; icon: any; accent: string;
+  href: string; description: string; highlight?: boolean;
+}) {
+  return (
+    <Link href={href} className="block group">
+      <Card className={cn(
+        "shadow-sm border hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer overflow-hidden",
+        highlight && "border-amber-300 dark:border-amber-700"
+      )}>
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider leading-tight">
+                {title}
+              </p>
+              <p className={cn(
+                "text-3xl font-black mt-1.5 transition-colors",
+                highlight ? "text-amber-600 dark:text-amber-400" : "group-hover:text-primary"
+              )}>
+                {value}
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{description}</p>
+            </div>
+            <div className={cn("h-9 w-9 rounded-xl flex items-center justify-center text-white shrink-0", accent)}>
+              <Icon className="h-4 w-4" />
+            </div>
+          </div>
+          <div className={cn(
+            "flex items-center gap-1 mt-3 text-[11px] transition-colors",
+            highlight ? "text-amber-500" : "text-muted-foreground group-hover:text-primary"
+          )}>
+            <span>View candidates</span>
+            <ChevronRight className="h-3 w-3" />
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function StageRow({ label, count, dot, href }: { label: string; count: number; dot: string; href: string }) {
+  return (
+    <Link href={href} className="block group">
+      <div className="flex items-center justify-between px-3 py-2 rounded-lg border bg-card hover:bg-muted/50 hover:border-primary/30 transition-all">
+        <div className="flex items-center gap-2">
+          <div className={cn("h-2 w-2 rounded-full shrink-0", dot)} />
+          <span className="text-[11px] font-semibold text-muted-foreground group-hover:text-foreground transition-colors">{label}</span>
+        </div>
+        <span className="text-sm font-black group-hover:text-primary transition-colors">{count}</span>
+      </div>
+    </Link>
+  );
+}
+
+// ─── main component ───────────────────────────────────────────────────────────
 export default function AgencyDashboard() {
-  const { agencyId } = useAuth();
-  const [candidates, setCandidates] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [filterProject, setFilterProject] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [isMounted, setIsMounted] = useState(false);
+  // ── auth: get current agency user ─────────────────────────────────────────
+  const { user } = useAuth(); // replace with your auth hook
+  const agencyUid  = user?.uid ?? "";
+  const agencyName = user?.displayName ?? user?.email ?? "Agency";
 
+  // ── state ─────────────────────────────────────────────────────────────────
+  const [candidates,    setCandidates]    = useState<Candidate[]>([]);
+  const [requirements,  setRequirements]  = useState<Requirement[]>([]);
+  const [filterReqId,   setFilterReqId]   = useState("all");
+  const [filterStatus,  setFilterStatus]  = useState("all");
+  const [loading,       setLoading]       = useState(true);
+  const [isMounted,     setIsMounted]     = useState(false);
+
+  useEffect(() => { setIsMounted(true); }, []);
+
+  // ── Firestore: fetch ONLY this agency's candidates ─────────────────────────
   useEffect(() => {
-    setIsMounted(true);
-  }, []);
+    if (!agencyUid) return;
 
-  const normalizeStatus = (status: any) => {
-    const s = (status || "").toLowerCase();
-    if (s === "shedule" || s === "scheduled" || s === "schedule") return "Schedule";
-    if (s === "pending") return "Pending";
-    if (s === "selected") return "Selected";
-    if (s === "rejected") return "Rejected";
-    return status || "Pending";
-  };
+    // SECURITY: query scoped by createdBy = this agency's uid
+    // This means another agency's candidates are never fetched
+    const candQuery = query(
+      collection(db, "candidates"),
+      where("createdBy", "==", agencyUid)
+    );
 
-  const formatDisplayTime = (timeStr: string) => {
-    if (!timeStr) return "Not set";
-    try {
-      const [hours, minutes] = timeStr.split(':');
-      const h = parseInt(hours);
-      const m = parseInt(minutes);
-      const ampm = h >= 12 ? 'PM' : 'AM';
-      const h12 = h % 12 || 12;
-      return `${h12.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${ampm}`;
-    } catch (e) {
-      return timeStr;
-    }
-  };
+    const reqQuery = query(
+      collection(db, "requirements"),  // adjust collection name if different
+      where("createdBy", "==", agencyUid)
+    );
 
-  useEffect(() => {
-    if (!agencyId) return;
-    const q = query(collection(db, "candidates"), where("agencyId", "==", agencyId));
-    const unsubCandidates = onSnapshot(q, (snap) => {
+    let candLoaded = false;
+    let reqLoaded  = false;
+    const checkDone = () => { if (candLoaded && reqLoaded) setLoading(false); };
+
+    const unsub1 = onSnapshot(candQuery, snap => {
       setCandidates(snap.docs.map(doc => {
-        const raw = doc.data();
+        const r = doc.data();
         return {
-          id: doc.id,
-          ...raw,
-          r1Status: normalizeStatus(raw.r1Status),
-          r2Status: normalizeStatus(raw.r2Status),
-          hrStatus: normalizeStatus(raw.hrStatus),
-          offerStatus: raw.offerStatus || "Offer Pending",
-          finalStatus: raw.finalStatus || "In Progress",
-          createdDate: raw.createdDate?.toDate() || new Date(),
-        };
+          id: doc.id, ...r,
+          resumeReviewStatus: normalize(r.resumeReviewStatus),
+          l1Status:    normalize(r.l1Status),
+          l2Status:    normalize(r.l2Status),
+          hrStatus:    normalize(r.hrStatus),
+          offerStatus: normalize(r.offerStatus),
+          finalStatus: r.finalStatus || "In Progress",
+          createdAt:   r.createdAt?.toDate?.() || new Date(),
+        } as Candidate;
       }));
+      candLoaded = true;
+      checkDone();
     });
-    const unsubProjects = onSnapshot(collection(db, "job_requisitions"), (snap) => {
-      setProjects(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+    const unsub2 = onSnapshot(reqQuery, snap => {
+      setRequirements(snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement)));
+      reqLoaded = true;
+      checkDone();
     });
 
-    return () => {
-      unsubCandidates();
-      unsubProjects();
-    };
-  }, [agencyId]);
+    return () => { unsub1(); unsub2(); };
+  }, [agencyUid]);
 
-  const handleClearFilters = () => {
-    setFilterProject("all");
-    setFilterStatus("all");
-  };
-
+  // ── filtered candidates (by requirement + status dropdowns) ───────────────
   const filtered = useMemo(() => {
     return candidates.filter(c => {
-      const projectMatch = filterProject === "all" || c.projectId === filterProject;
-      const statusMatch = filterStatus === "all" || c.finalStatus === filterStatus;
-      return projectMatch && statusMatch;
+      if (filterReqId !== "all" && c.jobRequisitionId !== filterReqId) return false;
+      if (filterStatus !== "all") {
+        const stage = getStageLabel(c).toLowerCase();
+        if (!stage.includes(filterStatus.toLowerCase())) return false;
+      }
+      return true;
     });
-  }, [candidates, filterProject, filterStatus]);
+  }, [candidates, filterReqId, filterStatus]);
 
-  const stats = useMemo(() => {
-    const l1SelectedCount = filtered.filter(c => (c.r1Status || "").toLowerCase() === "selected").length;
-    const l2SelectedCount = filtered.filter(c => (c.r2Status || "").toLowerCase() === "selected").length;
-    const hrSelectedCount = filtered.filter(c => (c.hrStatus || "").toLowerCase() === "selected").length;
-    const completedCount = filtered.filter(c => (c.finalStatus || "").toLowerCase() === "completed").length;
+  // ── stats (always from filtered) ──────────────────────────────────────────
+  const stats = useMemo(() => ({
+    total:         filtered.length,
+    inProgress:    filtered.filter(c => {
+      const f = (c.finalStatus ?? "").toLowerCase();
+      return f !== "completed" && f !== "rejected";
+    }).length,
+    resumePending: filtered.filter(c => c.resumeReviewStatus === "Pending").length,
+    resumeAccepted:filtered.filter(c => c.resumeReviewStatus === "Accepted").length,
+    resumeRejected:filtered.filter(c => c.resumeReviewStatus === "Rejected").length,
+    l1Scheduled:   filtered.filter(c => c.l1Status === "Scheduled").length,
+    l1Selected:    filtered.filter(c => c.l1Status === "Selected").length,
+    l1Rejected:    filtered.filter(c => c.l1Status === "Rejected").length,
+    l2Scheduled:   filtered.filter(c => c.l2Status === "Scheduled").length,
+    l2Selected:    filtered.filter(c => c.l2Status === "Selected").length,
+    l2Rejected:    filtered.filter(c => c.l2Status === "Rejected").length,
+    offerPending:  filtered.filter(c => c.offerStatus === "Pending").length,
+    offerReleased: filtered.filter(c => c.offerStatus === "Released").length,
+    offerAccepted: filtered.filter(c => c.offerStatus === "Accepted").length,
+    offerRejected: filtered.filter(c => c.offerStatus === "Rejected").length,
+    hired:         filtered.filter(c => c.finalStatus === "Completed").length,
+    rejected:      filtered.filter(c => c.finalStatus === "Rejected").length,
+  }), [filtered]);
 
-    let l1Scheduled = 0, l1Rejected = 0, l1Pending = 0;
-    let l2Scheduled = 0, l2Rejected = 0, l2Pending = 0;
-    let hrScheduled = 0, hrRejected = 0, hrPending = 0;
-    
-    let offersPending = 0, offersReleased = 0, offersDeclined = 0;
+  // ── funnel donut ───────────────────────────────────────────────────────────
+  const funnelData = useMemo(() => [
+    { name: "Resume Accepted", value: stats.resumeAccepted, fill: "#6366F1" },
+    { name: "L1 Selected",     value: stats.l1Selected,     fill: "#3B82F6" },
+    { name: "L2 Selected",     value: stats.l2Selected,     fill: "#F59E0B" },
+    { name: "Offer Released",  value: stats.offerReleased,  fill: "#10B981" },
+    { name: "Hired",           value: stats.hired,          fill: "#8B5CF6" },
+  ].filter(d => d.value > 0), [stats]);
+  const funnelTotal = funnelData.reduce((s, d) => s + d.value, 0);
 
-    filtered.forEach(c => {
-      const s1 = (c.r1Status || "").toLowerCase();
-      const s2 = (c.r2Status || "").toLowerCase();
-      const sH = (c.hrStatus || "").toLowerCase();
-      const sO = (c.offerStatus || "").toLowerCase();
-
-      if (s1 === "rejected") l1Rejected++;
-      if (s1 === "schedule") l1Scheduled++;
-      if (s1 === "pending") l1Pending++;
-
-      if (s2 === "rejected") l2Rejected++;
-      if (s2 === "schedule") l2Scheduled++;
-      if (s2 === "pending") l2Pending++;
-
-      if (sH === "rejected") hrRejected++;
-      if (sH === "schedule") hrScheduled++;
-      if (sH === "pending") hrPending++;
-
-      if (sO === "offer pending") offersPending++;
-      if (sO === "offer released") offersReleased++;
-      if (sO === "offer rejected") offersDeclined++;
-    });
-    
-    return {
-      total: filtered.length,
-      offersPending,
-      offersReleased,
-      offersDeclined,
-      l1SelectedCount, l2SelectedCount, hrSelectedCount, completedCount,
-      l1Scheduled, l1Rejected, l1Pending,
-      l2Scheduled, l2Rejected, l2Pending,
-      hrScheduled, hrRejected, hrPending
-    };
-  }, [filtered]);
-
-  const pipelineData = useMemo(() => [
-    { name: "L1 Selected", value: stats.l1SelectedCount, fill: "#6366F1" },
-    { name: "L2 Selected", value: stats.l2SelectedCount, fill: "#3B82F6" },
-    { name: "HR Selected", value: stats.hrSelectedCount, fill: "#F59E0B" },
-    { name: "Completed", value: stats.completedCount, fill: "#10B981" },
-  ].filter(item => item.value > 0), [stats]);
-
-  const pipelineTotal = useMemo(() => 
-    stats.l1SelectedCount + stats.l2SelectedCount + stats.hrSelectedCount + stats.completedCount, 
-  [stats]);
-
-  const hiringTrendData = useMemo(() => {
-    const last6Months: MonthlyData[] = [];
+  // ── 6-month trend ──────────────────────────────────────────────────────────
+  const trendData = useMemo<MonthlyData[]>(() => {
+    const months: MonthlyData[] = [];
     for (let i = 5; i >= 0; i--) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - i);
-      last6Months.push({
-        month: d.toLocaleString('default', { month: 'short' }),
-        monthNum: d.getMonth(),
-        year: d.getFullYear(),
-        evaluations: 0,
-        hires: 0
-      });
+      const d = new Date(); d.setMonth(d.getMonth() - i);
+      months.push({ month: d.toLocaleString("default", { month: "short" }), monthNum: d.getMonth(), year: d.getFullYear(), submitted: 0, selected: 0 });
     }
     filtered.forEach(c => {
-      const cDate = c.createdDate;
-      const monthIdx = last6Months.findIndex(m => m.monthNum === cDate.getMonth() && m.year === cDate.getFullYear());
-      if (monthIdx !== -1) {
-        last6Months[monthIdx].evaluations++;
-        if (c.finalStatus === "Completed") last6Months[monthIdx].hires++;
+      const cDate = c.createdAt instanceof Date ? c.createdAt : new Date();
+      const idx = months.findIndex(m => m.monthNum === cDate.getMonth() && m.year === cDate.getFullYear());
+      if (idx !== -1) {
+        months[idx].submitted++;
+        if (c.l1Status === "Selected" || c.l2Status === "Selected" || c.finalStatus === "Completed") {
+          months[idx].selected++;
+        }
       }
     });
-    return last6Months;
+    return months;
   }, [filtered]);
 
-  const upcomingInterviews = useMemo(() => {
-    const interviews: any[] = [];
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const todayStr = today.toISOString().split('T')[0];
+  // ── recent 5 candidates ────────────────────────────────────────────────────
+  const recent = useMemo(() =>
+    [...filtered]
+      .sort((a, b) => {
+        const da = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+        const db2 = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+        return db2 - da;
+      })
+      .slice(0, 6)
+  , [filtered]);
 
-    const maxDate = new Date(today);
-    maxDate.setDate(today.getDate() + 3);
-    const maxDateStr = maxDate.toISOString().split('T')[0];
+  // ── pass rate ─────────────────────────────────────────────────────────────
+  const passRate = useMemo(() => {
+    const decided = stats.hired + stats.rejected;
+    return decided > 0 ? Math.round((stats.hired / decided) * 100) : 0;
+  }, [stats]);
 
-    filtered.forEach(c => {
-      ['r1', 'r2', 'hr'].forEach(round => {
-        const dateStr = c[`${round}Date`];
-        const status = (c[`${round}Status`] || "").toLowerCase();
-        
-        if (status === "schedule" && dateStr && dateStr >= todayStr && dateStr <= maxDateStr) {
-          interviews.push({
-            id: `${c.id}-${round}`,
-            candidateName: c.candidateName,
-            agencyName: c.agencyName,
-            roundLabel: round === 'r1' ? 'L1 Interview' : round === 'r2' ? 'L2 Interview' : 'HR Interview',
-            date: dateStr,
-            time: c[`${round}Time`],
-            isToday: dateStr === todayStr,
-            fullDate: new Date(dateStr + 'T' + (c[`${round}Time`] || '00:00'))
-          });
-        }
-      });
-    });
-    return interviews.sort((a, b) => a.fullDate.getTime() - b.fullDate.getTime());
-  }, [filtered]);
-
-  const hasActiveFilters = filterProject !== "all" || filterStatus !== "all";
-
-  if (!isMounted) {
-    return <div className="p-8 h-screen w-full flex items-center justify-center text-muted-foreground"><Loader2 className="w-8 h-8 animate-spin" /></div>;
+  // ── loading ───────────────────────────────────────────────────────────────
+  if (!isMounted || loading) {
+    return (
+      <div className="h-screen flex items-center justify-center gap-3">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground">Loading Agency Dashboard…</p>
+      </div>
+    );
   }
 
+  const hasFilters = filterReqId !== "all" || filterStatus !== "all";
+
   return (
-    <div className="space-y-8 pb-10 w-full overflow-x-hidden dashboard-container">
-      <div className="flex flex-col md:flex-row items-end gap-4 bg-card p-5 rounded-xl shadow-sm border">
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
-          <div className="space-y-2">
-            <label className="text-xs font-bold uppercase text-muted-foreground tracking-wider ml-1">Project</label>
-            <Select onValueChange={setFilterProject} value={filterProject}>
-              <SelectTrigger className="rounded-lg h-11"><SelectValue placeholder="All Projects" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Projects</SelectItem>
-                {projects.map(p => <SelectItem key={p.id} value={p.id}>{p.projectName}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <label className="text-xs font-bold uppercase text-muted-foreground tracking-wider ml-1">Status</label>
-            <Select onValueChange={setFilterStatus} value={filterStatus}>
-              <SelectTrigger className="rounded-lg h-11"><SelectValue placeholder="All Status" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="In Progress">In Progress</SelectItem>
-                <SelectItem value="Completed">Completed</SelectItem>
-                <SelectItem value="Rejected">Rejected</SelectItem>
-              </SelectContent>
-            </Select>
+    <div className="space-y-6 pb-10 w-full overflow-x-hidden">
+
+      {/* ── Header ── */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-headline font-bold leading-tight tracking-tight">
+            Agency Dashboard
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Welcome, <span className="font-semibold text-foreground">{agencyName}</span> — your candidates and recruitment performance.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+        
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-3 py-1.5 rounded-full">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse block" />
+            Live data
           </div>
         </div>
-        {hasActiveFilters && (
-          <Button variant="secondary" size="sm" onClick={handleClearFilters} className="h-11 gap-2 text-xs font-bold rounded-lg px-4">
-            <XCircle className="h-4 w-4" /> Clear
-          </Button>
+      </div>
+
+      {/* ── Filters ── */}
+      <div className="bg-card border rounded-xl p-4 shadow-sm">
+        <div className="flex flex-col sm:flex-row gap-3 items-end">
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                Filter by Requirement
+              </label>
+              <Select value={filterReqId} onValueChange={setFilterReqId}>
+                <SelectTrigger className="h-10 text-sm rounded-lg">
+                  <SelectValue placeholder="All Requirements" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Requirements</SelectItem>
+                  {requirements.map(r => (
+                    <SelectItem key={r.id} value={r.id}>
+                      {r.title || r.projectName || r.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                Filter by Status
+              </label>
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="h-10 text-sm rounded-lg">
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="pending">Resume Pending</SelectItem>
+                  <SelectItem value="accepted">Resume Accepted</SelectItem>
+                  <SelectItem value="scheduled">Interview Scheduled</SelectItem>
+                  <SelectItem value="selected">Selected</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                  <SelectItem value="released">Offer Released</SelectItem>
+                  <SelectItem value="completed">Hired</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+          </div>
+
+          {hasFilters && (
+            <Button variant="ghost" size="sm"
+              onClick={() => { setFilterReqId("all"); setFilterStatus("all"); }}
+              className="h-10 gap-1.5 text-xs rounded-lg border shrink-0"
+            >
+              <XCircle className="h-3.5 w-3.5" /> Clear
+            </Button>
+          )}
+        </div>
+        {hasFilters && (
+          <p className="text-[11px] text-muted-foreground mt-2">
+            Showing <span className="font-semibold text-foreground">{filtered.length}</span> of{" "}
+            <span className="font-semibold text-foreground">{candidates.length}</span> your candidates
+          </p>
         )}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard title="Total Candidates" value={stats.total} icon={Users} color="border-l-slate-400" />
-        <MetricCard title="Offer Pending" value={stats.offersPending} icon={Timer} color="border-l-blue-400" />
-        <MetricCard title="Offers Released" value={stats.offersReleased} icon={ArrowUpRight} color="border-l-purple-500" />
-        <MetricCard title="Offers Rejected" value={stats.offersDeclined} icon={TrendingDown} color="border-l-rose-500" />
+      {/* ── ROW 1: Stat cards ── */}
+      <div>
+        <SectionLabel>My Candidate Overview</SectionLabel>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard
+            title="Total Submitted"  value={stats.total}
+            icon={Users}             accent="bg-slate-500"
+            href="/candidates/list"  description="Candidates you added"
+          />
+          <StatCard
+            title="Active Pipeline"  value={stats.inProgress}
+            icon={Activity}          accent="bg-blue-500"
+            href="/candidates/history?active=true"
+            description="In review or interview"
+          />
+          <StatCard
+            title="Offer Released"   value={stats.offerReleased}
+            icon={Send}              accent="bg-violet-500"
+            href="/candidates/history?stage=offer&status=released"
+            description="Awaiting acceptance"
+          />
+          <StatCard
+            title="Hired"            value={stats.hired}
+            icon={UserCheck}         accent="bg-emerald-500"
+            href="/candidates/history?stage=final&status=completed"
+            description="Successfully placed"
+          />
+          <StatCard
+            title="Rejected"         value={stats.rejected}
+            icon={XCircle}           accent="bg-rose-500"
+            href="/candidates/history?stage=final&status=rejected"
+            description="Did not progress"
+          />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <Card className="lg:col-span-5 shadow-md border overflow-hidden">
-          <CardHeader className="bg-muted/30 pb-4 border-b">
+      {/* ── ROW 2: Pipeline donut + Trend chart ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+        {/* Donut (2/5) */}
+        <Card className="lg:col-span-2 shadow-sm border">
+          <CardHeader className="pb-2 pt-5 px-5">
             <div className="flex items-center gap-2">
-              <PieIcon className="h-5 w-5 text-primary" />
-              <CardTitle className="text-lg font-headline font-bold">Pipeline Distribution</CardTitle>
+              <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
+                <TrendingUp className="h-4 w-4 text-primary" />
+              </div>
+              <CardTitle className="text-base font-semibold">Pipeline Progress</CardTitle>
             </div>
           </CardHeader>
-          <CardContent className="pt-8 flex flex-col items-center">
-            {pipelineTotal > 0 ? (
-              <ChartContainer config={pipelineConfig} className="mx-auto aspect-square max-h-[250px] w-full">
-                <PieChart>
-                  <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
-                  <Pie
-                    data={pipelineData}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={70}
-                    outerRadius={95}
-                    strokeWidth={4}
-                    stroke="hsl(var(--background))"
-                    paddingAngle={4}
-                  >
-                    {pipelineData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.fill} />
-                    ))}
-                    <Label
-                      content={({ viewBox }) => {
-                        if (viewBox && "cx" in viewBox && "cy" in viewBox) {
-                          return (
-                            <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
-                              <tspan x={viewBox.cx} y={viewBox.cy} className="fill-foreground text-3xl font-black">{pipelineTotal}</tspan>
-                              <tspan x={viewBox.cx} y={(viewBox.cy || 0) + 24} className="fill-muted-foreground text-[10px] font-bold uppercase tracking-widest">PIPELINE</tspan>
-                            </text>
-                          )
-                        }
-                      }}
-                    />
-                  </Pie>
-                </PieChart>
-              </ChartContainer>
+          <CardContent className="px-5 pb-5">
+            {funnelTotal > 0 ? (
+              <>
+                <ChartContainer config={{} as ChartConfig} className="mx-auto aspect-square max-h-[180px] w-full">
+                  <PieChart>
+                    <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
+                    <Pie data={funnelData} dataKey="value" nameKey="name"
+                      innerRadius={52} outerRadius={74} strokeWidth={3}
+                      stroke="hsl(var(--background))" paddingAngle={3}>
+                      {funnelData.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                      <Label content={({ viewBox }) => {
+                        if (viewBox && "cx" in viewBox && "cy" in viewBox) return (
+                          <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
+                            <tspan x={viewBox.cx} y={viewBox.cy} className="fill-foreground text-2xl font-black">{funnelTotal}</tspan>
+                            <tspan x={viewBox.cx} y={(viewBox.cy ?? 0) + 18} className="fill-muted-foreground text-[9px] font-bold uppercase tracking-widest">active</tspan>
+                          </text>
+                        );
+                      }} />
+                    </Pie>
+                  </PieChart>
+                </ChartContainer>
+                <div className="mt-2 space-y-1.5">
+                  {funnelData.map(d => (
+                    <div key={d.name} className="flex items-center justify-between px-2 py-1 rounded-lg hover:bg-muted/50">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full" style={{ backgroundColor: d.fill }} />
+                        <span className="text-[11px] font-medium text-muted-foreground">{d.name}</span>
+                      </div>
+                      <span className="text-sm font-bold">{d.value}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Pass rate badge */}
+                <div className="mt-4 px-3 py-3 rounded-xl bg-muted text-center">
+                  <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">Placement Rate</p>
+                  <p className="text-2xl font-black text-primary mt-1">{passRate}%</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {stats.hired} placed / {stats.hired + stats.rejected} decided
+                  </p>
+                </div>
+              </>
             ) : (
-              <div className="h-[250px] flex items-center justify-center text-muted-foreground text-sm italic text-center px-4">
-                No data available for selected filters.
+              <div className="h-48 flex flex-col items-center justify-center gap-2">
+                <Users className="h-8 w-8 text-muted-foreground/20" />
+                <p className="text-sm text-muted-foreground">No candidates yet</p>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/candidates/add">Add your first candidate</Link>
+                </Button>
               </div>
             )}
-            <div className="mt-8 grid grid-cols-2 gap-y-4 gap-x-8 px-4 w-full max-w-[360px]">
-              {pipelineData.map((item) => (
-                <div key={item.name} className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 truncate">
-                    <div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: item.fill }} />
-                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider truncate">{item.name}</span>
-                  </div>
-                  <span className="text-[11px] font-black tabular-nums">{item.value}</span>
-                </div>
-              ))}
-            </div>
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-7 shadow-md border overflow-hidden">
-          <CardHeader className="bg-muted/30 pb-4 border-b">
+        {/* Trend (3/5) */}
+        <Card className="lg:col-span-3 shadow-sm border">
+          <CardHeader className="pb-2 pt-5 px-5">
             <div className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-primary" />
-              <CardTitle className="text-lg font-headline font-bold">Hiring Trend</CardTitle>
+              <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
+                <BarChart3 className="h-4 w-4 text-primary" />
+              </div>
+              <CardTitle className="text-base font-semibold">Submission Trend</CardTitle>
+              <span className="ml-auto text-xs text-muted-foreground">Last 6 months</span>
             </div>
           </CardHeader>
-          <CardContent className="pt-8">
-            <ChartContainer config={hiringTrendConfig} className="h-[350px] w-full">
-              <BarChart data={hiringTrendData} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--muted))" />
-                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fontWeight: 500 }} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fontWeight: 500 }} />
+          <CardContent className="px-5 pb-5">
+            <ChartContainer config={trendConfig} className="h-[270px] w-full">
+              <BarChart data={trendData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} dy={8} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11 }} allowDecimals={false} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px', fontSize: '12px', fontWeight: 600 }} />
-                <Bar dataKey="evaluations" name="Evaluated" fill="var(--color-evaluations)" radius={[4, 4, 0, 0]} barSize={20} />
-                <Bar dataKey="hires" name="Hires" fill="var(--color-hires)" radius={[4, 4, 0, 0]} barSize={20} />
+                <Bar dataKey="submitted" name="Submitted"  fill="var(--color-submitted)" radius={[3, 3, 0, 0]} barSize={14} />
+                <Bar dataKey="selected"  name="Progressed" fill="var(--color-selected)"  radius={[3, 3, 0, 0]} barSize={14} />
               </BarChart>
             </ChartContainer>
           </CardContent>
         </Card>
+
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <Card className="lg:col-span-7 shadow-md border overflow-hidden">
-          <CardHeader className="bg-muted/30 pb-4 border-b">
-            <div className="flex items-center gap-2">
-              <Activity className="h-5 w-5 text-primary" />
-              <CardTitle className="text-lg font-headline font-bold">Interview Distribution</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="space-y-4">
-                <h4 className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Scheduled</h4>
-                <div className="space-y-3">
-                  <StatusPill label="L1 SCHEDULED" count={stats.l1Scheduled} dotColor="bg-primary" />
-                  <StatusPill label="L2 SCHEDULED" count={stats.l2Scheduled} dotColor="bg-blue-500" />
-                  <StatusPill label="HR SCHEDULED" count={stats.hrScheduled} dotColor="bg-amber-500" />
+      {/* ── ROW 3: Stage breakdown ── */}
+      <div>
+        <SectionLabel>Candidate Stage Breakdown</SectionLabel>
+        <Card className="shadow-sm border">
+          <CardContent className="p-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+
+              {/* Resume */}
+              <div className="space-y-2">
+                <div className="px-3 py-1.5 rounded-lg text-center bg-slate-100 dark:bg-slate-800">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">Resume Review</p>
+                </div>
+                <div className="space-y-1.5">
+                  <StageRow label="Accepted" count={stats.resumeAccepted} dot="bg-emerald-500" href="/candidates/history?stage=resume&status=accepted" />
+                  <StageRow label="Rejected" count={stats.resumeRejected} dot="bg-rose-500"    href="/candidates/history?stage=resume&status=rejected" />
+                  <StageRow label="Pending"  count={stats.resumePending}  dot="bg-slate-400"   href="/candidates/history?stage=resume&status=pending" />
                 </div>
               </div>
-              <div className="space-y-4">
-                <h4 className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Rejected</h4>
-                <div className="space-y-3">
-                  <StatusPill label="L1 REJECTED" count={stats.l1Rejected} dotColor="bg-rose-400" />
-                  <StatusPill label="L2 REJECTED" count={stats.l2Rejected} dotColor="bg-rose-600" />
-                  <StatusPill label="HR REJECTED" count={stats.hrRejected} dotColor="bg-rose-800" />
+
+              {/* L1 */}
+              <div className="space-y-2">
+                <div className="px-3 py-1.5 rounded-lg text-center bg-indigo-50 dark:bg-indigo-950/30">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">L1 Interview</p>
+                </div>
+                <div className="space-y-1.5">
+                  <StageRow label="Scheduled" count={stats.l1Scheduled} dot="bg-blue-400"    href="/candidates/history?stage=l1&status=scheduled" />
+                  <StageRow label="Selected"  count={stats.l1Selected}  dot="bg-indigo-500"  href="/candidates/history?stage=l1&status=selected" />
+                  <StageRow label="Rejected"  count={stats.l1Rejected}  dot="bg-rose-400"    href="/candidates/history?stage=l1&status=rejected" />
                 </div>
               </div>
-              <div className="space-y-4">
-                <h4 className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1">Pending Interviews</h4>
-                <div className="space-y-3">
-                  <StatusPill label="L1 PENDING" count={stats.l1Pending} dotColor="bg-slate-400" />
-                  <StatusPill label="L2 PENDING" count={stats.l2Pending} dotColor="bg-slate-400" />
-                  <StatusPill label="HR PENDING" count={stats.hrPending} dotColor="bg-slate-400" />
+
+              {/* L2 */}
+              <div className="space-y-2">
+                <div className="px-3 py-1.5 rounded-lg text-center bg-blue-50 dark:bg-blue-950/30">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">L2 Interview</p>
+                </div>
+                <div className="space-y-1.5">
+                  <StageRow label="Scheduled" count={stats.l2Scheduled} dot="bg-sky-400"     href="/candidates/history?stage=l2&status=scheduled" />
+                  <StageRow label="Selected"  count={stats.l2Selected}  dot="bg-blue-500"    href="/candidates/history?stage=l2&status=selected" />
+                  <StageRow label="Rejected"  count={stats.l2Rejected}  dot="bg-rose-600"    href="/candidates/history?stage=l2&status=rejected" />
                 </div>
               </div>
+
+              {/* HR */}
+              <div className="space-y-2">
+                <div className="px-3 py-1.5 rounded-lg text-center bg-amber-50 dark:bg-amber-950/30">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">HR Round</p>
+                </div>
+                <div className="space-y-1.5">
+                  <StageRow label="Scheduled" count={filtered.filter(c => c.hrStatus === "Scheduled").length} dot="bg-amber-300" href="/candidates/history?stage=hr&status=scheduled" />
+                  <StageRow label="Selected"  count={filtered.filter(c => c.hrStatus === "Selected").length}  dot="bg-amber-500" href="/candidates/history?stage=hr&status=selected" />
+                  <StageRow label="Rejected"  count={filtered.filter(c => c.hrStatus === "Rejected").length}  dot="bg-rose-700"  href="/candidates/history?stage=hr&status=rejected" />
+                </div>
+              </div>
+
+              {/* Offer */}
+              <div className="space-y-2">
+                <div className="px-3 py-1.5 rounded-lg text-center bg-emerald-50 dark:bg-emerald-950/30">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">Offer Stage</p>
+                </div>
+                <div className="space-y-1.5">
+                  <StageRow label="Released" count={stats.offerReleased} dot="bg-purple-500"  href="/candidates/history?stage=offer&status=released" />
+                  <StageRow label="Accepted" count={stats.offerAccepted} dot="bg-emerald-500" href="/candidates/history?stage=offer&status=accepted" />
+                  <StageRow label="Rejected" count={stats.offerRejected} dot="bg-rose-500"    href="/candidates/history?stage=offer&status=rejected" />
+                </div>
+              </div>
+
             </div>
           </CardContent>
         </Card>
-
-        <div className="lg:col-span-5 grid grid-cols-2 gap-4 h-full">
-          <Link href="/candidates/evaluation" className="block group">
-            <Card className="h-full border-2 border-dashed border-primary/20 hover:border-primary/50 transition-all hover:bg-primary/[0.02] cursor-pointer">
-              <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full">
-                <div className="h-10 w-10 bg-primary/10 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <UserPlus className="h-5 w-5 text-primary" />
-                </div>
-                <h3 className="font-bold text-sm text-foreground">New Evaluation</h3>
-                <p className="text-[10px] text-muted-foreground mt-1 leading-tight">Start a new candidate evaluation</p>
-              </CardContent>
-            </Card>
-          </Link>
-          <Link href="/candidates/history" className="block group">
-            <Card className="h-full border-2 border-dashed border-muted-foreground/20 hover:border-muted-foreground/50 transition-all hover:bg-muted/[0.02] cursor-pointer">
-              <CardContent className="p-4 flex flex-col items-center justify-center text-center h-full">
-                <div className="h-10 w-10 bg-muted rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <History className="h-5 w-5 text-muted-foreground" />
-                </div>
-                <h3 className="font-bold text-sm text-foreground">View History</h3>
-                <p className="text-[10px] text-muted-foreground mt-1 leading-tight">View all candidate records</p>
-              </CardContent>
-            </Card>
-          </Link>
-        </div>
       </div>
 
-      <Card className="shadow-md border overflow-hidden upcoming-interviews">
-        <CardHeader className="bg-muted/30 pb-4 border-b">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <CalendarDays className="h-5 w-5 text-primary" />
-              <CardTitle className="text-lg font-headline font-bold">Upcoming Interviews</CardTitle>
+      {/* ── ROW 4: Recent candidates + Requirements summary ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        {/* Recent candidates (2/3) */}
+        <Card className="lg:col-span-2 shadow-sm border">
+          <CardHeader className="pb-3 pt-5 px-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <Users className="h-4 w-4 text-primary" />
+                </div>
+                <CardTitle className="text-base font-semibold">Recently Submitted</CardTitle>
+              </div>
+              <Button asChild variant="ghost" size="sm" className="text-xs">
+                <Link href="/candidates/list" className="flex items-center gap-1">
+                  View all <ArrowUpRight className="h-3 w-3" />
+                </Link>
+              </Button>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground mr-2">Today + Next 3 days</span>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-8 px-12 relative">
-          {upcomingInterviews.length > 0 ? (
-            <Carousel
-              opts={{
-                align: "start",
-                slidesToScroll: 1,
-              }}
-              className="w-full"
-            >
-              <CarouselContent className="-ml-4">
-                {upcomingInterviews.map((item) => (
-                  <CarouselItem key={item.id} className="pl-4 basis-full sm:basis-1/2 md:basis-1/3 lg:basis-1/5">
-                    <div className="flex flex-col p-4 rounded-xl border bg-card hover:bg-accent/5 transition-colors group h-full">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-bold text-foreground">{item.roundLabel}</span>
-                        {item.isToday && <Badge className="bg-emerald-500 hover:bg-emerald-600 text-[10px] h-4">TODAY</Badge>}
+          </CardHeader>
+          <CardContent className="px-5 pb-5">
+            {recent.length === 0 ? (
+              <div className="h-24 flex flex-col items-center justify-center gap-2">
+                <Users className="h-6 w-6 text-muted-foreground/20" />
+                <p className="text-sm text-muted-foreground">No candidates yet. Add your first one.</p>
+                <Button asChild size="sm">
+                  <Link href="/candidates/add">Add Candidate</Link>
+                </Button>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {recent.map(c => {
+                  const stage = getStageLabel(c);
+                  const isGood    = stage.includes("Selected") || stage.includes("Accepted") || stage.includes("Hired");
+                  const isBad     = stage.includes("Rejected");
+                  const isNeutral = !isGood && !isBad;
+                  return (
+                    <div key={c.id} className="flex items-center justify-between py-3 group">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold truncate">{c.candidateName || "Unknown"}</p>
+                        <p className="text-[11px] text-muted-foreground truncate">{c.candidateDesignation}</p>
                       </div>
-                      <div className="flex flex-col gap-1 text-xs text-muted-foreground mt-1 font-medium">
-                        <div className="flex items-center gap-2">
-                          <CalendarDays className="h-3 w-3 text-primary" />
-                          {!item.isToday ? <span>{new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span> : <span>Today</span>}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-3 w-3 text-primary" />
-                          <span>{formatDisplayTime(item.time)}</span>
-                        </div>
-                      </div>
-                      <div className="mt-3 pt-3 border-t space-y-1">
-                        <p className="text-xs font-bold text-primary truncate">Candidate: {item.candidateName}</p>
-                        <p className="text-[10px] text-muted-foreground truncate italic">Agency: {item.agencyName || "N/A"}</p>
+                      <div className="flex items-center gap-2 ml-3 shrink-0">
+                        <Badge
+                          className={cn(
+                            "text-[10px]",
+                            isGood    && "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+                            isBad     && "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
+                            isNeutral && "bg-muted text-muted-foreground"
+                          )}
+                          variant="secondary"
+                        >
+                          {stage}
+                        </Badge>
+                        <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
+                          <Link href={`/candidates/${c.id}`}>View</Link>
+                        </Button>
                       </div>
                     </div>
-                  </CarouselItem>
-                ))}
-              </CarouselContent>
-              {upcomingInterviews.length > 5 && (
-                <>
-                  <CarouselPrevious className="-left-8" />
-                  <CarouselNext className="-right-8" />
-                </>
-              )}
-            </Carousel>
-          ) : (
-            <div className="h-32 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed rounded-xl mx-4">
-              <p className="text-sm font-bold opacity-40 uppercase tracking-widest text-center">No Active Schedules for Today or Next 3 Days</p>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Requirements (1/3) */}
+        <Card className="shadow-sm border">
+          <CardHeader className="pb-3 pt-5 px-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <ClipboardList className="h-4 w-4 text-primary" />
+                </div>
+                <CardTitle className="text-base font-semibold">My Requirements</CardTitle>
+              </div>
+              <Button asChild variant="ghost" size="sm" className="text-xs">
+                <Link href="/requirements" className="flex items-center gap-1">
+                  All <ArrowUpRight className="h-3 w-3" />
+                </Link>
+              </Button>
             </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
+          </CardHeader>
+          <CardContent className="px-5 pb-5">
+            {requirements.length === 0 ? (
+              <div className="h-24 flex flex-col items-center justify-center gap-2">
+                <ClipboardList className="h-6 w-6 text-muted-foreground/20" />
+                <p className="text-xs text-muted-foreground text-center">No requirements yet.</p>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/requirements/create">Create Requirement</Link>
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {requirements.slice(0, 6).map(r => {
+                  const count = candidates.filter(c => c.jobRequisitionId === r.id).length;
+                  return (
+                    <Link key={r.id} href={`/requirements/${r.id}`} className="block group">
+                      <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border bg-card hover:bg-muted/50 hover:border-primary/30 transition-all">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[12px] font-semibold truncate group-hover:text-primary transition-colors">
+                            {r.title || r.projectName || "Requirement"}
+                          </p>
+                          {r.experienceRequired && (
+                            <p className="text-[10px] text-muted-foreground">{r.experienceRequired} yrs exp</p>
+                          )}
+                        </div>
+                        <Badge variant="secondary" className="ml-2 shrink-0 text-[10px]">
+                          {count} candidate{count !== 1 ? "s" : ""}
+                        </Badge>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-function MetricCard({ title, value, icon: Icon, color }: { title: string; value: number; icon: any; color: string }) {
-  return (
-    <Card className={cn("shadow-sm border border-l-4 transition-all hover:shadow-md bg-card", color)}>
-      <CardContent className="p-5 flex items-center justify-between">
-        <div className="space-y-1">
-          <p className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.15em]">{title}</p>
-          <p className="text-2xl font-black">{value}</p>
-        </div>
-        <div className="h-10 w-10 bg-muted/50 rounded-lg flex items-center justify-center text-muted-foreground/50">
-          <Icon className="h-5 w-5" />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function StatusPill({ label, count, dotColor }: { label: string; count: number; dotColor: string }) {
-  return (
-    <div className="flex items-center justify-between px-4 py-2 border rounded-xl bg-card hover:bg-accent/5 transition-colors group">
-      <div className="flex items-center gap-2">
-        <div className={cn("h-2 w-2 rounded-full", dotColor)} />
-        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">{label}</span>
       </div>
-      <span className="text-sm font-bold text-foreground">{count}</span>
+
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { Role } from "@/hooks/use-auth";
+import { Role } from "@/hooks/useAuth";
 
 type ActivityLogPayload = {
   userId: string;

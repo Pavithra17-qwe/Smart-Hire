@@ -1,7 +1,7 @@
 'use client';
 
 import { DashboardLayout } from "@/components/layout/dashboard-layout";
-import { useAuth, Role } from "@/hooks/use-auth";
+import { useAuth, Role } from "@/hooks/useAuth";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { Loader2 } from "lucide-react";

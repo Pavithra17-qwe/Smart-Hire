@@ -1,7 +1,7 @@
 
 import { addDoc, collection, Timestamp, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { Role } from "@/hooks/use-auth";
+import { Role } from "@/hooks/useAuth";
 
 export const getCandidatesQuery = (role: Role, uid: string | null) => {
     if (!role) return null;

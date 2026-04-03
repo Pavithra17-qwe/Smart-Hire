@@ -1,5 +1,5 @@
 import '../src/styles/globals.css';
-import { AuthProvider } from "@/hooks/use-auth";
+import { AuthProvider } from "@/hooks/useAuth";
 import { Toaster } from "@/components/ui/toaster";
 
 export const metadata = {

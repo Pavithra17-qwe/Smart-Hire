@@ -1,4 +1,4 @@
-import { Role } from '@/hooks/use-auth';
+import { Role } from '@/hooks/useAuth';
 
 /**
  * REQUIREMENT 2 & 3: Normalizes a role string to a consistent value.

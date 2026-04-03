@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { collection, addDoc, onSnapshot, serverTimestamp, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

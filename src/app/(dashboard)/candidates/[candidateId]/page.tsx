@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Calendar, Lock } from 'lucide-react';
-import { useAuth } from '@/hooks/use-auth';
+import { useAuth } from '@/hooks/useAuth';
 import { Candidate } from '@/types/candidate';
 import { normalizeStatus } from '@/lib/normalizeStatus';
 import { sendInterviewEmail } from '@/ai/flows/send-interview-email-flow';

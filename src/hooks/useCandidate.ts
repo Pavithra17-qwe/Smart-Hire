@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { onSnapshot, FirestoreError } from 'firebase/firestore';
-import { useAuth } from '@/hooks/use-auth';
+import { useAuth } from '@/hooks/useAuth';
 import { getCandidatesQuery } from '@/services/candidateService';
 import { Candidate } from '@/types/candidate';
 
