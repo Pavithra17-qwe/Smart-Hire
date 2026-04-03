@@ -25,7 +25,7 @@ import {
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 const ROUTES = {
   candidateHistory: "/candidates/history",
-  userManagement:   "/users",
+  userManagement:   "/admin/users",
 };
 
 function buildFilter(base: string, stage: string, status: string) {
@@ -256,7 +256,7 @@ export default function AdminDashboard() {
 
   // ── Candidate stats (always from filtered) ────────────────────────────────
   const stats = useMemo(() => ({
-    total:      candidates.length,
+    total: filtered.length,
     inProgress: candidates.filter(c => {
       const f = (c.finalStatus ?? "").toLowerCase();
       return f !== "completed" && f !== "rejected";

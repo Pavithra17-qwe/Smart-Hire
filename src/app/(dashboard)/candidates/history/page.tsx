@@ -72,12 +72,16 @@ export default function CandidateHistoryPage() {
     const [filterStage,     setFilterStage]     = useState("all");
 const [filterStatus,    setFilterStatus]    = useState("all");
 const [filterCreatedBy, setFilterCreatedBy] = useState("all"); // for agency/HR filter
-
+const [panelUid, setPanelUid] = useState<string | null>(null);
 useEffect(() => {
     const stage = searchParams.get("stage");
     const status = searchParams.get("status");
     const createdBy = searchParams.get("createdBy");
-  
+    const panelUid = searchParams.get("panelUid");
+    if (panelUid) {
+        setFilterCreatedBy("panel"); // optional flag
+        setPanelUid(panelUid);       // NEW STATE
+      }
     if (stage && stage !== "all") setFilterStage(stage);
     if (status && status !== "all") setFilterStatus(status);
     if (createdBy) setFilterCreatedBy(createdBy);
@@ -180,9 +184,19 @@ useEffect(() => {
           }
       
           // 🔥 NEW: createdBy filter
-          const uploaderMatch =
-            filterCreatedBy === "all" ||
-            candidate.createdBy === filterCreatedBy;
+          let uploaderMatch = true;
+
+          // HR / Agency
+          if (filterCreatedBy !== "all" && filterCreatedBy !== "panel") {
+            uploaderMatch = candidate.createdBy === filterCreatedBy;
+          }
+          
+          // 🔥 PANEL FILTER (THIS IS THE FIX)
+          if (panelUid) {
+            uploaderMatch =
+              candidate.l1InterviewerUid === panelUid ||
+              candidate.l2InterviewerUid === panelUid;
+          }
       
           return (
             nameMatch &&

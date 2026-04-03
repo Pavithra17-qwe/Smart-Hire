@@ -490,26 +490,45 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       case 'L1 Interview':
         if (action === 'schedule') {
           // schedulingNotes stored separately — never mixed with post-interview feedback
-          updateData = { l1Status: 'Scheduled', l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes };
+          updateData = { l1Status: 'Scheduled', l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes,      l1InterviewerUid: user.uid,
+            l1InterviewerName: user.displayName || user.email };
           historyData.status = 'Scheduled';
         } else if (action === 'select') {
-          updateData = { l1Status: 'Selected', l1Feedback: payload.feedback, l2Status: 'Pending' };
-          historyData.status = 'Selected';
+          updateData = { 
+            l1Status: 'Selected', 
+            l1Feedback: payload.feedback, 
+            l2Status: 'Pending',
+            l1InterviewerUid: user.uid,
+            l1InterviewerName: user.displayName || user.email
+          };
+                    historyData.status = 'Selected';
         } else {
-          updateData = { l1Status: 'Rejected', l1Feedback: payload.feedback, finalStatus: 'Rejected', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
-          historyData.status = 'Rejected';
+          updateData = { 
+            l1Status: 'Rejected', 
+            l1Feedback: payload.feedback, 
+            finalStatus: 'Rejected',
+            l2Status: 'Locked', 
+            hrStatus: 'Locked', 
+            offerStatus: 'Locked',
+            l1InterviewerUid: user.uid,
+            l1InterviewerName: user.displayName || user.email
+          };
+                    historyData.status = 'Rejected';
         }
         break;
 
       case 'L2 Interview':
         if (action === 'schedule') {
-          updateData = { l2Status: 'Scheduled', l2ScheduledDate: payload.scheduledDate, l2TimeSlot: payload.timeSlot, l2SchedulingNotes: payload.schedulingNotes };
+          updateData = { l2Status: 'Scheduled', l2ScheduledDate: payload.scheduledDate, l2TimeSlot: payload.timeSlot, l2SchedulingNotes: payload.schedulingNotes,       l2InterviewerUid: user.uid,
+            l2InterviewerName: user.displayName || user.email };
           historyData.status = 'Scheduled';
         } else if (action === 'select') {
-          updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending' };
+          updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending' ,       l2InterviewerUid: user.uid,
+            l2InterviewerName: user.displayName || user.email};
           historyData.status = 'Selected';
         } else {
-          updateData = { l2Status: 'Rejected', l2Feedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
+          updateData = { l2Status: 'Rejected', l2Feedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' ,       l2InterviewerUid: user.uid,
+            l2InterviewerName: user.displayName || user.email};
           historyData.status = 'Rejected';
         }
         break;

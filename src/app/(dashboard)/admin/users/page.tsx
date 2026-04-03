@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Loader2, Edit2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, MoreVertical, XCircle, X, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { useSearchParams } from "next/navigation";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -70,6 +71,7 @@ import { FormSpinner } from "@/components/common/FormSpinner";
                                                                       }
 
                                                                       export default function UserManagement() {
+                                                                        const searchParams = useSearchParams();
                                                                         const [users, setUsers] = useState<User[]>([]);
                                                                           const [isModalOpen, setIsModalOpen] = useState(false);
                                                                             const [isLoading, setIsLoading] = useState(false);
@@ -124,6 +126,14 @@ import { FormSpinner } from "@/components/common/FormSpinner";
                                                                                                                                                                                                                                                 useEffect(() => {
                                                                                                                                                                                                                                                     fetchUsers();
                                                                                                                                                                                                                                                       }, [fetchUsers]);
+                                                                                                                                                                                                                                                      useEffect(() => {
+                                                                                                                                                                                                                                                        const roleFromUrl = searchParams.get("role");
+                                                                                                                                                                                                                                                      
+                                                                                                                                                                                                                                                        if (roleFromUrl) {
+                                                                                                                                                                                                                                                          setFilterRole(roleFromUrl.toLowerCase());
+                                                                                                                                                                                                                                                          setCurrentPage(1);
+                                                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                      }, [searchParams]);
 
                                                                                                                                                                                                                                                         const filteredUsers = useMemo(() => {
                                                                                                                                                                                                                                                             return users.filter(user => {
