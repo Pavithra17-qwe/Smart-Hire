@@ -203,6 +203,27 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
     setSubmitting(true);
 
     try {
+            // ✅ ADD: import getDocs, query, where once at the top of try block
+            const { getDocs, query: fsQuery, where } = await import('firebase/firestore');
+
+            // ✅ DUPLICATE REQUIREMENT CHECK (only for new requirements, not edits)
+            if (!editData) {
+              const dupSnap = await getDocs(
+                fsQuery(
+                  collection(db, 'requirements'),
+                  where('jobRole', '==', form.jobRole.trim()),
+                  where('location', '==', form.location.trim()),
+                  where('experience', '==', expValue),
+                  where('noticePeriod', '==', form.noticePeriod),
+                  where('status', '==', form.status)
+                )
+              );
+              if (!dupSnap.empty) {
+                setError('A requirement with the same Job Role, Location, Experience, Notice Period and Status already exists.');
+                setSubmitting(false);
+                return;
+              }
+            }
       // Use newly selected file's base64, or existing stored base64
       let jdFileData = editData?.jdFileData || '';
       let jdFileName = editData?.jdFileName || '';

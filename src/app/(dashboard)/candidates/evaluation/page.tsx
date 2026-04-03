@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getDocs } from "firebase/firestore";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -218,7 +219,20 @@ export default function CandidateEvaluation() {
     try {
       const selectedSource = projects.find(p => p.id === formData.projectId);
       if (!selectedSource) throw new Error("Selected project not found.");
-      
+      // ✅ DUPLICATE CANDIDATE EMAIL CHECK
+const candidateEmailLower = formData.candidateEmail.trim().toLowerCase();
+const dupCandidateSnap = await getDocs(
+  query(collection(db, "candidates"), where("candidateEmail", "==", candidateEmailLower))
+);
+if (!dupCandidateSnap.empty) {
+  toast({
+    variant: "destructive",
+    title: "Duplicate Candidate",
+    description: "A candidate with this email already exists in the system.",
+  });
+  setIsLoading(false);
+  return;
+}
       let matchScore = null;
       let matchSummary = "Not scored.";
 

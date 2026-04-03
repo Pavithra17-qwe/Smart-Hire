@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   collection, addDoc, serverTimestamp, query, doc,
-  updateDoc, deleteDoc, where, orderBy, onSnapshot,
+  updateDoc, deleteDoc, where, orderBy, onSnapshot,getDocs
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
@@ -238,6 +238,23 @@ export default function JobRequisitions() {
     };
 
     try {
+      if (!editingId) {
+        const dupProjectSnap = await getDocs(
+          query(
+            collection(db, "job_requisitions"),
+            where("projectName", "==", data.projectName)
+          )
+        );
+        if (!dupProjectSnap.empty) {
+          toast({
+            variant: "destructive",
+            title: "Duplicate Project",
+            description: `A project named "${data.projectName}" already exists.`,
+          });
+          setIsLoading(false);
+          return;
+        }
+      }
       if (editingId) {
         await updateDoc(doc(db, "job_requisitions", editingId), { ...data, updatedDate: serverTimestamp() });
         toast({ title: "Success", description: "Project updated successfully." });
