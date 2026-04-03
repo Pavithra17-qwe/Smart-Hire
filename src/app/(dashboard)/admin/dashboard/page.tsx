@@ -239,27 +239,49 @@ export default function AdminDashboard() {
           : "bg-emerald-100 text-emerald-600",
                   source:        "job_requisition",
         createdBy:     r.createdBy,
+        jdFileData: r.jdFileData || null,
+jdFileName: r.jdFileName || null,
+jdFileType: r.jdFileType || null,
       })),
 
       ...requirements.map(r => {
         const user = users.find(u => u.id === r.createdBy);
+      
         return {
           id: r.id,
-          projectName:   r.projectName || "—",
-          roles:         r.jobRole || "—",
-          location:      r.location || "—",
-          createdBy:     r.createdBy,
-          // ── FIX 1: Agency name on top, role label below = "Agency" (clean) ──
-          createdByName: creatorMap[r.createdBy] || user?.displayName || user?.name || user?.companyName || "—",
-          createdByRole: r.createdByRole || user?.role || "agency", // ← always "agency"
-          createdAt:     r.createdAt?.toDate?.() || null,
-          status:        r.status || "Active",
+          projectName: r.projectName || "—",
+          roles: r.jobRole || "—",
+          location: r.location || "—",
+          createdBy: r.createdBy,
+      
+          createdByName:
+            creatorMap[r.createdBy] ||
+            user?.displayName ||
+            user?.name ||
+            user?.companyName ||
+            "—",
+      
+          createdByRole:
+            r.createdByRole ||
+            user?.role ||
+            "agency",
+      
+          createdAt: r.createdAt?.toDate?.() || null,
+          status: r.status || "Active",
+      
           statusColor:
-          r.status === "Inactive"
-            ? "bg-slate-100 text-slate-500"
-            : "bg-emerald-100 text-emerald-600",          source:        "requirement",
+            r.status === "Inactive"
+              ? "bg-slate-100 text-slate-500"
+              : "bg-emerald-100 text-emerald-600",
+      
+          source: "requirement",
+      
+          // ✅ ADD THIS (MAIN FIX)
+          jdFileData: r.jdFileData || null,
+          jdFileName: r.jdFileName || null,
+          jdFileType: r.jdFileType || null,
         };
-      }),
+      })
     ];
 
     // Sort newest first

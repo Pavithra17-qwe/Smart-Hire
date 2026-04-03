@@ -179,75 +179,103 @@ function RequirementModal({
     if (
       !form.jobRole.trim() ||
       !form.location.trim() ||
-      !(
-        form.experience === 'Others'
-          ? customExperience.trim()
-          : form.experience
-      ) ||
+      !(form.experience === 'Others' ? customExperience.trim() : form.experience) ||
       !form.noticePeriod ||
       !form.status
     ) {
       setError('Please fill all required fields.');
       return;
     }
+  
     setError('');
     setSubmitting(true);
-
+  
     try {
       let jdFileData = editData?.jdFileData || '';
       let jdFileName = editData?.jdFileName || '';
       let jdFileType = editData?.jdFileType || '';
-
+  
       if (jdFile) {
         jdFileData = await toBase64(jdFile);
         jdFileName = jdFile.name;
         jdFileType = jdFile.type;
       }
-
-      const payload: Record<string, any> = {
+  
+      const payload: any = {
         projectName: form.projectName.trim(),
         jobRole: form.jobRole.trim(),
         location: form.location.trim(),
         experience:
-  form.experience === 'Others'
-    ? customExperience.trim()
-    : form.experience,
+          form.experience === 'Others'
+            ? customExperience.trim()
+            : form.experience,
         noticePeriod: form.noticePeriod,
         status: form.status,
         jdFileData,
         jdFileName,
         jdFileType,
       };
-
+  
       if (editData) {
+        // ✅ 1. Update requirement
         await updateDoc(doc(db, 'requirements', editData.id), payload);
+  
+        // ✅ 2. ALSO update job_requisitions
+        const { getDocs, query, where } = await import('firebase/firestore');
+  
+        const jrSnap = await getDocs(
+          query(
+            collection(db, 'job_requisitions'),
+            where('createdBy', '==', user.uid),
+            where('projectName', '==', payload.projectName)
+          )
+        );
+  
+        jrSnap.forEach(async (jrDoc) => {
+          await updateDoc(doc(db, 'job_requisitions', jrDoc.id), {
+            roles: [payload.jobRole],
+            locations: [payload.location],
+            status: payload.status,
+            jdFileName,
+            jdFileType,
+            jdFileData, // ✅ IMPORTANT
+          });
+        });
+  
       } else {
-        await addDoc(collection(db, 'requirements'), {
+        // ✅ Create requirement
+        const reqRef = await addDoc(collection(db, 'requirements'), {
           ...payload,
           createdAt: serverTimestamp(),
           createdByRole: 'agency',
           createdBy: user.uid,
-        
-          // ✅ ADD THIS
           createdByName: user.displayName || user.email,
         });
+  
+        // ✅ Create job_requisition WITH FILE
         await addDoc(collection(db, 'job_requisitions'), {
           projectName: payload.projectName || "—",
-        
-          roles: [payload.jobRole], // ✅ convert
+          roles: [payload.jobRole],
           locations: [payload.location],
-        
           status: payload.status || "Active",
-        
+  
+          jdFileName,
+          jdFileType,
+          jdFileData, // ✅ IMPORTANT
+  
           createdBy: user.uid,
           createdByRole: "agency",
           createdByName: user.displayName || "Agency",
-        
           createdDate: serverTimestamp(),
+  
+          requirementId: reqRef.id,
         });
       }
-      onClose();
-      onSuccess();
+  
+      setTimeout(() => {
+        onSuccess();
+      }, 300);
+  
     } catch (err: any) {
       setError('Failed to save: ' + (err?.message || 'Unknown error'));
     } finally {
@@ -496,16 +524,38 @@ function TableRow({ req, isLast, onEdit }: { req: Requirement; isLast: boolean; 
   const [hov, setHov] = useState(false);
 
   const openJD = () => {
-    if (req.jdFileData) {
-      const win = window.open();
-      if (win) {
-        win.document.write(
-          `<iframe src="${req.jdFileData}" width="100%" height="100%" style="border:none;position:fixed;inset:0;"></iframe>`
-        );
+    if (!req.jdFileData) {
+      alert("File not available");
+      return;
+    }
+  
+    try {
+      const fileData = String(req.jdFileData);
+  
+      // ✅ Always recreate fresh blob (fixes stale issue)
+      const base64 = fileData.split(",")[1];
+  
+      const byteCharacters = atob(base64);
+      const byteNumbers = new Uint8Array(byteCharacters.length);
+  
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
+  
+      const blob = new Blob([byteNumbers], { type: "application/pdf" });
+  
+      const blobUrl = URL.createObjectURL(blob);
+  
+      window.open(blobUrl, "_blank");
+  
+      // ✅ cleanup
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+  
+    } catch (err) {
+      console.error("Open JD error:", err);
+      alert("Failed to open file");
     }
   };
-
   return (
     <tr
       onMouseEnter={() => setHov(true)}
@@ -522,7 +572,7 @@ function TableRow({ req, isLast, onEdit }: { req: Requirement; isLast: boolean; 
       <td style={tdStyle}><StatusBadge status={req.status || 'Active'} /></td>
       <td style={tdStyle}>{fmtDate(req.createdAt)}</td>
       <td style={tdStyle}>
-      {req.jdFileData ? (
+      {req.jdFileData && req.jdFileData.length > 50 ? (
   <button
     onClick={openJD}
     style={{
@@ -579,8 +629,26 @@ export default function RequirementsPage() {
     orderBy('createdAt', 'desc') // ✅ latest first
   ),
       snap => {
-        setRequirements(snap.docs.map(d => ({ id: d.id, ...d.data() } as Requirement)));
-        setLoading(false);
+        setRequirements(
+          snap.docs.map(d => {
+            const data = d.data();
+            return {
+              id: d.id,
+              projectName: data.projectName || '',
+              jobRole: data.jobRole || '',
+              location: data.location || '',
+              experience: data.experience || '',
+              noticePeriod: data.noticePeriod || '',
+              status: data.status || 'Active',
+              createdAt: data.createdAt || null,
+              jdFileData: data.jdFileData || null,
+              jdFileName: data.jdFileName || '',
+              jdFileType: data.jdFileType || '',
+              createdBy: data.createdBy || '',
+              createdByRole: data.createdByRole || '',
+            };
+          })
+        );        setLoading(false);
       },
       err => { console.error('Firestore error:', err); setLoading(false); }
     );
