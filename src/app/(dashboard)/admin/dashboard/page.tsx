@@ -11,10 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { getDoc, doc } from "firebase/firestore";
 import {
   XCircle, Users, CalendarDays, Clock, ArrowUpRight, CheckCircle2,
   TrendingDown, Activity, BarChart3, PieChart as PieIcon,
   Loader2, ShieldCheck, ChevronRight, UserCog, Building2,
+  Layers, Briefcase, FileText // ✅ ADD THESE
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -26,6 +28,8 @@ import {
 const ROUTES = {
   candidateHistory: "/candidates/history",
   userManagement:   "/admin/users",
+  jobRequisitions: "/admin/job-requisitions", // ✅ ADD
+  requirements: "/agency/requirements",       // ✅ ADD
 };
 
 function buildFilter(base: string, stage: string, status: string) {
@@ -128,18 +132,163 @@ function StageCol({ title, accent, items }: {
     </div>
   );
 }
+function fmtDate(date: any) {
+  if (!date) return "—";
+
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "—";
+
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function StatusPill({ status, color }: { status: string; color?: string }) {
+  return (
+    <span className={cn(
+      "text-[10px] font-semibold px-2 py-0.5 rounded",
+      color || "bg-slate-100 text-slate-600"
+    )}>
+      {status || "—"}
+    </span>
+  );
+}
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const router = useRouter();
   const [candidates, setCandidates] = useState<any[]>([]);
   const [users,      setUsers]      = useState<any[]>([]);
+  const [jobRequisitions, setJobRequisitions] = useState<any[]>([]);
+const [requirements, setRequirements] = useState<any[]>([]);
+const [projectEntries, setProjectEntries] = useState<any[]>([]);
   const [filterRole,   setFilterRole]   = useState("all"); // "all" | "hr" | "agency" | "panel"
   const [filterStage,  setFilterStage]  = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [isMounted, setIsMounted] = useState(false);
+  const [creatorMap, setCreatorMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const fetchNames = async () => {
+      const map: Record<string, string> = {};
+  
+      for (const r of [...jobRequisitions, ...requirements]) {
+        if (r.createdBy && !map[r.createdBy]) {
+          const snap = await getDoc(doc(db, "users", r.createdBy));
+  
+          if (snap.exists()) {
+            const data = snap.data();
+  
+            map[r.createdBy] =
+              data.name ||
+              data.displayName ||
+              data.companyName ||   // ✅ IMPORTANT (for agency)
+              "N/A";
+          }
+        }
+      }
+  
+      setCreatorMap(map);
+    };
+  
+    fetchNames();
+  }, [jobRequisitions, requirements]);
 
   useEffect(() => { setIsMounted(true); }, []);
+
+  useEffect(() => {
+    const unsub1 = onSnapshot(collection(db, "job_requisitions"), (snap) => {
+      const data = snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        source: "job_requisition",
+      }));
+      setJobRequisitions(data);
+    });
+  
+    const unsub2 = onSnapshot(collection(db, "requirements"), (snap) => {
+      const data = snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        source: "requirement"
+      }));
+      setRequirements(data);
+    });
+  
+    return () => {
+      unsub1();
+      unsub2();
+    };
+  }, []);
+
+  useEffect(() => {
+    const combined = [
+      ...jobRequisitions.map(r => ({
+        id: r.id,
+        projectName: r.projectName || "—",
+        roles: (r.roles || []).join(", "),
+        location: (r.locations || []).join(", "),
+        createdByName:
+        creatorMap[r.createdBy] ||
+        r.createdByName ||
+        "—",
+                createdByRole: r.createdByRole || "—",
+        createdAt: r.createdDate?.toDate?.() || r.createdAt?.toDate?.() || null,
+        status: r.status || "Active",
+        statusColor: "bg-blue-100 text-blue-600",
+        source: "job_requisition",
+        createdBy: r.createdBy,  // ✅ ADD THIS
+      })),
+  
+      ...requirements.map(r => {
+        const user = users.find(u => u.id === r.createdBy);
+      
+        return {
+          id: r.id,
+          projectName: r.projectName || "—",
+          roles: r.jobRole || "—",
+          location: r.location || "—",
+          createdBy: r.createdBy,
+            createdByName:
+  creatorMap[r.createdBy] || "N/A",
+      
+          createdByRole:
+            r.createdByRole ||
+            user?.role ||
+            "agency",
+      
+          createdAt: r.createdAt?.toDate?.() || null,
+          status: r.status || "Active",
+          statusColor: "bg-amber-100 text-amber-600",
+          source: "requirement"
+        };
+      })
+    ];
+  
+    // ✅ SORT
+    combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  
+    // ✅ REMOVE DUPLICATES (INSIDE useEffect)
+    const uniqueMap = new Map();
+  
+    combined.forEach(item => {
+      const key = item.projectName + "_" + item.createdBy;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, item);
+      }
+    });
+  
+    const finalData = Array.from(uniqueMap.values());
+  
+    // ✅ FINAL SET
+    setProjectEntries(finalData);
+  
+  }, [jobRequisitions, requirements, users]);
+    const recentProjects = [...projectEntries]
+  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  .slice(0, 5);
+
 
   useEffect(() => {
     const u1 = onSnapshot(collection(db, "candidates"), snap => {
@@ -495,8 +644,134 @@ export default function AdminDashboard() {
         </div>
       </div>
 
+     {/* ── ROW 2: PROJECTS & REQUIREMENTS + TREND */}
+     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+
+ {/* ── Projects & Requirements card ── */}
+<Card className="shadow-sm border flex flex-col h-full">
+   <CardHeader className="pb-3 border-b shrink-0">
+     <div className="flex items-center justify-between">
+       <div className="flex items-center gap-2">
+         <div className="h-7 w-7 rounded-lg bg-indigo-50 flex items-center justify-center">
+           <Layers className="h-4 w-4 text-indigo-600" />
+         </div>
+         <CardTitle className="text-sm font-bold">Projects & Requirements</CardTitle>
+       </div>
+       <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+         <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-semibold">{jobRequisitions.length} JR</span>
+         <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 font-semibold">{requirements.length} REQ</span>
+       </div>
+     </div>
+
+     {/* ── Source legend ── */}
+     <div className="flex items-center gap-3 mt-2">
+       <div className="flex items-center gap-1">
+         <div className="h-2 w-2 rounded-full bg-blue-500" />
+         <span className="text-[10px] text-muted-foreground font-medium">Job Requisition (Admin/HR)</span>
+       </div>
+       <div className="flex items-center gap-1">
+         <div className="h-2 w-2 rounded-full bg-amber-500" />
+         <span className="text-[10px] text-muted-foreground font-medium">Requirement (Agency)</span>
+       </div>
+     </div>
+   </CardHeader>
+
+   <CardContent className="p-0">
+         {projectEntries.length === 0 ? (
+       <div className="flex flex-col items-center justify-center h-40 gap-2">
+         <FileText className="h-8 w-8 text-muted-foreground/30" />
+         <p className="text-xs text-muted-foreground font-medium">No projects or requirements yet.</p>
+       </div>
+     ) : (
+<div className="p-3">
+  {recentProjects.map(entry => (
+    <div
+      key={`${entry.source}-${entry.id}`}
+      className="grid grid-cols-4 gap-4 items-center border-b py-3 text-sm"
+    >
+
+      {/* 1️⃣ Project + Role */}
+      <div>
+        <p
+          onClick={() =>
+            router.push(`/admin/job-requisitions?projectName=${encodeURIComponent(entry.projectName)}`)
+          }
+          className="font-semibold text-blue-600 cursor-pointer hover:underline"
+        >
+        {entry.projectName?.trim()
+  ? entry.projectName
+  : entry.roles || "—"}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {entry.roles || "—"}
+        </p>
+      </div>
+
+      {/* 2️⃣ Created By */}
+      <div>
+        <p className="font-medium">{entry.createdByName || "—"}</p>
+        <p className="text-xs text-muted-foreground">
+          {entry.createdByRole || "—"}
+        </p>
+      </div>
+
+      {/* 3️⃣ Created Date */}
+      <div className="text-muted-foreground text-xs">
+        {fmtDate(entry.createdAt)}
+      </div>
+
+      {/* 4️⃣ Status */}
+      <div>
+        <StatusPill status={entry.status} />
+      </div>
+
+    </div>
+  ))}
+</div>
+       
+     )}
+<div className="px-4 py-2 text-center">
+    <button
+    onClick={() => router.push("/admin/job-requisitions")}
+    className="text-sm font-semibold text-blue-600 hover:underline"
+  >
+    + View More
+  </button>
+</div>
+   </CardContent>
+
+ </Card>
+        {/* Trend (2/5) */}
+        <Card className="shadow-sm border h-full">
+          <CardHeader className="pb-2 pt-5 px-5">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
+                <BarChart3 className="h-4 w-4 text-primary" />
+              </div>
+              <CardTitle className="text-base font-semibold">Hiring Trend</CardTitle>
+              <span className="ml-auto text-xs text-muted-foreground">Last 6 months</span>
+            </div>
+          </CardHeader>
+          <CardContent className="px-5 pb-5">
+            <ChartContainer config={trendConfig} className="h-[270px] w-full">
+              <BarChart data={trendData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} dy={8} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11 }} allowDecimals={false} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Bar dataKey="evaluations" name="Evaluated" fill="var(--color-evaluations)" radius={[3,3,0,0]} barSize={15} />
+                <Bar dataKey="hires"       name="Hires"     fill="var(--color-hires)"       radius={[3,3,0,0]} barSize={15} />
+              </BarChart>
+            </ChartContainer>
+          </CardContent>
+        </Card>
+
+      </div>
+
+
+      
       {/* ══════════════════════════════
-          ROW 2: USER MANAGEMENT — HR / Panel / Agency
+          ROW 3: USER MANAGEMENT — HR / Panel / Agency
           - Show 3 users each with count on the right
           - +N more → navigate to /users?role=...
           - Arrow icon → navigate to /users?role=...
@@ -672,89 +947,6 @@ export default function AdminDashboard() {
       </div>
 
       {/* ══════════════════════════════
-          ROW 3: PIPELINE DONUT + TREND
-      ══════════════════════════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-
-        {/* Funnel donut (2/5) */}
-        <Card className="lg:col-span-2 shadow-sm border">
-          <CardHeader className="pb-2 pt-5 px-5">
-            <div className="flex items-center gap-2">
-              <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
-                <PieIcon className="h-4 w-4 text-primary" />
-              </div>
-              <CardTitle className="text-base font-semibold">Hiring Funnel</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="px-5 pb-5">
-            {pipelineTotal > 0 ? (
-              <>
-                <ChartContainer config={pipelineConfig} className="mx-auto aspect-square max-h-[190px] w-full">
-                  <PieChart>
-                    <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
-                    <Pie data={pipelineData} dataKey="value" nameKey="name"
-                      innerRadius={55} outerRadius={78} strokeWidth={3}
-                      stroke="hsl(var(--background))" paddingAngle={3}>
-                      {pipelineData.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                      <Label content={({ viewBox }) => {
-                        if (viewBox && "cx" in viewBox && "cy" in viewBox) return (
-                          <text x={viewBox.cx} y={viewBox.cy} textAnchor="middle" dominantBaseline="middle">
-                            <tspan x={viewBox.cx} y={viewBox.cy} className="fill-foreground text-2xl font-black">{pipelineTotal}</tspan>
-                            <tspan x={viewBox.cx} y={(viewBox.cy || 0) + 18} className="fill-muted-foreground text-[9px] font-bold uppercase tracking-widest">pipeline</tspan>
-                          </text>
-                        );
-                      }} />
-                    </Pie>
-                  </PieChart>
-                </ChartContainer>
-                <div className="mt-3 space-y-1.5">
-                  {pipelineData.map(d => (
-                    <button key={d.name}
-                      onClick={() => router.push(buildFilter(ROUTES.candidateHistory, d.stage, d.status))}
-                      className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-muted/50 transition-colors group">
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 w-2 rounded-full" style={{ backgroundColor: d.fill }} />
-                        <span className="text-xs font-medium text-muted-foreground group-hover:text-foreground">{d.name}</span>
-                      </div>
-                      <span className="text-sm font-bold group-hover:text-primary">{d.value}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No pipeline data</div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Trend bar (3/5) */}
-        <Card className="lg:col-span-3 shadow-sm border">
-          <CardHeader className="pb-2 pt-5 px-5">
-            <div className="flex items-center gap-2">
-              <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
-                <BarChart3 className="h-4 w-4 text-primary" />
-              </div>
-              <CardTitle className="text-base font-semibold">Hiring Trend</CardTitle>
-              <span className="ml-auto text-xs text-muted-foreground">Last 6 months</span>
-            </div>
-          </CardHeader>
-          <CardContent className="px-5 pb-5">
-            <ChartContainer config={trendConfig} className="h-[270px] w-full">
-              <BarChart data={trendData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11 }} dy={8} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11 }} allowDecimals={false} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="evaluations" name="Evaluated" fill="var(--color-evaluations)" radius={[3,3,0,0]} barSize={15} />
-                <Bar dataKey="hires"       name="Hires"     fill="var(--color-hires)"       radius={[3,3,0,0]} barSize={15} />
-              </BarChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-
-      </div>
-
-      {/* ══════════════════════════════
           ROW 4: STAGE BREAKDOWN
       ══════════════════════════════ */}
       <div>
@@ -803,8 +995,8 @@ export default function AdminDashboard() {
       <div>
         <SectionLabel>Upcoming Interviews (Next 3 Days)</SectionLabel>
         <Card className="shadow-sm border">
-          <CardContent className="pt-5 px-8 pb-5 relative">
-            {upcoming.length > 0 ? (
+        <CardContent className="pt-5 px-2 pb-5">
+                      {upcoming.length > 0 ? (
               <Carousel opts={{ align: "start" }} className="w-full">
                 <CarouselContent className="-ml-3">
                   {upcoming.map(item => (
@@ -852,11 +1044,11 @@ export default function AdminDashboard() {
                   ))}
                 </CarouselContent>
                 {upcoming.length > 4 && (
-                  <>
-                    <CarouselPrevious className="-left-5" />
-                    <CarouselNext className="-right-5" />
-                  </>
-                )}
+  <div className="flex justify-end gap-2 mb-3">
+    <CarouselPrevious className="static translate-y-0" />
+    <CarouselNext className="static translate-y-0" />
+  </div>
+)}
               </Carousel>
             ) : (
               <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed rounded-xl gap-1.5">

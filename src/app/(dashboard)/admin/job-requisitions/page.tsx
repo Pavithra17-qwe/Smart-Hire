@@ -1,7 +1,19 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { collection, addDoc, serverTimestamp, query, doc, updateDoc, getDocs, deleteDoc, where } from "firebase/firestore";
+import {
+  collection,
+  addDoc,
+  serverTimestamp,
+  query,
+  doc,
+  updateDoc,
+  getDocs,
+  deleteDoc,
+  where,
+  orderBy,
+  onSnapshot
+} from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -14,9 +26,14 @@ import { logActivity } from "@/lib/activity-logger";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { storage } from "@/lib/firebase";
+
+
 
 const LOCATIONS_OPTIONS = ["Chennai", "Bangalore", "Remote"];
 const ROLES_OPTIONS = ["Junior QA", "Senior QA", "DM"];
+
 
 interface FormData {
   projectName: string;
@@ -36,6 +53,8 @@ export default function JobRequisitions() {
   const [isLoading, setIsLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+const [rowsPerPage, setRowsPerPage] = useState(10);
   const [formData, setFormData] = useState<FormData>({
     projectName: "",
     location: "",
@@ -55,25 +74,43 @@ export default function JobRequisitions() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
-
-  const fetchRequisitions = async () => {
-    setIsLoading(true);
-    try {
-      const q = query(collection(db, "job_requisitions"), where("createdByRole", "in", ["admin", "hr"]));
-      const querySnapshot = await getDocs(q);
-      const data = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
-      setRequisitions(data);
-    } catch (error) {
-      console.error("Error fetching requisitions: ", error);
-      toast({ variant: "destructive", title: "Error", description: "Failed to fetch job requisitions." });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+ 
   useEffect(() => {
-    fetchRequisitions();
-  }, []);
+    if (!user || !role) return; // ✅ WAIT until user loads
+  
+    setIsLoading(true);
+  
+    const q =
+      role === "agency"
+        ? query(
+            collection(db, "job_requisitions"),
+            where("createdBy", "==", user.uid),
+            orderBy("createdDate", "desc")
+          )
+        : query(
+            collection(db, "job_requisitions"),
+            orderBy("createdDate", "desc")
+          );
+  
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const data = snap.docs.map((doc) => ({
+          ...doc.data(),
+          id: doc.id,
+        }));
+  
+        setRequisitions(data);
+        setIsLoading(false);
+      },
+      (error) => {
+        console.error("Error fetching requisitions:", error);
+        setIsLoading(false);
+      }
+    );
+  
+    return () => unsub();
+  }, [user, role]); // ✅ ADD DEPENDENCY
 
   const handleFilterChange = (field: string, value: string) => {
     setFilters(prev => ({ ...prev, [field]: value === 'all' ? '' : value }));
@@ -109,6 +146,13 @@ export default function JobRequisitions() {
       return matchProjectName && matchLocation && matchDesignation && matchStatus && matchCreatedBy;
     });
   }, [requisitions, filters]);
+
+  const total = filteredRequisitions.length;
+
+const paginatedData = filteredRequisitions.slice(
+  page * rowsPerPage,
+  page * rowsPerPage + rowsPerPage
+);
 
   const resetForm = () => {
     setFormData({
@@ -160,9 +204,38 @@ export default function JobRequisitions() {
     if (file) {
       const reader = new FileReader();
       reader.onload = () => {
-        setFormData(prev => ({ ...prev, jdFile: { name: file.name, type: file.type, data: (reader.result as string).split(",")[1] } }));
+        setFormData(prev => ({
+          ...prev,
+          jdFile: {
+            name: file.name,
+            type: file.type,
+            data: reader.result as string   // ✅ FIX HERE
+          }
+        }));
       };
-      reader.readAsDataURL(file);
+      const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+      
+        try {
+          const fileRef = ref(storage, `jdFiles/${Date.now()}_${file.name}`);
+          await uploadBytes(fileRef, file);
+      
+          const url = await getDownloadURL(fileRef);
+      
+          setFormData(prev => ({
+            ...prev,
+            jdFile: {
+              name: file.name,
+              type: file.type,
+              data: url   // ✅ STORE URL NOT BASE64
+            }
+          }));
+      
+        } catch (error) {
+          console.error("Upload error:", error);
+        }
+      };
     }
   };
 
@@ -208,8 +281,7 @@ export default function JobRequisitions() {
           await logActivity({ userId: user.uid, userName: name, userRole: role, action: "Project Created", stage: "Setup", targetType: "Project", targetId: newDocRef.id, targetName: data.projectName });
         }
       }
-      setIsModalOpen(false);
-      await fetchRequisitions();
+      setIsModalOpen(false)
     } catch (error: any) {
       toast({ variant: "destructive", title: "Error", description: error.message });
     } finally {
@@ -222,7 +294,7 @@ export default function JobRequisitions() {
       try {
         await deleteDoc(doc(db, "job_requisitions", deleteTargetId));
         toast({ title: "Success", description: "Project deleted successfully." });
-        await fetchRequisitions();
+    
       } catch (error) {
         toast({ variant: "destructive", title: "Error", description: "Failed to delete project." });
       }
@@ -242,27 +314,14 @@ export default function JobRequisitions() {
   };
   
   const handleViewJd = (requisition: any) => {
-    if (!requisition.jdFileData || !requisition.jdFileType) return;
-
-    try {
-      const byteCharacters = atob(requisition.jdFileData);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: requisition.jdFileType });
-      const fileURL = URL.createObjectURL(blob);
-      window.open(fileURL, '_blank');
-    } catch (error) {
-      console.error("Error opening JD:", error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Could not open the JD file.",
-      });
+    if (!requisition.jdFileData) {
+      console.log("No JD file");
+      return;
     }
+  
+    window.open(requisition.jdFileData, "_blank");
   };
+  
 
   const handleEditAction = (id: string) => {
     setOpenDropdownId(null);
@@ -327,9 +386,10 @@ export default function JobRequisitions() {
           <Select value={filters.createdBy} onValueChange={v => handleFilterChange('createdBy', v)}>
             <SelectTrigger><SelectValue placeholder="All Creators" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Creators</SelectItem>
-              <SelectItem value="admin">Admin</SelectItem>
-              <SelectItem value="hr">HR</SelectItem>
+            <SelectItem value="all">All Creators</SelectItem>
+<SelectItem value="admin">Admin</SelectItem>
+<SelectItem value="hr">HR</SelectItem>
+<SelectItem value="agency">Agency</SelectItem> {/* ✅ ADD THIS */}
             </SelectContent>
           </Select>
         </div>
@@ -362,9 +422,11 @@ export default function JobRequisitions() {
           <tbody className="bg-white divide-y divide-gray-200">
             {isLoading ? (
               <tr><td colSpan={8} className="text-center py-8"><Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" /></td></tr>
-            ) : filteredRequisitions.map(req => (
+            ) : paginatedData.map(req => (
               <tr key={req.id}>
-                <td className="px-6 py-4 whitespace-nowrap font-medium text-sm">{req.projectName}</td>
+<td className="px-6 py-4 whitespace-nowrap font-medium text-sm">
+  {req.projectName?.trim() ? req.projectName : "N/A"}
+</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">{req.locations?.join(", ")}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">{req.roles?.join(", ")}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
@@ -374,8 +436,13 @@ export default function JobRequisitions() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">{req.jdFileData ? <Eye className="text-gray-500 h-5 w-5 cursor-pointer" onClick={(e) => { e.stopPropagation(); handleViewJd(req); }} /> : "N/A"}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">{req.createdDate?.toDate().toLocaleDateString()}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">{req.createdByRole === 'admin' ? 'Admin' : req.createdByRole === 'hr' ? 'Hr' : req.createdByRole || 'N/A'}</td>
-                <td className="px-6 py-4 text-right">
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+  {req.createdByRole === 'agency'
+    ? req.createdByName || 'Agency'
+    : req.createdByRole === 'hr'
+    ? 'HR'
+    : 'Admin'}
+</td>              <td className="px-6 py-4 text-right">
                   <DropdownMenu open={openDropdownId === req.id} onOpenChange={(isOpen) => setOpenDropdownId(isOpen ? req.id : null)}>
                     <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreVertical className="h-4 w-4"/></Button></DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
@@ -389,6 +456,72 @@ export default function JobRequisitions() {
           </tbody>
         </table>
       </div>
+      <div className="flex justify-end items-center gap-3 px-4 py-3">
+
+  {/* Rows per page */}
+  <span className="text-sm">Rows per page:</span>
+  <select
+    value={rowsPerPage}
+    onChange={(e) => {
+      setRowsPerPage(Number(e.target.value));
+      setPage(0);
+    }}
+    className="border rounded px-2 py-1 text-sm"
+  >
+    {[5, 10, 20].map(n => (
+      <option key={n} value={n}>{n}</option>
+    ))}
+  </select>
+
+  {/* Range */}
+  <span className="text-sm">
+    {total === 0 ? 0 : page * rowsPerPage + 1}–
+    {Math.min((page + 1) * rowsPerPage, total)} of {total}
+  </span>
+
+  {/* Buttons */}
+  <div className="flex gap-1">
+
+    <button
+      onClick={() => setPage(0)}
+      disabled={page === 0}
+      className="px-2 py-1 border rounded disabled:opacity-50"
+    >
+      {'<<'}
+    </button>
+
+    <button
+      onClick={() => setPage(prev => Math.max(prev - 1, 0))}
+      disabled={page === 0}
+      className="px-2 py-1 border rounded disabled:opacity-50"
+    >
+      {'<'}
+    </button>
+
+    <button
+      onClick={() =>
+        setPage(prev =>
+          (prev + 1) * rowsPerPage < total ? prev + 1 : prev
+        )
+      }
+      disabled={(page + 1) * rowsPerPage >= total}
+      className="px-2 py-1 border rounded disabled:opacity-50"
+    >
+      {'>'}
+    </button>
+
+    <button
+      onClick={() =>
+        setPage(Math.floor((total - 1) / rowsPerPage))
+      }
+      disabled={(page + 1) * rowsPerPage >= total}
+      className="px-2 py-1 border rounded disabled:opacity-50"
+    >
+      {'>>'}
+    </button>
+
+  </div>
+</div>
 
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="sm:max-w-[580px] p-0">
@@ -488,5 +621,6 @@ export default function JobRequisitions() {
         </DialogContent>
       </Dialog>
     </div>
+    
   );
 }

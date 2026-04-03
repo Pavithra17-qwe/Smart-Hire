@@ -226,7 +226,24 @@ function RequirementModal({
           ...payload,
           createdAt: serverTimestamp(),
           createdByRole: 'agency',
-          createdBy: user.uid,   // ✅ ADD THIS
+          createdBy: user.uid,
+        
+          // ✅ ADD THIS
+          createdByName: user.displayName || user.email,
+        });
+        await addDoc(collection(db, 'job_requisitions'), {
+          projectName: payload.projectName || "—",
+        
+          roles: [payload.jobRole], // ✅ convert
+          locations: [payload.location],
+        
+          status: payload.status || "Active",
+        
+          createdBy: user.uid,
+          createdByRole: "agency",
+          createdByName: user.displayName || "Agency",
+        
+          createdDate: serverTimestamp(),
         });
       }
       onClose();
