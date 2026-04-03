@@ -64,18 +64,23 @@ const INITIAL_FILTERS = {
 export default function CandidateHistoryPage() {
     const { candidates, loading, error } = useCandidate();
     const searchParams = useSearchParams();
+    const isActiveFilter = searchParams.get("active") === "true";
     const [filters, setFilters] = useState(INITIAL_FILTERS);
     const [showStageFilters, setShowStageFilters] = useState(false);
     const [page, setPage] = useState(0);
     const [rowsPerPage, setRowsPerPage] = useState(10);
-    const [filterStage, setFilterStage] = useState("all");
-const [filterStatus, setFilterStatus] = useState("all");
+    const [filterStage,     setFilterStage]     = useState("all");
+const [filterStatus,    setFilterStatus]    = useState("all");
+const [filterCreatedBy, setFilterCreatedBy] = useState("all"); // for agency/HR filter
+
 useEffect(() => {
     const stage = searchParams.get("stage");
     const status = searchParams.get("status");
+    const createdBy = searchParams.get("createdBy");
   
     if (stage && stage !== "all") setFilterStage(stage);
     if (status && status !== "all") setFilterStatus(status);
+    if (createdBy) setFilterCreatedBy(createdBy);
   }, [searchParams]);
 
     const handleFilterChange = (filterName: string, value: string) => {
@@ -101,68 +106,99 @@ useEffect(() => {
     };
 
     const filteredCandidates = useMemo(() => {
+        if (isActiveFilter) {
+            return candidates.filter(c => {
+              const final = (c.finalStatus ?? "").toLowerCase();
+              return final !== "completed" && final !== "rejected";
+            });
+          }
         if (!Array.isArray(candidates)) return [];
+      
+        const stageFieldMap: Record<string, string> = {
+          resume: "resumeReviewStatus",
+          l1: "l1Status",
+          l2: "l2Status",
+          hr: "hrStatus",
+          offer: "offerStatus",
+          final: "finalStatus",
+        };
+      
         const sorted = [...candidates].sort((a, b) => {
-            const dateA = a.createdDate ? a.createdDate.toMillis() : 0;
-            const dateB = b.createdDate ? b.createdDate.toMillis() : 0;
-            return dateB - dateA;
+          const dateA = a.createdDate ? a.createdDate.toMillis() : 0;
+          const dateB = b.createdDate ? b.createdDate.toMillis() : 0;
+          return dateB - dateA;
         });
-
+      
         return sorted.filter(candidate => {
-            const nameMatch =
+      
+          // 🔹 Basic filters
+          const nameMatch =
             !filters.name ||
             (candidate.candidateName ?? '').toLowerCase().includes(filters.name.toLowerCase());
-          
+      
           const roleMatch =
             !filters.role ||
             (candidate.createdByRole ?? '').toLowerCase() === filters.role.toLowerCase();
-          
+      
           const statusMatch =
             !filters.status ||
             (candidate.finalStatus ?? '').toLowerCase() === filters.status.toLowerCase();
-          
+      
+          // 🔹 Stage filters (existing UI)
           const rrMatch =
             !filters.resumeReview ||
             (candidate.resumeReviewStatus ?? 'Pending').toLowerCase() === filters.resumeReview.toLowerCase();
-          
+      
           const l1Match =
             !filters.l1 ||
             (candidate.l1Status ?? 'Pending').toLowerCase() === filters.l1.toLowerCase();
-          
+      
           const l2Match =
             !filters.l2 ||
             (candidate.l2Status ?? 'Pending').toLowerCase() === filters.l2.toLowerCase();
-          
+      
           const hrMatch =
             !filters.hr ||
             (candidate.hrStatus ?? 'Pending').toLowerCase() === filters.hr.toLowerCase();
-          
+      
           const offerMatch =
             !filters.offer ||
             (candidate.offerStatus ?? 'Pending').toLowerCase() === filters.offer.toLowerCase();
-            const stageFieldMap: Record<string, string> = {
-                resume: "resumeReviewStatus",
-                l1: "l1Status",
-                l2: "l2Status",
-                hr: "hrStatus",
-                offer: "offerStatus",
-                final: "finalStatus",
-              };
-              
-              let stageMatch = true;
-              
-              if (filterStage !== "all" && filterStatus !== "all") {
-                const field = stageFieldMap[filterStage];
-                if (field) {
-                  stageMatch =
-                    (candidate[field] ?? "Pending").toLowerCase() ===
-                    filterStatus.toLowerCase();
-                }
-              }
-            return nameMatch && roleMatch && statusMatch && rrMatch && l1Match && l2Match && hrMatch && offerMatch && stageMatch;
+      
+          // 🔥 NEW: Dashboard filter (URL based)
+          let stageMatch = true;
+      
+          if (filterStage !== "all" && filterStatus !== "all") {
+            const field = stageFieldMap[filterStage];
+            if (field) {
+              stageMatch =
+                (candidate[field] ?? "Pending").toLowerCase() === filterStatus.toLowerCase();
+            }
+          } else if (filterStage === "all" && filterStatus !== "all") {
+            stageMatch =
+              (candidate.finalStatus ?? "").toLowerCase() === filterStatus.toLowerCase();
+          }
+      
+          // 🔥 NEW: createdBy filter
+          const uploaderMatch =
+            filterCreatedBy === "all" ||
+            candidate.createdBy === filterCreatedBy;
+      
+          return (
+            nameMatch &&
+            roleMatch &&
+            statusMatch &&
+            rrMatch &&
+            l1Match &&
+            l2Match &&
+            hrMatch &&
+            offerMatch &&
+            stageMatch &&
+            uploaderMatch
+          );
         });
-    }, [candidates, filters]);
-
+      
+    }, [candidates, filters, isActiveFilter]);
     const start = page * rowsPerPage;
     const end = start + rowsPerPage;
     const paginatedCandidates = filteredCandidates.slice(start, end);
