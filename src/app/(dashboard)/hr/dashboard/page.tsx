@@ -318,43 +318,13 @@ export default function HRDashboard() {
   return (
     <div className="space-y-6 pb-10 w-full overflow-x-hidden">
 
-      {/* ── Header ── */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-headline font-bold leading-tight tracking-tight">HR Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-1">Manage your recruitment pipeline and candidate workflow.</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/hr/requisitions/create" className="flex items-center gap-1.5">
-              <PlusCircle className="h-4 w-4" /> New Requisition
-            </Link>
-          </Button>
-          <Button asChild size="sm">
-            <Link href="/candidates/add" className="flex items-center gap-1.5">
-              <PlusCircle className="h-4 w-4" /> Add Candidate
-            </Link>
-          </Button>
-          <Button asChild variant="secondary" size="sm">
-            <Link href="/candidates/list" className="flex items-center gap-1.5">
-              <Eye className="h-4 w-4" /> All Candidates
-            </Link>
-          </Button>
-          {/* live badge */}
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-3 py-1.5 rounded-full">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse block" />
-            Live data
-          </div>
-        </div>
-      </div>
-
+    
       {/* ── ROW 1: Summary stats ── */}
       <div>
         <SectionLabel>Candidate Overview</SectionLabel>
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <StatCard title="Total Candidates" value={stats.total}       icon={Users}        accent="bg-slate-500"   href="/candidates/history"                    description="All candidates" />
           <StatCard title="Active Pipeline"  value={stats.inProgress}  icon={Activity}     accent="bg-blue-500"   href="/candidates/history?active=true"         description="In review or interview" />
-          <StatCard title="Interviews Today" value={upcoming.filter(u => u.isToday).length} icon={Calendar} accent="bg-indigo-500" href="/candidates/history?status=scheduled"  description="L1, L2 & HR rounds" />
           <StatCard title="Offers Released"  value={stats.offerReleased} icon={Send}        accent="bg-violet-500"  href="/candidates/history?stage=offer&status=released" description="Awaiting response" />
           <StatCard title="Hired"            value={stats.hired}        icon={UserCheck}    accent="bg-emerald-500" href="/candidates/history?stage=final&status=completed" description="Offer accepted" />
         </div>

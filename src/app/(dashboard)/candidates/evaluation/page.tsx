@@ -341,19 +341,30 @@ export default function CandidateEvaluation() {
                      <SelectValue placeholder={role === 'hr' && !hrProjectFilter ? "Select a filter above to see projects" : "Select a project..."} />
                   </SelectTrigger>
                   <SelectContent>
-                    {projects.length > 0 ? (
-                      projects.map(p => (
-<SelectItem key={p.id} value={p.id}>
-  {p.projectName}
-  {role !== 'agency' && ` (${p.createdByName || p.createdByRole})`}
-</SelectItem>
-                      ))
-                    ) : (
-                       (role === 'hr' && hrProjectFilter) || role === 'admin' || role === 'agency' ? (
-                        <div className="px-4 py-2 text-sm text-muted-foreground">No projects available.</div>
-                       ) : null
-                    )}
-                  </SelectContent>
+  {projects.length > 0 ? (
+    projects
+      .filter(p => {
+        // ✅ Only for agency
+        if (role === 'agency') {
+          const name = (p.projectName || "").toLowerCase().trim();
+          return name && name !== "n/a";
+        }
+        return true;
+      })
+      .map(p => (
+        <SelectItem key={p.id} value={p.id}>
+          {p.projectName}
+          {role !== 'agency' && ` (${p.createdByName || p.createdByRole})`}
+        </SelectItem>
+      ))
+  ) : (
+    (role === 'hr' && hrProjectFilter) || role === 'admin' || role === 'agency' ? (
+      <div className="px-4 py-2 text-sm text-muted-foreground">
+        No projects available.
+      </div>
+    ) : null
+  )}
+</SelectContent>
                 </Select>
                 {errors.projectId && <p className="text-xs text-red-500 mt-1">{errors.projectId}</p>}
               </div>

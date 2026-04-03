@@ -317,25 +317,6 @@ export default function AgencyDashboard() {
   return (
     <div className="space-y-6 pb-10 w-full overflow-x-hidden">
 
-      {/* ── Header ── */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-headline font-bold leading-tight tracking-tight">
-            Agency Dashboard
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Welcome, <span className="font-semibold text-foreground">{agencyName}</span> — your candidates and recruitment performance.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-        
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-3 py-1.5 rounded-full">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse block" />
-            Live data
-          </div>
-        </div>
-      </div>
-
       {/* ── Filters ── */}
       <div className="bg-card border rounded-xl p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3 items-end">

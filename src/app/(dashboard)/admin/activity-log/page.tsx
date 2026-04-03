@@ -339,11 +339,11 @@ export default function ActivityLogPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gray-50 hover:bg-gray-50">
-                <TableHead className="h-9 px-3 text-[11px] font-bold text-gray-500 uppercase tracking-wider w-[155px]">User</TableHead>
-                <TableHead className="h-9 px-3 text-[11px] font-bold text-gray-500 uppercase tracking-wider w-[150px]">Candidate</TableHead>
-                <TableHead className="h-9 px-3 text-[11px] font-bold text-gray-500 uppercase tracking-wider w-[105px]">Stage</TableHead>
-                <TableHead className="h-9 px-3 text-[11px] font-bold text-gray-500 uppercase tracking-wider">Action</TableHead>
-                <TableHead className="h-9 px-3 text-[11px] font-bold text-gray-500 uppercase tracking-wider w-[155px]">Date & Time</TableHead>
+              <TableHead className="w-[18%]">User</TableHead>
+<TableHead className="w-[20%]">Candidate</TableHead>
+<TableHead className="w-[12%]">Stage</TableHead>
+<TableHead className="w-[30%]">Action</TableHead>
+<TableHead className="w-[20%]">Date & Time</TableHead>
               </TableRow>
             </TableHeader>
 
@@ -383,7 +383,7 @@ export default function ActivityLogPage() {
                       )}
                     >
                       {/* User */}
-                      <TableCell className="px-3 py-2 align-middle">
+                      <TableCell className="px-2 py-1.5 align-middle">
                         <div className="text-sm font-medium leading-snug">{log.userName || "N/A"}</div>
                         <span className={cn(
                           "inline-block text-[10px] px-1.5 py-px rounded-full capitalize font-semibold border mt-0.5",
@@ -394,7 +394,7 @@ export default function ActivityLogPage() {
                       </TableCell>
 
                       {/* Candidate */}
-                      <TableCell className="px-3 py-2 align-middle">
+                      <TableCell className="px-2 py-1.5 align-middle">
                         {showLink ? (
                           <Link
                             href={`/candidates/${candId}`}
@@ -412,7 +412,7 @@ export default function ActivityLogPage() {
                       </TableCell>
 
                       {/* Stage */}
-                      <TableCell className="px-3 py-2 align-middle">
+                      <TableCell className="px-2 py-1.5 align-middle">
                         <span className={cn(
                           "inline-block text-[10px] px-2 py-px rounded-full border font-semibold whitespace-nowrap",
                           getStageCls(stage)
@@ -422,7 +422,7 @@ export default function ActivityLogPage() {
                       </TableCell>
 
                       {/* Action */}
-                      <TableCell className="px-3 py-2 align-middle">
+                      <TableCell className="px-2 py-1.5 align-middle">
                         <div className="flex items-center gap-1.5">
                           <span className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", getDot(log.action))} />
                           <span className="text-sm">{log.action || "—"}</span>
@@ -433,7 +433,7 @@ export default function ActivityLogPage() {
                       </TableCell>
 
                       {/* Date & Time */}
-                      <TableCell className="px-3 py-2 align-middle text-sm text-muted-foreground whitespace-nowrap">
+                      <TableCell className="px-2 py-1.5 align-middle text-sm text-muted-foreground whitespace-nowrap">
                         {fmtDate(log.createdAt)}
                       </TableCell>
                     </TableRow>
