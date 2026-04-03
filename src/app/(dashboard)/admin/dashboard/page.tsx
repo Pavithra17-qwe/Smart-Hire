@@ -222,7 +222,7 @@ export default function AdminDashboard() {
       .map(u => ({
         id:    u.id,
         name:  u.displayName || u.name || u.email || "Unknown",
-        count: candidates.filter(c => c.createdBy === u.id).length,
+        count: filtered.filter(c => c.createdBy === u.id).length,
       }))
       .sort((a, b) => b.count - a.count);
   }, [users, candidates]);
@@ -234,7 +234,7 @@ export default function AdminDashboard() {
       .map(u => ({
         id:    u.id,
         name:  u.displayName || u.name || u.email || "Unknown",
-        count: candidates.filter(c => c.createdBy === u.id).length,
+        count: filtered.filter(c => c.createdBy === u.id).length,
       }))
       .sort((a, b) => b.count - a.count);
   }, [users, candidates]);
@@ -247,7 +247,7 @@ export default function AdminDashboard() {
         id:    u.id,
         name:  u.displayName || u.name || u.email || "Unknown",
         // Count unique candidates where this panel member handled L1 or L2
-        count: candidates.filter(c =>
+        count: filtered.filter(c =>
           c.l1InterviewerUid === u.id || c.l2InterviewerUid === u.id
         ).length,
       }))
@@ -257,37 +257,40 @@ export default function AdminDashboard() {
   // ── Candidate stats (always from filtered) ────────────────────────────────
   const stats = useMemo(() => ({
     total: filtered.length,
-    inProgress: candidates.filter(c => {
+  
+    inProgress: filtered.filter(c => {
       const f = (c.finalStatus ?? "").toLowerCase();
       return f !== "completed" && f !== "rejected";
     }).length,
-    completed:  candidates.filter(c => c.finalStatus === "Completed").length,
-    rejected:   candidates.filter(c => c.finalStatus === "Rejected").length,
-
+  
+    completed: filtered.filter(c => c.finalStatus === "Completed").length,
+    rejected: filtered.filter(c => c.finalStatus === "Rejected").length,
+  
     resumeAccepted: filtered.filter(c => c.resumeReviewStatus === "Accepted").length,
     resumeRejected: filtered.filter(c => c.resumeReviewStatus === "Rejected").length,
     resumePending:  filtered.filter(c => c.resumeReviewStatus === "Pending").length,
-
+  
     l1Selected:  filtered.filter(c => c.l1Status === "Selected").length,
     l1Scheduled: filtered.filter(c => c.l1Status === "Scheduled").length,
     l1Rejected:  filtered.filter(c => c.l1Status === "Rejected").length,
     l1Pending:   filtered.filter(c => c.l1Status === "Pending").length,
-
+  
     l2Selected:  filtered.filter(c => c.l2Status === "Selected").length,
     l2Scheduled: filtered.filter(c => c.l2Status === "Scheduled").length,
     l2Rejected:  filtered.filter(c => c.l2Status === "Rejected").length,
     l2Pending:   filtered.filter(c => c.l2Status === "Pending").length,
-
+  
     hrSelected:  filtered.filter(c => c.hrStatus === "Selected").length,
     hrScheduled: filtered.filter(c => c.hrStatus === "Scheduled").length,
     hrRejected:  filtered.filter(c => c.hrStatus === "Rejected").length,
     hrPending:   filtered.filter(c => c.hrStatus === "Pending").length,
-
+  
     offerPending:  filtered.filter(c => c.offerStatus === "Pending").length,
     offerReleased: filtered.filter(c => c.offerStatus === "Released").length,
     offerAccepted: filtered.filter(c => c.offerStatus === "Accepted").length,
     offerRejected: filtered.filter(c => c.offerStatus === "Rejected").length,
-  }), [candidates, filtered]);
+  
+  }), [filtered]);
 
   // ── Pipeline donut ────────────────────────────────────────────────────────
   const pipelineData = useMemo(() => [
