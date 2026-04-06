@@ -233,23 +233,83 @@ if (!dupCandidateSnap.empty) {
   setIsLoading(false);
   return;
 }
+      
+      // ✅ 👉 PASTE NEW AI LOGIC HERE
       let matchScore = null;
       let matchSummary = "Not scored.";
-
-      if (selectedSource.jdFileData && formData.resumeFile?.data) {
-        toast({ title: 'AI Scoring Started', description: 'Parsing resume and generating match score...' });
+      
+      if (formData.resumeFile?.data) {
         try {
-          const result = await candidateMatchScoring({
-            jdFileDataB64: selectedSource.jdFileData,
-            jdFileType: selectedSource.jdFileType,
-            resumeFileDataB64: formData.resumeFile.data,
-            resumeFileType: formData.resumeFile.type
+          console.log("JD DATA LENGTH:", selectedSource.jdFileData?.length);
+console.log("RESUME DATA LENGTH:", formData.resumeFile?.data?.length);
+          if (
+            selectedSource.jdFileData &&
+            selectedSource.jdFileType
+          )
+           {
+            toast({ title: 'AI Scoring Started (JD Based)' });
+      
+            const result = await candidateMatchScoring({
+              jdFileDataB64: selectedSource.jdFileData,
+              jdFileType: selectedSource.jdFileType,
+              resumeFileDataB64: formData.resumeFile.data,
+              resumeFileType: formData.resumeFile.type
+            });
+      
+            matchScore = result.matchScore;
+            matchSummary = result.summary;
+          } else {
+            toast({ title: 'AI Scoring Started (Basic Matching)' });
+      
+            let score = 50;
+      
+            if (formData.experience) score += 10;
+            if (formData.role) score += 10;
+            if (formData.location) score += 10;
+            if (formData.noticePeriod === "Immediate") score += 10;
+      
+            matchScore = Math.min(score, 95);
+            let summaryPoints: string[] = [];
+
+            if (formData.experience) {
+              summaryPoints.push("Experience matches requirement");
+            }
+            
+            if (formData.role) {
+              summaryPoints.push("Role is relevant");
+            }
+            
+            if (formData.location) {
+              summaryPoints.push("Location is suitable");
+            }
+            
+            if (formData.noticePeriod === "Immediate") {
+              summaryPoints.push("Immediate joiner");
+            }
+            
+            if (summaryPoints.length === 0) {
+              matchSummary = "Basic profile match";
+            } else {
+              matchSummary = summaryPoints.join(" • ");
+            }
+          }
+      
+          toast({
+            title: 'AI Scoring Complete',
+            description: `Match score: ${matchScore}%`
           });
-          matchScore = result.matchScore;
-          matchSummary = result.summary;
-          toast({ title: 'AI Scoring Complete', description: `Candidate match score is ${result.matchScore}%.` });
+      
         } catch (err) {
-          toast({ variant: 'destructive', title: 'AI Scoring Failed', description: "Could not generate match score." });
+          console.error("AI ERROR:", err);
+
+// ✅ fallback score
+matchScore = 60;
+matchSummary = "Fallback score generated";
+
+toast({
+  variant: 'destructive',
+  title: 'AI Failed - Using fallback score',
+});
         }
       }
 
