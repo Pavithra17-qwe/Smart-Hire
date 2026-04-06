@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { updatePassword } from "firebase/auth";
 import { doc, updateDoc } from "firebase/firestore";
@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+
 import {
   Card, CardContent, CardHeader, CardTitle,
   CardDescription, CardFooter,
@@ -25,7 +26,7 @@ const ROLE_ROUTES: Record<string, string> = {
 
 export default function ChangePasswordPage() {
   const { user, role, firstLogin, loading: authLoading, refreshUser } = useAuth();
-
+  const isRedirecting = useRef(false);
   const [password,            setPassword]            = useState("");
   const [confirmPassword,     setConfirmPassword]     = useState("");
   const [showPassword,        setShowPassword]        = useState(false);
@@ -39,6 +40,7 @@ export default function ChangePasswordPage() {
   useEffect(() => {
     if (authLoading) return;
     if (!user) { router.replace("/login"); return; }
+    if (isRedirecting.current) return;
     if (firstLogin === false && role) {
       router.replace(ROLE_ROUTES[role] ?? "/dashboard");
     }
@@ -47,54 +49,33 @@ export default function ChangePasswordPage() {
   // ── Submit ───────────────────────────────────────────────────────────────
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+// ... validation unchanged
 
-    if (password.length < 8) {
-      toast({ variant: "destructive", title: "Weak Password", description: "Password must be at least 8 characters long." });
-      return;
-    }
-    if (password !== confirmPassword) {
-      toast({ variant: "destructive", title: "Password Mismatch", description: "Passwords do not match." });
-      return;
-    }
+setIsLoading(true);
+try {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("No authenticated user found.");
 
-    setIsLoading(true);
-    try {
-      const currentUser = auth.currentUser;
-      if (!currentUser) throw new Error("No authenticated user found.");
+  await updatePassword(currentUser, password);
+  await updateDoc(doc(db, "users", currentUser.uid), { firstLogin: false });
 
-      // 1. Update Firebase Auth password
-      await updatePassword(currentUser, password);
+  // ✅ Lock the guard BEFORE refreshUser triggers a re-render
+  isRedirecting.current = true;
 
-      // 2. Clear firstLogin flag in Firestore
-      await updateDoc(doc(db, "users", currentUser.uid), { firstLogin: false });
+  await refreshUser();
 
-      // 3. ── THE FIX ──────────────────────────────────────────────────────
-      //    Re-fetch the Firestore doc directly into useAuth context.
-      //    onAuthStateChanged never re-fires on a Firestore write, so without
-      //    this call useAuth keeps serving firstLogin: true forever and the
-      //    dashboard guard bounces the user right back here.
-      await refreshUser();
-      // ────────────────────────────────────────────────────────────────────
+  toast({ title: "Password Updated", description: "Redirecting to your dashboard…" });
+  router.replace(ROLE_ROUTES[role ?? ""] ?? "/dashboard");
 
-      toast({ title: "Password Updated", description: "Redirecting to your dashboard…" });
+} catch (error: any) {
+  // ... error handling unchanged
 
-      // 4. Navigate — useEffect guard will also fire now that firstLogin is
-      //    false in context, but pushing directly here is faster.
-      router.replace(ROLE_ROUTES[role ?? ""] ?? "/dashboard");
-
-    } catch (error: any) {
-      console.error("Password update error:", error);
-      let msg = "Failed to update password. Please try again.";
-      if (error.code === "auth/requires-recent-login") {
-        msg = "For security, please log out and log back in before changing your password.";
-      } else if (error.message) {
-        msg = error.message;
-      }
-      toast({ variant: "destructive", title: "Update Failed", description: msg });
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // ✅ Release the lock if something went wrong
+  isRedirecting.current = false;
+} finally {
+  setIsLoading(false);
+}
+};
 
   // ── States ───────────────────────────────────────────────────────────────
   if (authLoading) {

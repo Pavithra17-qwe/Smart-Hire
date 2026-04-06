@@ -19,10 +19,10 @@ import { Mail, Lock, Eye, EyeOff, Loader2, ArrowLeft, Briefcase } from "lucide-r
 // ?continueUrl=https://your-domain.com/reset-password
 // so your /reset-password page handles the oobCode correctly.
 // ─────────────────────────────────────────────
-const APP_URL =
-  typeof window !== "undefined"
-    ? window.location.origin          // auto-detects: localhost OR production domain
-    : process.env.NEXT_PUBLIC_APP_URL || "http://localhost:9000";
+// ✅ Replace with this
+// ✅ Hardcode directly — no env variable needed
+// ✅ Remove trailing slash with .replace()
+const APP_URL = "https://9000-firebase-smarthireproject-1773939832860.cluster-cz5nqyh5nreq6ua6gaqd7okl7o.cloudworkstations.dev".replace(/\/$/, "");
 
 const roleAreaMap: { [key: string]: string } = {
   admin:  "admin",
@@ -105,33 +105,24 @@ function LoginForm() {
   // → your page handles confirmPasswordReset → signs them in → redirects by role.
   const handleForgotPassword = async () => {
     if (!forgotEmail || !validateEmail(forgotEmail)) {
-      toast({ variant: "destructive", title: "Invalid email", description: "Please enter a valid email address." });
+      toast({ 
+        variant: "destructive", 
+        title: "Invalid email", 
+        description: "Please enter a valid email address." 
+      });
       return;
     }
-
+  
     setIsSendingReset(true);
     try {
-      // ── FIX: actionCodeSettings tells Firebase where to send the user
-      //         after they click the link in their email.
-      //         url MUST be in your Firebase Console → Authentication →
-      //         Settings → Authorized domains list.
-      const actionCodeSettings = {
-        url: `${APP_URL}/reset-password`,   // → /reset-password?oobCode=...
-        handleCodeInApp: true,              // opens the link inside your app
-      };
-
-      await sendPasswordResetEmail(auth, forgotEmail, actionCodeSettings);
-
+      await sendPasswordResetEmail(auth, forgotEmail);
       toast({
         title: "Reset link sent!",
-        description: `Check your inbox at ${forgotEmail}. The link will open your password reset page directly.`,
+        description: `Check your inbox at ${forgotEmail}.`,
       });
-
       setIsForgotModalOpen(false);
       setForgotEmail("");
     } catch (err: any) {
-      // Firebase returns auth/user-not-found even if the email doesn't exist
-      // (for security). Show a generic success message either way.
       console.error("sendPasswordResetEmail error:", err);
       toast({
         title: "Reset link sent!",
