@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
@@ -15,50 +15,65 @@ interface AuthContextType {
   status: string | null;
   loading: boolean;
   agencyId?: string | null;
+  // ── NEW: call this after any Firestore user-doc update to sync local state ──
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<Role>(null);
-  const [name, setName] = useState<string | null>(null);
-  const [firstLogin, setFirstLogin] = useState<boolean | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [agencyId, setAgencyId] = useState<string | null>(null);
+// ── Shared helper: fetch Firestore user doc and return the parsed fields ──
+async function fetchUserData(uid: string) {
+  const snap = await getDoc(doc(db, 'users', uid));
+  if (!snap.exists()) return null;
+  const d = snap.data();
+  return {
+    role:       (d.role as Role) ?? null,
+    name:       d.name           ?? null,
+    firstLogin: d.firstLogin     ?? false,   // undefined → false
+    status:     d.status         ?? 'Active',
+    agencyId:   d.role === 'agency' ? uid : (d.agencyId ?? null),
+  };
+}
 
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  const [user,       setUser]       = useState<User | null>(null);
+  const [role,       setRole]       = useState<Role>(null);
+  const [name,       setName]       = useState<string | null>(null);
+  const [firstLogin, setFirstLogin] = useState<boolean | null>(null);
+  const [status,     setStatus]     = useState<string | null>(null);
+  const [loading,    setLoading]    = useState(true);
+  const [agencyId,   setAgencyId]   = useState<string | null>(null);
+
+  // ── Apply a fetched data snapshot to all state slices ──
+  const applyUserData = useCallback(
+    (data: Awaited<ReturnType<typeof fetchUserData>>, currentUser: User) => {
+      if (data) {
+        setRole(data.role);
+        setName(data.name ?? currentUser.displayName);
+        setFirstLogin(data.firstLogin);
+        setStatus(data.status);
+        setAgencyId(data.agencyId);
+      } else {
+        // Doc doesn't exist — reset role-related fields only
+        setRole(null);
+        setName(currentUser.displayName);
+        setFirstLogin(null);
+        setStatus(null);
+        setAgencyId(null);
+      }
+      setUser(currentUser);
+    },
+    []
+  );
+
+  // ── Auth state listener (fires on login / logout only) ──
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        const userDocRef = doc(db, 'users', currentUser.uid);
-        const userDoc = await getDoc(userDocRef);
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          setRole(userData.role as Role);
-          setName(userData.name || currentUser.displayName);
-          setFirstLogin(userData.firstLogin || false);
-          setStatus(userData.status || 'Active');
-          
-          // Correctly set agencyId for all roles
-          if (userData.role === 'agency') {
-            setAgencyId(currentUser.uid);
-          } else if (userData.agencyId) {
-            setAgencyId(userData.agencyId);
-          } else {
-            setAgencyId(null);
-          }
-        } else {
-          // Reset state if user doc doesn't exist
-          setName(currentUser.displayName);
-          setRole(null);
-          setFirstLogin(null);
-          setStatus(null);
-          setAgencyId(null);
-        }
-        setUser(currentUser);
+        const data = await fetchUserData(currentUser.uid);
+        applyUserData(data, currentUser);
       } else {
-        // Reset all state on logout
+        // Logged out — reset everything
         setUser(null);
         setRole(null);
         setName(null);
@@ -70,10 +85,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [applyUserData]);
+
+  // ── NEW: manually re-fetch the Firestore doc and sync state ──
+  // Call this immediately after any updateDoc() on the user's record
+  // so components see the new values without waiting for a re-login.
+  const refreshUser = useCallback(async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+    const data = await fetchUserData(currentUser.uid);
+    applyUserData(data, currentUser);
+  }, [applyUserData]);
 
   return (
-    <AuthContext.Provider value={{ user, role, name, firstLogin, status, loading, agencyId }}>
+    <AuthContext.Provider
+      value={{ user, role, name, firstLogin, status, loading, agencyId, refreshUser }}
+    >
       {children}
     </AuthContext.Provider>
   );
