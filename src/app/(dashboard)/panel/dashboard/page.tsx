@@ -365,33 +365,6 @@ export default function PanelDashboard() {
   return (
     <div className="space-y-6 pb-10 w-full overflow-x-hidden">
 
-      {/* ── Header ── */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-headline font-bold leading-tight tracking-tight">
-            Panel Dashboard
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Welcome back, <span className="font-semibold text-foreground">{panelName}</span> — your assigned interviews and feedback tasks.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/candidates/list" className="flex items-center gap-1.5">
-              <Eye className="h-4 w-4" /> Candidate List
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/candidates/history" className="flex items-center gap-1.5">
-              <ClipboardList className="h-4 w-4" /> History
-            </Link>
-          </Button>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-3 py-1.5 rounded-full">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse block" />
-            Live data
-          </div>
-        </div>
-      </div>
 
       {/* ── Today's alert banner (if interviews today) ── */}
       {todayInterviews.length > 0 && (
