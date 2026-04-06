@@ -185,8 +185,17 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
 
   const handleFile = async (file: File | null) => {
     if (!file) return;
-    if (file.type !== 'application/pdf') { setError('Only PDF files are accepted.'); return; }
-    setError('');
+    const allowedTypes = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ];
+    
+    if (!allowedTypes.includes(file.type)) {
+      setError("Only PDF, DOC, DOCX files are accepted.");
+      return;
+    }
+        setError('');
     setJdFile(file);
     // Generate preview immediately
     const b64 = await toBase64(file);
@@ -369,7 +378,7 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
 
         {/* JD Upload */}
         <div style={{ marginTop: 20 }}>
-          <span style={labelText}>JOB DESCRIPTION (PDF only)</span>
+          <span style={labelText}>JOB DESCRIPTION (PDF / DOC / DOCX)</span>
           <div
             onDragOver={e => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
@@ -394,11 +403,17 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
             ) : (
               <p style={{ color: '#6b7280', fontSize: 14, margin: 0 }}>
                 Drag & drop or <span style={{ color: '#4f46e5', fontWeight: 600, textDecoration: 'underline' }}>click to upload</span>
-                <br /><span style={{ fontSize: 12, color: '#9ca3af' }}>PDF only</span>
+                <br /><span style={{ fontSize: 12, color: '#9ca3af' }}>PDF, DOC, DOCX supported</span>
               </p>
             )}
-            <input ref={fileRef} type="file" accept="application/pdf" hidden
-              onChange={e => handleFile(e.target.files?.[0] || null)} />
+<input
+  ref={fileRef}
+  type="file"
+  accept=".pdf,.doc,.docx"
+  hidden
+  onChange={e => handleFile(e.target.files?.[0] || null)}
+/>
+           
           </div>
 
           {/* Preview button — shown immediately after file is selected */}
