@@ -13,16 +13,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useToast } from "@/hooks/use-toast";
 import { Mail, Lock, Eye, EyeOff, Loader2, ArrowLeft, Briefcase } from "lucide-react";
 
-// ─────────────────────────────────────────────
-// IMPORTANT: Set this to your actual domain.
-// Firebase will send the reset email with a link that contains
-// ?continueUrl=https://your-domain.com/reset-password
-// so your /reset-password page handles the oobCode correctly.
-// ─────────────────────────────────────────────
-// ✅ Replace with this
-// ✅ Hardcode directly — no env variable needed
-// ✅ Remove trailing slash with .replace()
-const APP_URL = "https://9000-firebase-smarthireproject-1773939832860.cluster-cz5nqyh5nreq6ua6gaqd7okl7o.cloudworkstations.dev".replace(/\/$/, "");
+// ─────────────────────────────────────────────────────────────────────────────
+// Your app's base URL — Firebase will append ?oobCode=... to this
+// and redirect the user here after they click the email link.
+// ─────────────────────────────────────────────────────────────────────────────
+const APP_URL = "https://9000-firebase-smarthireproject-1773939832860.cluster-cz5nqyh5nreq6ua6gaqd7okl7o.cloudworkstations.dev";
 
 const roleAreaMap: { [key: string]: string } = {
   admin:  "admin",
@@ -32,20 +27,18 @@ const roleAreaMap: { [key: string]: string } = {
 };
 
 function LoginForm() {
-  const [email,          setEmail]          = useState("");
-  const [password,       setPassword]       = useState("");
-  const [showPassword,   setShowPassword]   = useState(false);
-  const [isLoading,      setIsLoading]      = useState(false);
-
-  const [emailError,     setEmailError]     = useState("");
-  const [loginError,     setLoginError]     = useState("");
-
+  const [email,              setEmail]              = useState("");
+  const [password,           setPassword]           = useState("");
+  const [showPassword,       setShowPassword]       = useState(false);
+  const [isLoading,          setIsLoading]          = useState(false);
+  const [emailError,         setEmailError]         = useState("");
+  const [loginError,         setLoginError]         = useState("");
   const [isForgotModalOpen,  setIsForgotModalOpen]  = useState(false);
   const [forgotEmail,        setForgotEmail]        = useState("");
   const [isSendingReset,     setIsSendingReset]     = useState(false);
 
-  const { toast }  = useToast();
-  const router     = useRouter();
+  const { toast }    = useToast();
+  const router       = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -70,8 +63,8 @@ function LoginForm() {
 
     setIsLoading(true);
     try {
-      const cred     = await signInWithEmailAndPassword(auth, email, password);
-      const userDoc  = await getDoc(doc(db, "users", cred.user.uid));
+      const cred    = await signInWithEmailAndPassword(auth, email, password);
+      const userDoc = await getDoc(doc(db, "users", cred.user.uid));
 
       if (!userDoc.exists()) throw new Error("User data not found.");
 
@@ -98,38 +91,62 @@ function LoginForm() {
     }
   };
 
-  // ── Forgot password ─────────────────────────────────────────────────────
-  // FIX: Pass actionCodeSettings so Firebase redirects to YOUR /reset-password
-  // page instead of its generic reset page.
-  // The user clicks the link in their email → lands on /reset-password?oobCode=...
-  // → your page handles confirmPasswordReset → signs them in → redirects by role.
+  // ── Forgot password ──────────────────────────────────────────────────────
+  // FIX: Removed `handleCodeInApp: true` — this flag is only for native mobile
+  // apps and breaks on cloudworkstations / web environments, causing
+  // "Failed to send reset email" error.
+  //
+  // Only `url` is needed: Firebase appends ?oobCode=... to this URL and
+  // redirects the user there after clicking the email link.
+  // Your /reset-password page then reads oobCode and handles confirmPasswordReset.
   const handleForgotPassword = async () => {
     if (!forgotEmail || !validateEmail(forgotEmail)) {
-      toast({ 
-        variant: "destructive", 
-        title: "Invalid email", 
-        description: "Please enter a valid email address." 
+      toast({
+        variant: "destructive",
+        title: "Invalid email",
+        description: "Please enter a valid email address.",
       });
       return;
     }
   
     setIsSendingReset(true);
     try {
-      await sendPasswordResetEmail(auth, forgotEmail);
+      await sendPasswordResetEmail(auth, forgotEmail, {
+        url: `https://recruitement-5778d.firebaseapp.com/login`,
+            });
+  
       toast({
         title: "Reset link sent!",
-        description: `Check your inbox at ${forgotEmail}.`,
+        description: `Check your inbox at ${forgotEmail}. Click the link to set your new password.`,
       });
+  
       setIsForgotModalOpen(false);
       setForgotEmail("");
+  
     } catch (err: any) {
-      console.error("sendPasswordResetEmail error:", err);
-      toast({
-        title: "Reset link sent!",
-        description: `If an account exists for ${forgotEmail}, a reset link has been sent.`,
-      });
-      setIsForgotModalOpen(false);
-      setForgotEmail("");
+      console.error("sendPasswordResetEmail failed. Code:", err?.code, "Message:", err?.message);
+  
+      if (err?.code === "auth/too-many-requests") {
+        toast({
+          variant: "destructive",
+          title: "Too many attempts",
+          description: "Please wait a few minutes and try again.",
+        });
+      } else if (err?.code === "auth/user-not-found") {
+        
+        toast({
+          title: "Reset link sent!",
+          description: `If an account exists for ${forgotEmail}, a reset link has been sent.`,
+        });
+        setIsForgotModalOpen(false);
+        setForgotEmail("");
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: `Failed to send reset email. (${err?.code || "unknown"})`,
+        });
+      }
     } finally {
       setIsSendingReset(false);
     }
@@ -137,7 +154,8 @@ function LoginForm() {
 
   return (
     <div className="min-h-screen flex w-full overflow-hidden bg-background">
-      {/* Left — Login form */}
+
+      {/* ── Left — Login form ── */}
       <div className="flex-1 flex flex-col justify-center px-6 sm:px-12 lg:px-20">
         <div className="max-w-md w-full mx-auto space-y-8">
 
@@ -218,7 +236,7 @@ function LoginForm() {
         </div>
       </div>
 
-      {/* Right — Illustration */}
+      {/* ── Right — Illustration ── */}
       <div className="hidden lg:flex flex-1 relative bg-gradient-to-br from-[#6C63FF] to-[#7B72FF] items-center justify-center p-12">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.15),_transparent)] pointer-events-none" />
         <div className="relative z-10 max-w-lg text-center space-y-10 flex flex-col items-center">
@@ -237,13 +255,13 @@ function LoginForm() {
         </div>
       </div>
 
-      {/* Forgot password modal */}
+      {/* ── Forgot password modal ── */}
       <Dialog open={isForgotModalOpen} onOpenChange={setIsForgotModalOpen}>
         <DialogContent className="sm:max-w-md rounded-xl">
           <DialogHeader>
             <DialogTitle className="text-2xl font-headline font-bold">Reset password</DialogTitle>
             <DialogDescription className="text-base">
-              Enter your email and we'll send a link to set a new password. The link will open directly in SmartHire.
+              Enter your email and we'll send a reset link directly to your SmartHire password page.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-6">
