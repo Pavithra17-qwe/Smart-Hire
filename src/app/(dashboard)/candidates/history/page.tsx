@@ -66,6 +66,7 @@ export default function CandidateHistoryPage() {
     const searchParams = useSearchParams();
     const isActiveFilter = searchParams.get("active") === "true";
     const [filters, setFilters] = useState(INITIAL_FILTERS);
+    const candidateId = searchParams.get("candidateId");
     const [showStageFilters, setShowStageFilters] = useState(false);
     const [page, setPage] = useState(0);
     const [rowsPerPage, setRowsPerPage] = useState(10);
