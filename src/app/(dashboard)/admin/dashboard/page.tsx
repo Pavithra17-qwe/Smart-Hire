@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getDoc, doc } from "firebase/firestore";
+import { useSearchParams } from "next/navigation";
 import {
   XCircle, Users, CalendarDays, Clock, ArrowUpRight, CheckCircle2,
   TrendingDown, Activity, BarChart3, PieChart as PieIcon,
@@ -180,7 +181,11 @@ export default function AdminDashboard() {
   const [filterStage,  setFilterStage]  = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [isMounted, setIsMounted] = useState(false);
+
+  
   const [creatorMap, setCreatorMap] = useState<Record<string, string>>({});
+
+  
 
   useEffect(() => {
     const fetchNames = async () => {

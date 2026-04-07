@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   collection, addDoc, serverTimestamp, query, doc,
   updateDoc, deleteDoc, where, orderBy, onSnapshot,getDocs
@@ -90,6 +91,7 @@ function fileToBase64(file: File): Promise<string> {
 export default function JobRequisitions() {
   const { user, role, name } = useAuth();
   const { toast } = useToast();
+  const searchParams = useSearchParams();
 
   const [requisitions,       setRequisitions]       = useState<any[]>([]);
   const [isLoading,          setIsLoading]          = useState(false);
@@ -123,6 +125,13 @@ export default function JobRequisitions() {
     );
     return () => unsub();
   }, [user, role]);
+
+  useEffect(() => {
+    const pn = searchParams.get("projectName");
+    if (pn) {
+      setFilters(prev => ({ ...prev, projectName: decodeURIComponent(pn) }));
+    }
+  }, [searchParams]);
 
   // ── Filters ───────────────────────────────────────────────────────────────
   const handleFilterChange = (field: string, value: string) => {
