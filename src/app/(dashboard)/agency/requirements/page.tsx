@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { deleteDoc, query, orderBy } from 'firebase/firestore';
 import {
   collection, onSnapshot, addDoc, serverTimestamp, doc, updateDoc,
@@ -18,7 +19,6 @@ interface Requirement {
   noticePeriod: string;
   status: 'Active' | 'Closed';
   createdAt?: any;
-  // JD stored as base64 data-URI
   jdFileData?: string;
   jdFileName?: string;
   jdFileType?: string;
@@ -63,20 +63,12 @@ function toBase64(file: File): Promise<string> {
   });
 }
 
-/**
- * FIX: Open PDF reliably without navigation.
- * Handles both base64 data-URIs and https:// Firebase Storage URLs.
- */
 function openJDFile(jdFileData: string, jdFileName?: string) {
   if (!jdFileData) return;
-
-  // Firebase Storage URL — open directly
   if (jdFileData.startsWith('https://')) {
     window.open(jdFileData, '_blank', 'noopener,noreferrer');
     return;
   }
-
-  // Base64 data-URI — convert to blob and open
   try {
     const [meta, base64] = jdFileData.split(',');
     const mimeMatch = meta.match(/:(.*?);/);
@@ -86,17 +78,12 @@ function openJDFile(jdFileData: string, jdFileName?: string) {
     for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
     const blob = new Blob([bytes], { type: mime });
     const url  = URL.createObjectURL(blob);
-    // FIX: use window.open with noopener to avoid navigation
     const win = window.open(url, '_blank', 'noopener,noreferrer');
     if (!win) {
-      // Popup blocked — fallback: create temporary <a> link
       const a = document.createElement('a');
-      a.href = url;
-      a.target = '_blank';
+      a.href = url; a.target = '_blank';
       a.download = jdFileName || 'JD.pdf';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
     }
     setTimeout(() => URL.revokeObjectURL(url), 15000);
   } catch (err) {
@@ -152,7 +139,7 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
   const [form, setForm]                     = useState<FormData>(EMPTY_FORM);
   const [customExperience, setCustomExp]    = useState('');
   const [jdFile, setJdFile]                 = useState<File | null>(null);
-  const [jdPreview, setJdPreview]           = useState<string>(''); // base64 for preview
+  const [jdPreview, setJdPreview]           = useState<string>('');
   const [submitting, setSubmitting]         = useState(false);
   const [dragOver, setDragOver]             = useState(false);
   const [error, setError]                   = useState('');
@@ -162,21 +149,19 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
     if (!open) return;
     if (editData) {
       setForm({
-        projectName: editData.projectName || '',
-        jobRole:     editData.jobRole     || '',
-        location:    editData.location    || '',
-        experience:  editData.experience  || '',
+        projectName:  editData.projectName  || '',
+        jobRole:      editData.jobRole      || '',
+        location:     editData.location     || '',
+        experience:   editData.experience   || '',
         noticePeriod: editData.noticePeriod || '',
-        status:      editData.status      || 'Active',
+        status:       editData.status       || 'Active',
       });
       setJdPreview(editData.jdFileData || '');
     } else {
       setForm(EMPTY_FORM);
       setJdPreview('');
     }
-    setJdFile(null);
-    setError('');
-    setCustomExp('');
+    setJdFile(null); setError(''); setCustomExp('');
   }, [open, editData]);
 
   if (!open) return null;
@@ -190,14 +175,8 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
       "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ];
-    
-    if (!allowedTypes.includes(file.type)) {
-      setError("Only PDF, DOC, DOCX files are accepted.");
-      return;
-    }
-        setError('');
-    setJdFile(file);
-    // Generate preview immediately
+    if (!allowedTypes.includes(file.type)) { setError("Only PDF, DOC, DOCX files are accepted."); return; }
+    setError(''); setJdFile(file);
     const b64 = await toBase64(file);
     setJdPreview(b64);
   };
@@ -205,108 +184,63 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
   const handleSubmit = async () => {
     const expValue = form.experience === 'Others' ? customExperience.trim() : form.experience;
     if (!form.jobRole.trim() || !form.location.trim() || !expValue || !form.noticePeriod || !form.status) {
-      setError('Please fill all required fields.');
-      return;
+      setError('Please fill all required fields.'); return;
     }
-    setError('');
-    setSubmitting(true);
-
+    setError(''); setSubmitting(true);
     try {
-            // ✅ ADD: import getDocs, query, where once at the top of try block
-            const { getDocs, query: fsQuery, where } = await import('firebase/firestore');
-
-            // ✅ DUPLICATE REQUIREMENT CHECK (only for new requirements, not edits)
-            if (!editData) {
-              const dupSnap = await getDocs(
-                fsQuery(
-                  collection(db, 'requirements'),
-                  where('jobRole', '==', form.jobRole.trim()),
-                  where('location', '==', form.location.trim()),
-                  where('experience', '==', expValue),
-                  where('noticePeriod', '==', form.noticePeriod),
-                  where('status', '==', form.status)
-                )
-              );
-              if (!dupSnap.empty) {
-                setError('A requirement with the same Job Role, Location, Experience, Notice Period and Status already exists.');
-                setSubmitting(false);
-                return;
-              }
-            }
-      // Use newly selected file's base64, or existing stored base64
+      const { getDocs, query: fsQuery, where } = await import('firebase/firestore');
+      if (!editData) {
+        const dupSnap = await getDocs(fsQuery(collection(db, 'requirements'),
+          where('jobRole', '==', form.jobRole.trim()),
+          where('location', '==', form.location.trim()),
+          where('experience', '==', expValue),
+          where('noticePeriod', '==', form.noticePeriod),
+          where('status', '==', form.status)
+        ));
+        if (!dupSnap.empty) {
+          setError('A requirement with the same details already exists.');
+          setSubmitting(false); return;
+        }
+      }
       let jdFileData = editData?.jdFileData || '';
       let jdFileName = editData?.jdFileName || '';
       let jdFileType = editData?.jdFileType || '';
-
-      if (jdFile) {
-        jdFileData = await toBase64(jdFile);
-        jdFileName = jdFile.name;
-        jdFileType = jdFile.type;
-      }
+      if (jdFile) { jdFileData = await toBase64(jdFile); jdFileName = jdFile.name; jdFileType = jdFile.type; }
 
       const payload: Record<string, any> = {
-        projectName:  form.projectName.trim(),
-        jobRole:      form.jobRole.trim(),
-        location:     form.location.trim(),
-        experience:   expValue,
-        noticePeriod: form.noticePeriod,
-        status:       form.status,
-        jdFileData,
-        jdFileName,
-        jdFileType,
+        projectName: form.projectName.trim(), jobRole: form.jobRole.trim(),
+        location: form.location.trim(), experience: expValue,
+        noticePeriod: form.noticePeriod, status: form.status,
+        jdFileData, jdFileName, jdFileType,
       };
 
       if (editData) {
         await updateDoc(doc(db, 'requirements', editData.id), payload);
-
-        // Keep job_requisitions in sync (match by requirementId)
-        const { getDocs, query: q, where } = await import('firebase/firestore');
-        const snap = await getDocs(q(collection(db, 'job_requisitions'), where('requirementId', '==', editData.id)));
+        const { getDocs: gd, query: q, where: w } = await import('firebase/firestore');
+        const snap = await gd(q(collection(db, 'job_requisitions'), w('requirementId', '==', editData.id)));
         snap.forEach(async jrDoc => {
           await updateDoc(doc(db, 'job_requisitions', jrDoc.id), {
-            roles:       [payload.jobRole],
-            locations:   [payload.location],
-            status:      payload.status,
-            jdFileName,
-            jdFileType,
-            jdFileData,  // base64 — same format, consistent
+            roles: [payload.jobRole], locations: [payload.location],
+            status: payload.status, jdFileName, jdFileType, jdFileData,
           });
         });
-
       } else {
-        // Create requirement first
         const reqRef = await addDoc(collection(db, 'requirements'), {
-          ...payload,
-          createdAt:     serverTimestamp(),
-          createdByRole: 'agency',
-          createdBy:     user?.uid || '',
-          createdByName: user?.displayName || user?.email || 'Agency',
+          ...payload, createdAt: serverTimestamp(), createdByRole: 'agency',
+          createdBy: user?.uid || '', createdByName: user?.displayName || user?.email || 'Agency',
         });
-
-        // Create matching job_requisition — store base64 (consistent with requirements)
         await addDoc(collection(db, 'job_requisitions'), {
-          projectName:   payload.projectName || '—',
-          roles:         [payload.jobRole],
-          locations:     [payload.location],
-          status:        payload.status || 'Active',
-          jdFileName,
-          jdFileType,
-          jdFileData,    // base64 — same field, same format
-          createdBy:     user?.uid || '',
-          createdByRole: 'agency',
-          createdByName: user?.displayName || user?.email || 'Agency',
-          createdDate:   serverTimestamp(),
-          requirementId: reqRef.id,  // link back
+          projectName: payload.projectName || '—', roles: [payload.jobRole],
+          locations: [payload.location], status: payload.status || 'Active',
+          jdFileName, jdFileType, jdFileData, createdBy: user?.uid || '',
+          createdByRole: 'agency', createdByName: user?.displayName || user?.email || 'Agency',
+          createdDate: serverTimestamp(), requirementId: reqRef.id,
         });
       }
-
-      onClose();
-      setTimeout(() => onSuccess(), 200);
+      onClose(); setTimeout(() => onSuccess(), 200);
     } catch (err: any) {
       setError('Failed to save: ' + (err?.message || 'Unknown error'));
-    } finally {
-      setSubmitting(false);
-    }
+    } finally { setSubmitting(false); }
   };
 
   const isValid = !!(form.jobRole.trim() && form.location.trim() && form.experience && form.noticePeriod && form.status);
@@ -327,24 +261,17 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
             border: 'none', fontSize: 24, cursor: 'pointer', color: '#9ca3af', lineHeight: 1,
           }}>×</button>
         )}
-
         <h2 style={{ fontSize: 22, fontWeight: 700, color: '#111827', margin: '0 0 24px' }}>
           {editData ? 'Edit Requirement' : 'New Requirement'}
         </h2>
-
         {error && (
-          <div style={{
-            background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8,
-            padding: '10px 14px', marginBottom: 16, color: '#dc2626', fontSize: 13,
-          }}>{error}</div>
+          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8,
+            padding: '10px 14px', marginBottom: 16, color: '#dc2626', fontSize: 13 }}>{error}</div>
         )}
-
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px 24px' }}>
           <FieldInput label="PROJECT NAME" value={form.projectName} onChange={v => set('projectName', v)} placeholder="e.g., Deloitte" />
           <FieldInput label="JOB ROLE" value={form.jobRole} onChange={v => set('jobRole', v)} placeholder="e.g., QA, Dev" required />
           <FieldInput label="LOCATION" value={form.location} onChange={v => set('location', v)} placeholder="e.g., Chennai" required />
-
-          {/* Experience */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={labelText}>EXPERIENCE <span style={{ color: '#ef4444' }}>*</span></span>
             <select value={form.experience} onChange={e => set('experience', e.target.value)} style={inputStyle}>
@@ -356,8 +283,6 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
                 onChange={e => setCustomExp(e.target.value)} style={inputStyle} />
             )}
           </div>
-
-          {/* Notice Period */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={labelText}>NOTICE PERIOD <span style={{ color: '#ef4444' }}>*</span></span>
             <select value={form.noticePeriod} onChange={e => set('noticePeriod', e.target.value)} style={inputStyle}>
@@ -365,8 +290,6 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
               {NOTICE_PERIOD_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
-
-          {/* Status */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={labelText}>STATUS <span style={{ color: '#ef4444' }}>*</span></span>
             <select value={form.status} onChange={e => set('status', e.target.value as any)} style={inputStyle}>
@@ -375,8 +298,6 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
             </select>
           </div>
         </div>
-
-        {/* JD Upload */}
         <div style={{ marginTop: 20 }}>
           <span style={labelText}>JOB DESCRIPTION (PDF / DOC / DOCX)</span>
           <div
@@ -406,46 +327,28 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
                 <br /><span style={{ fontSize: 12, color: '#9ca3af' }}>PDF, DOC, DOCX supported</span>
               </p>
             )}
-<input
-  ref={fileRef}
-  type="file"
-  accept=".pdf,.doc,.docx"
-  hidden
-  onChange={e => handleFile(e.target.files?.[0] || null)}
-/>
-           
+            <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" hidden
+              onChange={e => handleFile(e.target.files?.[0] || null)} />
           </div>
-
-          {/* Preview button — shown immediately after file is selected */}
           {jdPreview && (
-            <button
-              type="button"
+            <button type="button"
               onClick={e => { e.stopPropagation(); openJDFile(jdPreview, jdFile?.name || editData?.jdFileName); }}
-              style={{
-                marginTop: 8, display: 'flex', alignItems: 'center', gap: 6,
+              style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6,
                 background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8,
-                padding: '6px 12px', fontSize: 12, color: '#15803d', cursor: 'pointer', fontWeight: 500,
-              }}
-            >
+                padding: '6px 12px', fontSize: 12, color: '#15803d', cursor: 'pointer', fontWeight: 500 }}>
               <EyeIcon /> Preview uploaded file
             </button>
           )}
         </div>
-
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 28 }}>
           <button onClick={onClose} disabled={submitting} style={cancelBtn}>Cancel</button>
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || !isValid}
-            style={{ ...primaryBtn, opacity: submitting || !isValid ? 0.65 : 1, minWidth: 160, justifyContent: 'center' }}
-          >
+          <button onClick={handleSubmit} disabled={submitting || !isValid}
+            style={{ ...primaryBtn, opacity: submitting || !isValid ? 0.65 : 1, minWidth: 160, justifyContent: 'center' }}>
             {submitting ? (
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{
-                  width: 15, height: 15, border: '2px solid rgba(255,255,255,0.4)',
+                <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.4)',
                   borderTopColor: '#fff', borderRadius: '50%',
-                  animation: 'spin 0.7s linear infinite', display: 'inline-block', flexShrink: 0,
-                }} />
+                  animation: 'spin 0.7s linear infinite', display: 'inline-block', flexShrink: 0 }} />
                 Saving…
               </span>
             ) : editData ? 'Update Requirement' : 'Create Requirement'}
@@ -461,7 +364,6 @@ function RequirementModal({ open, onClose, editData, onSuccess, user }: {
 function ActionsMenu({ req, onEdit }: { req: Requirement; onEdit: (r: Requirement) => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
@@ -469,13 +371,11 @@ function ActionsMenu({ req, onEdit }: { req: Requirement; onEdit: (r: Requiremen
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
-
   const handleDelete = async () => {
     if (!confirm('Delete this requirement?')) return;
     await deleteDoc(doc(db, 'requirements', req.id));
     setOpen(false);
   };
-
   return (
     <div ref={menuRef} style={{ position: 'relative', display: 'inline-block' }}>
       <button onClick={() => setOpen(o => !o)} style={{
@@ -483,11 +383,9 @@ function ActionsMenu({ req, onEdit }: { req: Requirement; onEdit: (r: Requiremen
         fontSize: 20, color: '#9ca3af', padding: '4px 8px', borderRadius: 6, lineHeight: 1,
       }}>⋮</button>
       {open && (
-        <div style={{
-          position: 'absolute', right: 0, top: '100%', background: '#fff',
+        <div style={{ position: 'absolute', right: 0, top: '100%', background: '#fff',
           border: '1px solid #e5e7eb', borderRadius: 10,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 30, minWidth: 150, overflow: 'hidden',
-        }}>
+          boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 30, minWidth: 150, overflow: 'hidden' }}>
           <MenuBtn label="Edit" onClick={() => { onEdit(req); setOpen(false); }} />
           <MenuBtn label="Delete" onClick={handleDelete} danger />
         </div>
@@ -499,19 +397,16 @@ function ActionsMenu({ req, onEdit }: { req: Requirement; onEdit: (r: Requiremen
 function MenuBtn({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
   const [hov, setHov] = useState(false);
   return (
-    <button onClick={onClick}
-      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{
-        display: 'flex', alignItems: 'center', width: '100%', padding: '10px 16px',
+    <button onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{ display: 'flex', alignItems: 'center', width: '100%', padding: '10px 16px',
         background: hov ? (danger ? '#fef2f2' : '#f9fafb') : 'none',
         border: 'none', cursor: 'pointer', fontSize: 13,
-        color: danger ? '#dc2626' : '#374151', fontWeight: 500,
-      }}
-    >{label}</button>
+        color: danger ? '#dc2626' : '#374151', fontWeight: 500 }}>
+      {label}
+    </button>
   );
 }
 
-/* ─── Filter Select ───────────────────────────────────────────────────────── */
 function FilterSelect({ label, value, onChange, options }: {
   label: string; value: string; onChange: (v: string) => void; options: string[];
 }) {
@@ -523,20 +418,15 @@ function FilterSelect({ label, value, onChange, options }: {
   );
 }
 
-/* ─── Table Row ───────────────────────────────────────────────────────────── */
-function TableRow({ req, isLast, onEdit }: {
+function TableRowItem({ req, isLast, onEdit }: {
   req: Requirement; isLast: boolean; onEdit: (r: Requirement) => void;
 }) {
   const [hov, setHov] = useState(false);
   const hasJD = !!(req.jdFileData && req.jdFileData.length > 50);
-
   return (
     <tr onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{
-        borderBottom: isLast ? 'none' : '1px solid #f3f4f6',
-        background: hov ? '#fafbff' : '#fff', transition: 'background 0.15s',
-      }}
-    >
+      style={{ borderBottom: isLast ? 'none' : '1px solid #f3f4f6',
+        background: hov ? '#fafbff' : '#fff', transition: 'background 0.15s' }}>
       <td style={tdStyle}><span style={{ fontWeight: 500, color: '#111827' }}>{req.projectName || 'N/A'}</span></td>
       <td style={tdStyle}>{req.jobRole || '-'}</td>
       <td style={tdStyle}>{req.experience || '-'}</td>
@@ -545,12 +435,10 @@ function TableRow({ req, isLast, onEdit }: {
       <td style={tdStyle}>{fmtDate(req.createdAt)}</td>
       <td style={tdStyle}>
         {hasJD ? (
-          <button
-            onClick={() => openJDFile(req.jdFileData!, req.jdFileName)}
+          <button onClick={() => openJDFile(req.jdFileData!, req.jdFileName)}
             title={req.jdFileName || 'View JD'}
             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4,
-              display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          >
+              display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <EyeIcon />
           </button>
         ) : <span style={{ color: '#9ca3af', fontSize: 12 }}>N/A</span>}
@@ -563,17 +451,29 @@ function TableRow({ req, isLast, onEdit }: {
 /* ─── Main Page ───────────────────────────────────────────────────────────── */
 export default function RequirementsPage() {
   const { user } = useAuth();
-  const [requirements, setRequirements] = useState<Requirement[]>([]);
-  const [loading, setLoading]           = useState(true);
-  const [modalOpen, setModalOpen]       = useState(false);
-  const [editTarget, setEditTarget]     = useState<Requirement | null>(null);
-  const [showSuccess, setShowSuccess]   = useState(false);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [roleFilter, setRoleFilter]     = useState('');
-  const [expFilter, setExpFilter]       = useState('');
-  const [noticeFilter, setNoticeFilter] = useState('');
-  const [page, setPage]                 = useState(0);
-  const [rowsPerPage, setRowsPerPage]   = useState(10);
+
+  // ── FIX: Read ?projectName from URL (set by agency dashboard card clicks) ──
+  const searchParams = useSearchParams();
+
+  const [requirements,  setRequirements]  = useState<Requirement[]>([]);
+  const [loading,       setLoading]       = useState(true);
+  const [modalOpen,     setModalOpen]     = useState(false);
+  const [editTarget,    setEditTarget]    = useState<Requirement | null>(null);
+  const [showSuccess,   setShowSuccess]   = useState(false);
+  const [statusFilter,  setStatusFilter]  = useState('');
+  const [roleFilter,    setRoleFilter]    = useState('');
+  const [expFilter,     setExpFilter]     = useState('');
+  const [noticeFilter,  setNoticeFilter]  = useState('');
+  // ── NEW: projectName filter from URL ───────────────────────────────────────
+  const [projectFilter, setProjectFilter] = useState('');
+  const [page,          setPage]          = useState(0);
+  const [rowsPerPage,   setRowsPerPage]   = useState(10);
+
+  // Read ?projectName query param on mount — pre-filters the table
+  useEffect(() => {
+    const pn = searchParams.get("projectName");
+    if (pn) setProjectFilter(decodeURIComponent(pn));
+  }, [searchParams]);
 
   useEffect(() => {
     const unsub = onSnapshot(
@@ -582,18 +482,18 @@ export default function RequirementsPage() {
         setRequirements(snap.docs.map(d => {
           const data = d.data();
           return {
-            id:           d.id,
-            projectName:  data.projectName  || '',
-            jobRole:      data.jobRole      || '',
-            location:     data.location     || '',
-            experience:   data.experience   || '',
-            noticePeriod: data.noticePeriod || '',
-            status:       data.status       || 'Active',
-            createdAt:    data.createdAt    || null,
-            jdFileData:   data.jdFileData   || '',
-            jdFileName:   data.jdFileName   || '',
-            jdFileType:   data.jdFileType   || '',
-            createdBy:    data.createdBy    || '',
+            id: d.id,
+            projectName:   data.projectName  || '',
+            jobRole:       data.jobRole      || '',
+            location:      data.location     || '',
+            experience:    data.experience   || '',
+            noticePeriod:  data.noticePeriod || '',
+            status:        data.status       || 'Active',
+            createdAt:     data.createdAt    || null,
+            jdFileData:    data.jdFileData   || '',
+            jdFileName:    data.jdFileName   || '',
+            jdFileType:    data.jdFileType   || '',
+            createdBy:     data.createdBy    || '',
             createdByRole: data.createdByRole || '',
           };
         }));
@@ -604,27 +504,35 @@ export default function RequirementsPage() {
     return () => unsub();
   }, []);
 
-  const hasFilter = !!(statusFilter || roleFilter || expFilter || noticeFilter);
-  const clearFilters = () => { setStatusFilter(''); setRoleFilter(''); setExpFilter(''); setNoticeFilter(''); setPage(0); };
+  // ── FIX: clearFilters now also clears projectFilter ───────────────────────
+  const hasFilter = !!(statusFilter || roleFilter || expFilter || noticeFilter || projectFilter);
+  const clearFilters = () => {
+    setStatusFilter(''); setRoleFilter(''); setExpFilter('');
+    setNoticeFilter(''); setProjectFilter(''); setPage(0);
+  };
 
   const openNew  = () => { setEditTarget(null); setModalOpen(true); };
   const openEdit = (r: Requirement) => { setEditTarget(r); setModalOpen(true); };
   const closeModal = () => { setModalOpen(false); setEditTarget(null); };
 
-  const uniqueRoles  = [...new Set(requirements.map(r => r.jobRole).filter(Boolean))];
-  const uniqueExp    = [...new Set(requirements.map(r => r.experience).filter(Boolean))];
+  const uniqueRoles = [...new Set(requirements.map(r => r.jobRole).filter(Boolean))];
+  const uniqueExp   = [...new Set(requirements.map(r => r.experience).filter(Boolean))];
 
+  // ── FIX: filtered now includes projectFilter ──────────────────────────────
   const filtered = requirements.filter(r =>
-    (!statusFilter || r.status === statusFilter) &&
-    (!roleFilter   || r.jobRole === roleFilter) &&
-    (!expFilter    || r.experience === expFilter) &&
-    (!noticeFilter || r.noticePeriod === noticeFilter)
-  );
-  const total = filtered.length;
+    (!statusFilter  || r.status       === statusFilter) &&
+    (!roleFilter    || r.jobRole      === roleFilter) &&
+    (!expFilter     || r.experience   === expFilter) &&
+    (!noticeFilter  || r.noticePeriod === noticeFilter) &&
+    // projectFilter: case-insensitive partial match on projectName
+    (!projectFilter || (r.projectName || '').toLowerCase() === projectFilter.toLowerCase())  );
+
+  const total     = filtered.length;
   const paginated = filtered.slice(page * rowsPerPage, (page + 1) * rowsPerPage);
 
   return (
     <div style={{ padding: '32px 40px', fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', background: '#f8f9fc' }}>
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
         <div>
@@ -636,11 +544,27 @@ export default function RequirementsPage() {
         </button>
       </div>
 
+      {/* ── FIX: Project filter banner — shown when navigated from dashboard ── */}
+      {projectFilter && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px',
+          background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 10,
+          marginBottom: 16, fontSize: 13, color: '#4338CA',
+        }}>
+          <span>🔍 Showing requirements for project: <strong>{projectFilter}</strong></span>
+          <button onClick={() => setProjectFilter('')}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none',
+              cursor: 'pointer', color: '#6366F1', fontWeight: 600, fontSize: 13 }}>
+            ✕ Clear project filter
+          </button>
+        </div>
+      )}
+
       {/* Filters */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
-        <FilterSelect label="All Statuses"      value={statusFilter} onChange={v => { setStatusFilter(v); setPage(0); }} options={['Active', 'Closed']} />
-        <FilterSelect label="All Roles"         value={roleFilter}   onChange={v => { setRoleFilter(v);   setPage(0); }} options={uniqueRoles} />
-        <FilterSelect label="All Experience"    value={expFilter}    onChange={v => { setExpFilter(v);    setPage(0); }} options={uniqueExp} />
+        <FilterSelect label="All Statuses"       value={statusFilter} onChange={v => { setStatusFilter(v); setPage(0); }} options={['Active', 'Closed']} />
+        <FilterSelect label="All Roles"          value={roleFilter}   onChange={v => { setRoleFilter(v);   setPage(0); }} options={uniqueRoles} />
+        <FilterSelect label="All Experience"     value={expFilter}    onChange={v => { setExpFilter(v);    setPage(0); }} options={uniqueExp} />
         <FilterSelect label="All Notice Periods" value={noticeFilter} onChange={v => { setNoticeFilter(v); setPage(0); }} options={NOTICE_PERIOD_OPTIONS} />
         {hasFilter && (
           <button onClick={clearFilters} style={{
@@ -683,7 +607,7 @@ export default function RequirementsPage() {
                   </div>
                 </td></tr>
               ) : paginated.map((req, i) => (
-                <TableRow key={req.id} req={req} isLast={i === paginated.length - 1} onEdit={openEdit} />
+                <TableRowItem key={req.id} req={req} isLast={i === paginated.length - 1} onEdit={openEdit} />
               ))}
             </tbody>
           </table>
@@ -701,10 +625,10 @@ export default function RequirementsPage() {
           </span>
           <div style={{ display: 'flex', gap: 4 }}>
             {[
-              { label: '<<', action: () => setPage(0),                        disabled: page === 0 },
-              { label: '<',  action: () => setPage(p => Math.max(p-1, 0)),    disabled: page === 0 },
-              { label: '>',  action: () => setPage(p => (p+1)*rowsPerPage < total ? p+1 : p), disabled: (page+1)*rowsPerPage >= total },
-              { label: '>>', action: () => setPage(Math.floor((total-1)/rowsPerPage)),          disabled: (page+1)*rowsPerPage >= total },
+              { label: '<<', action: () => setPage(0),                                               disabled: page === 0 },
+              { label: '<',  action: () => setPage(p => Math.max(p-1, 0)),                           disabled: page === 0 },
+              { label: '>',  action: () => setPage(p => (p+1)*rowsPerPage < total ? p+1 : p),        disabled: (page+1)*rowsPerPage >= total },
+              { label: '>>', action: () => setPage(Math.floor((total-1)/rowsPerPage)),                disabled: (page+1)*rowsPerPage >= total },
             ].map(btn => (
               <button key={btn.label} onClick={btn.action} disabled={btn.disabled}
                 style={paginationBtn(btn.disabled)}>{btn.label}</button>
@@ -716,7 +640,6 @@ export default function RequirementsPage() {
       <RequirementModal open={modalOpen} onClose={closeModal} editData={editTarget}
         onSuccess={() => setShowSuccess(true)} user={user} />
 
-      {/* Success popup */}
       {showSuccess && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>

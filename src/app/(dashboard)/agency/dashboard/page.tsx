@@ -3,8 +3,9 @@
 import { useEffect, useState, useMemo } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { useAuth } from "@/hooks/useAuth"; // adjust to your auth hook
+import { useAuth } from "@/hooks/useAuth";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,15 +22,15 @@ import {
   PieChart, Pie, Cell, Label,
 } from "recharts";
 import {
-  Users, Send, XCircle, Clock, CheckCircle2,
-  Loader2, CalendarDays, ChevronRight,
-  BarChart3, TrendingUp, PlusCircle, Eye,
+  Users, Send, XCircle, CheckCircle2,
+  Loader2, ChevronRight,
+  BarChart3, TrendingUp, PlusCircle,
   ClipboardList, ArrowUpRight, Activity,
-  AlertCircle, UserCheck,
+  UserCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// ─── types ────────────────────────────────────────────────────────────────────
+// ─── types ─────────────────────────────────────────────────────────────────
 interface Candidate {
   id: string;
   candidateName?: string;
@@ -41,7 +42,7 @@ interface Candidate {
   hrStatus?: string;
   offerStatus?: string;
   aiScore?: number;
-  createdBy?: string;        // ← agency user uid stored here when they upload
+  createdBy?: string;
   jobRequisitionId?: string;
   requirementTitle?: string;
   createdAt?: any;
@@ -53,6 +54,7 @@ interface Requirement {
   id: string;
   title?: string;
   projectName?: string;
+  jobRole?: string;
   experienceRequired?: string;
   status?: string;
   createdBy?: string;
@@ -60,7 +62,7 @@ interface Requirement {
 
 interface MonthlyData { month: string; monthNum: number; year: number; submitted: number; selected: number; }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// ─── helpers ────────────────────────────────────────────────────────────────
 function normalize(s: any): string {
   const v = (s || "").toLowerCase().trim();
   if (v === "accepted")    return "Accepted";
@@ -83,15 +85,13 @@ function getStageLabel(c: Candidate): string {
   return "Submitted";
 }
 
-// ─── chart config ─────────────────────────────────────────────────────────────
+// ─── chart config ───────────────────────────────────────────────────────────
 const trendConfig = {
-  submitted: { label: "Submitted", color: "hsl(var(--primary))" },
+  submitted: { label: "Submitted",  color: "hsl(var(--primary))" },
   selected:  { label: "Progressed", color: "#10B981" },
 } satisfies ChartConfig;
 
-const FUNNEL_COLORS = ["#6366F1", "#3B82F6", "#F59E0B", "#10B981", "#8B5CF6"];
-
-// ─── sub-components ───────────────────────────────────────────────────────────
+// ─── sub-components ─────────────────────────────────────────────────────────
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-3">
@@ -155,41 +155,34 @@ function StageRow({ label, count, dot, href }: { label: string; count: number; d
   );
 }
 
-// ─── main component ───────────────────────────────────────────────────────────
+// ─── main component ──────────────────────────────────────────────────────────
 export default function AgencyDashboard() {
-  // ── auth: get current agency user ─────────────────────────────────────────
-  const { user } = useAuth(); // replace with your auth hook
+  const { user } = useAuth();
+  const router = useRouter();
   const agencyUid  = user?.uid ?? "";
-  const agencyName = user?.displayName ?? user?.email ?? "Agency";
 
-  // ── state ─────────────────────────────────────────────────────────────────
-  const [candidates,    setCandidates]    = useState<Candidate[]>([]);
-  const [requirements,  setRequirements]  = useState<Requirement[]>([]);
-  const [filterReqId,   setFilterReqId]   = useState("all");
-  const [filterStatus,  setFilterStatus]  = useState("all");
-  const [loading,       setLoading]       = useState(true);
-  const [isMounted,     setIsMounted]     = useState(false);
+  const [candidates,   setCandidates]   = useState<Candidate[]>([]);
+  const [requirements, setRequirements] = useState<Requirement[]>([]);
+  const [filterReqId,  setFilterReqId]  = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [loading,      setLoading]      = useState(true);
+  const [isMounted,    setIsMounted]    = useState(false);
 
   useEffect(() => { setIsMounted(true); }, []);
 
-  // ── Firestore: fetch ONLY this agency's candidates ─────────────────────────
   useEffect(() => {
     if (!agencyUid) return;
 
-    // SECURITY: query scoped by createdBy = this agency's uid
-    // This means another agency's candidates are never fetched
     const candQuery = query(
       collection(db, "candidates"),
       where("createdBy", "==", agencyUid)
     );
-
     const reqQuery = query(
-      collection(db, "requirements"),  // adjust collection name if different
+      collection(db, "requirements"),
       where("createdBy", "==", agencyUid)
     );
 
-    let candLoaded = false;
-    let reqLoaded  = false;
+    let candLoaded = false, reqLoaded = false;
     const checkDone = () => { if (candLoaded && reqLoaded) setLoading(false); };
 
     const unsub1 = onSnapshot(candQuery, snap => {
@@ -206,20 +199,18 @@ export default function AgencyDashboard() {
           createdAt:   r.createdAt?.toDate?.() || new Date(),
         } as Candidate;
       }));
-      candLoaded = true;
-      checkDone();
+      candLoaded = true; checkDone();
     });
 
     const unsub2 = onSnapshot(reqQuery, snap => {
       setRequirements(snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement)));
-      reqLoaded = true;
-      checkDone();
+      reqLoaded = true; checkDone();
     });
 
     return () => { unsub1(); unsub2(); };
   }, [agencyUid]);
 
-  // ── filtered candidates (by requirement + status dropdowns) ───────────────
+  // ── filtered candidates ───────────────────────────────────────────────────
   const filtered = useMemo(() => {
     return candidates.filter(c => {
       if (filterReqId !== "all" && c.jobRequisitionId !== filterReqId) return false;
@@ -231,31 +222,31 @@ export default function AgencyDashboard() {
     });
   }, [candidates, filterReqId, filterStatus]);
 
-  // ── stats (always from filtered) ──────────────────────────────────────────
+  // ── stats ─────────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
-    total:         filtered.length,
-    inProgress:    filtered.filter(c => {
+    total:          filtered.length,
+    inProgress:     filtered.filter(c => {
       const f = (c.finalStatus ?? "").toLowerCase();
       return f !== "completed" && f !== "rejected";
     }).length,
-    resumePending: filtered.filter(c => c.resumeReviewStatus === "Pending").length,
-    resumeAccepted:filtered.filter(c => c.resumeReviewStatus === "Accepted").length,
-    resumeRejected:filtered.filter(c => c.resumeReviewStatus === "Rejected").length,
-    l1Scheduled:   filtered.filter(c => c.l1Status === "Scheduled").length,
-    l1Selected:    filtered.filter(c => c.l1Status === "Selected").length,
-    l1Rejected:    filtered.filter(c => c.l1Status === "Rejected").length,
-    l2Scheduled:   filtered.filter(c => c.l2Status === "Scheduled").length,
-    l2Selected:    filtered.filter(c => c.l2Status === "Selected").length,
-    l2Rejected:    filtered.filter(c => c.l2Status === "Rejected").length,
-    offerPending:  filtered.filter(c => c.offerStatus === "Pending").length,
-    offerReleased: filtered.filter(c => c.offerStatus === "Released").length,
-    offerAccepted: filtered.filter(c => c.offerStatus === "Accepted").length,
-    offerRejected: filtered.filter(c => c.offerStatus === "Rejected").length,
-    hired:         filtered.filter(c => c.finalStatus === "Completed").length,
-    rejected:      filtered.filter(c => c.finalStatus === "Rejected").length,
+    resumePending:  filtered.filter(c => c.resumeReviewStatus === "Pending").length,
+    resumeAccepted: filtered.filter(c => c.resumeReviewStatus === "Accepted").length,
+    resumeRejected: filtered.filter(c => c.resumeReviewStatus === "Rejected").length,
+    l1Scheduled:    filtered.filter(c => c.l1Status === "Scheduled").length,
+    l1Selected:     filtered.filter(c => c.l1Status === "Selected").length,
+    l1Rejected:     filtered.filter(c => c.l1Status === "Rejected").length,
+    l2Scheduled:    filtered.filter(c => c.l2Status === "Scheduled").length,
+    l2Selected:     filtered.filter(c => c.l2Status === "Selected").length,
+    l2Rejected:     filtered.filter(c => c.l2Status === "Rejected").length,
+    offerPending:   filtered.filter(c => c.offerStatus === "Pending").length,
+    offerReleased:  filtered.filter(c => c.offerStatus === "Released").length,
+    offerAccepted:  filtered.filter(c => c.offerStatus === "Accepted").length,
+    offerRejected:  filtered.filter(c => c.offerStatus === "Rejected").length,
+    hired:          filtered.filter(c => c.finalStatus === "Completed").length,
+    rejected:       filtered.filter(c => c.finalStatus === "Rejected").length,
   }), [filtered]);
 
-  // ── funnel donut ───────────────────────────────────────────────────────────
+  // ── funnel donut ──────────────────────────────────────────────────────────
   const funnelData = useMemo(() => [
     { name: "Resume Accepted", value: stats.resumeAccepted, fill: "#6366F1" },
     { name: "L1 Selected",     value: stats.l1Selected,     fill: "#3B82F6" },
@@ -265,7 +256,7 @@ export default function AgencyDashboard() {
   ].filter(d => d.value > 0), [stats]);
   const funnelTotal = funnelData.reduce((s, d) => s + d.value, 0);
 
-  // ── 6-month trend ──────────────────────────────────────────────────────────
+  // ── 6-month trend ─────────────────────────────────────────────────────────
   const trendData = useMemo<MonthlyData[]>(() => {
     const months: MonthlyData[] = [];
     for (let i = 5; i >= 0; i--) {
@@ -285,7 +276,7 @@ export default function AgencyDashboard() {
     return months;
   }, [filtered]);
 
-  // ── recent 5 candidates ────────────────────────────────────────────────────
+  // ── recent 6 candidates ───────────────────────────────────────────────────
   const recent = useMemo(() =>
     [...filtered]
       .sort((a, b) => {
@@ -293,8 +284,8 @@ export default function AgencyDashboard() {
         const db2 = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
         return db2 - da;
       })
-      .slice(0, 6)
-  , [filtered]);
+      .slice(0, 6),
+  [filtered]);
 
   // ── pass rate ─────────────────────────────────────────────────────────────
   const passRate = useMemo(() => {
@@ -302,7 +293,6 @@ export default function AgencyDashboard() {
     return decided > 0 ? Math.round((stats.hired / decided) * 100) : 0;
   }, [stats]);
 
-  // ── loading ───────────────────────────────────────────────────────────────
   if (!isMounted || loading) {
     return (
       <div className="h-screen flex items-center justify-center gap-3">
@@ -462,15 +452,7 @@ export default function AgencyDashboard() {
                     </div>
                   ))}
                 </div>
-
-                {/* Pass rate badge */}
-                <div className="mt-4 px-3 py-3 rounded-xl bg-muted text-center">
-                  <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">Placement Rate</p>
-                  <p className="text-2xl font-black text-primary mt-1">{passRate}%</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {stats.hired} placed / {stats.hired + stats.rejected} decided
-                  </p>
-                </div>
+                
               </>
             ) : (
               <div className="h-48 flex flex-col items-center justify-center gap-2">
@@ -518,7 +500,6 @@ export default function AgencyDashboard() {
           <CardContent className="p-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
 
-              {/* Resume */}
               <div className="space-y-2">
                 <div className="px-3 py-1.5 rounded-lg text-center bg-slate-100 dark:bg-slate-800">
                   <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">Resume Review</p>
@@ -530,31 +511,28 @@ export default function AgencyDashboard() {
                 </div>
               </div>
 
-              {/* L1 */}
               <div className="space-y-2">
                 <div className="px-3 py-1.5 rounded-lg text-center bg-indigo-50 dark:bg-indigo-950/30">
                   <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">L1 Interview</p>
                 </div>
                 <div className="space-y-1.5">
-                  <StageRow label="Scheduled" count={stats.l1Scheduled} dot="bg-blue-400"    href="/candidates/history?stage=l1&status=scheduled" />
-                  <StageRow label="Selected"  count={stats.l1Selected}  dot="bg-indigo-500"  href="/candidates/history?stage=l1&status=selected" />
-                  <StageRow label="Rejected"  count={stats.l1Rejected}  dot="bg-rose-400"    href="/candidates/history?stage=l1&status=rejected" />
+                  <StageRow label="Scheduled" count={stats.l1Scheduled} dot="bg-blue-400"   href="/candidates/history?stage=l1&status=scheduled" />
+                  <StageRow label="Selected"  count={stats.l1Selected}  dot="bg-indigo-500" href="/candidates/history?stage=l1&status=selected" />
+                  <StageRow label="Rejected"  count={stats.l1Rejected}  dot="bg-rose-400"   href="/candidates/history?stage=l1&status=rejected" />
                 </div>
               </div>
 
-              {/* L2 */}
               <div className="space-y-2">
                 <div className="px-3 py-1.5 rounded-lg text-center bg-blue-50 dark:bg-blue-950/30">
                   <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">L2 Interview</p>
                 </div>
                 <div className="space-y-1.5">
-                  <StageRow label="Scheduled" count={stats.l2Scheduled} dot="bg-sky-400"     href="/candidates/history?stage=l2&status=scheduled" />
-                  <StageRow label="Selected"  count={stats.l2Selected}  dot="bg-blue-500"    href="/candidates/history?stage=l2&status=selected" />
-                  <StageRow label="Rejected"  count={stats.l2Rejected}  dot="bg-rose-600"    href="/candidates/history?stage=l2&status=rejected" />
+                  <StageRow label="Scheduled" count={stats.l2Scheduled} dot="bg-sky-400"  href="/candidates/history?stage=l2&status=scheduled" />
+                  <StageRow label="Selected"  count={stats.l2Selected}  dot="bg-blue-500" href="/candidates/history?stage=l2&status=selected" />
+                  <StageRow label="Rejected"  count={stats.l2Rejected}  dot="bg-rose-600" href="/candidates/history?stage=l2&status=rejected" />
                 </div>
               </div>
 
-              {/* HR */}
               <div className="space-y-2">
                 <div className="px-3 py-1.5 rounded-lg text-center bg-amber-50 dark:bg-amber-950/30">
                   <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">HR Round</p>
@@ -566,7 +544,6 @@ export default function AgencyDashboard() {
                 </div>
               </div>
 
-              {/* Offer */}
               <div className="space-y-2">
                 <div className="px-3 py-1.5 rounded-lg text-center bg-emerald-50 dark:bg-emerald-950/30">
                   <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">Offer Stage</p>
@@ -586,7 +563,9 @@ export default function AgencyDashboard() {
       {/* ── ROW 4: Recent candidates + Requirements summary ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        {/* Recent candidates (2/3) */}
+        {/* ── Recently Submitted (2/3) ─────────────────────────────────────────
+            FIX 1: Candidate name is now a clickable link → /candidates/{id}
+                   The "View" button is removed entirely.                        */}
         <Card className="lg:col-span-2 shadow-sm border">
           <CardHeader className="pb-3 pt-5 px-5">
             <div className="flex items-center justify-between">
@@ -615,32 +594,34 @@ export default function AgencyDashboard() {
             ) : (
               <div className="divide-y divide-border">
                 {recent.map(c => {
-                  const stage = getStageLabel(c);
-                  const isGood    = stage.includes("Selected") || stage.includes("Accepted") || stage.includes("Hired");
-                  const isBad     = stage.includes("Rejected");
+                  const stage   = getStageLabel(c);
+                  const isGood  = stage.includes("Selected") || stage.includes("Accepted") || stage.includes("Hired");
+                  const isBad   = stage.includes("Rejected");
                   const isNeutral = !isGood && !isBad;
                   return (
-                    <div key={c.id} className="flex items-center justify-between py-3 group">
+                    <div key={c.id} className="flex items-center justify-between py-3">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold truncate">{c.candidateName || "Unknown"}</p>
+                        {/* FIX 1: Name is the link — no separate View button */}
+                        <button
+                          onClick={() => router.push(`/candidates/${c.id}`)}
+                          className="text-sm font-semibold text-primary hover:underline truncate text-left block"
+                        >
+                          {c.candidateName || "Unknown"}
+                        </button>
                         <p className="text-[11px] text-muted-foreground truncate">{c.candidateDesignation}</p>
                       </div>
-                      <div className="flex items-center gap-2 ml-3 shrink-0">
-                        <Badge
-                          className={cn(
-                            "text-[10px]",
-                            isGood    && "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
-                            isBad     && "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
-                            isNeutral && "bg-muted text-muted-foreground"
-                          )}
-                          variant="secondary"
-                        >
-                          {stage}
-                        </Badge>
-                        <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
-                          <Link href={`/candidates/${c.id}`}>View</Link>
-                        </Button>
-                      </div>
+                      {/* Stage badge only — View button removed */}
+                      <Badge
+                        className={cn(
+                          "text-[10px] ml-3 shrink-0",
+                          isGood    && "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+                          isBad     && "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
+                          isNeutral && "bg-muted text-muted-foreground"
+                        )}
+                        variant="secondary"
+                      >
+                        {stage}
+                      </Badge>
                     </div>
                   );
                 })}
@@ -649,7 +630,9 @@ export default function AgencyDashboard() {
           </CardContent>
         </Card>
 
-        {/* Requirements (1/3) */}
+        {/* ── My Requirements (1/3) ────────────────────────────────────────────
+            FIX 2: Clicking a requirement → /requirements?projectName=XYZ
+                   "View all" → /requirements (all requirements, no filter)      */}
         <Card className="shadow-sm border">
           <CardHeader className="pb-3 pt-5 px-5">
             <div className="flex items-center justify-between">
@@ -659,9 +642,10 @@ export default function AgencyDashboard() {
                 </div>
                 <CardTitle className="text-base font-semibold">My Requirements</CardTitle>
               </div>
+              {/* FIX 2: View all → /requirements with no filter = shows everything */}
               <Button asChild variant="ghost" size="sm" className="text-xs">
-                <Link href="/requirements" className="flex items-center gap-1">
-                  All <ArrowUpRight className="h-3 w-3" />
+              <Link href="/agency/requirements" className="flex items-center gap-1">
+                                View all <ArrowUpRight className="h-3 w-3" />
                 </Link>
               </Button>
             </div>
@@ -672,19 +656,27 @@ export default function AgencyDashboard() {
                 <ClipboardList className="h-6 w-6 text-muted-foreground/20" />
                 <p className="text-xs text-muted-foreground text-center">No requirements yet.</p>
                 <Button asChild size="sm" variant="outline">
-                  <Link href="/requirements/create">Create Requirement</Link>
+                  <Link href="/requirements">Create Requirement</Link>
                 </Button>
               </div>
             ) : (
               <div className="space-y-2">
                 {requirements.slice(0, 6).map(r => {
                   const count = candidates.filter(c => c.jobRequisitionId === r.id).length;
+                  const displayName = r.title || r.projectName || "Requirement";
                   return (
-                    <Link key={r.id} href={`/requirements/${r.id}`} className="block group">
+                    // FIX 2: Clicking opens requirements page filtered to this project
+                    <button
+                      key={r.id}
+                      onClick={() => router.push(
+                        `/agency/requirements?projectName=${encodeURIComponent(r.projectName || r.title || "")}`
+                      )}
+                      className="w-full text-left group"
+                    >
                       <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border bg-card hover:bg-muted/50 hover:border-primary/30 transition-all">
                         <div className="min-w-0 flex-1">
-                          <p className="text-[12px] font-semibold truncate group-hover:text-primary transition-colors">
-                            {r.title || r.projectName || "Requirement"}
+                          <p className="text-[12px] font-semibold truncate text-primary group-hover:underline transition-colors">
+                            {displayName}
                           </p>
                           {r.experienceRequired && (
                             <p className="text-[10px] text-muted-foreground">{r.experienceRequired} yrs exp</p>
@@ -694,7 +686,7 @@ export default function AgencyDashboard() {
                           {count} candidate{count !== 1 ? "s" : ""}
                         </Badge>
                       </div>
-                    </Link>
+                    </button>
                   );
                 })}
               </div>
