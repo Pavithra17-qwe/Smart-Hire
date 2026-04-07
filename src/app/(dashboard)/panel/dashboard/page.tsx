@@ -240,7 +240,39 @@ export default function PanelDashboard() {
 
   const hasFilters = filterStage !== "all" || filterStatus !== "all";
 
-  // ── Stats (computed from filtered set) ────────────────────────────────────
+  // ── ID sets for each stat card (always from full `candidates` list) ──────────
+  // Guarantees: count on card == rows shown in history when you click it.
+
+  const selectedIds = useMemo(() =>
+    candidates
+      .filter(c =>
+        (c.l1InterviewerUid === panelUid && c.l1Status === "Selected") ||
+        (c.l2InterviewerUid === panelUid && c.l2Status === "Selected")
+      )
+      .map(c => c.id),
+  [candidates, panelUid]);
+
+  const pendingFeedbackIds = useMemo(() =>
+    candidates
+      .filter(c => {
+        const l1Past = c.l1Status === "Scheduled" && c.l1ScheduledDate && c.l1ScheduledDate < todayStr && !c.l1Result;
+        const l2Past = c.l2Status === "Scheduled" && c.l2ScheduledDate && c.l2ScheduledDate < todayStr && !c.l2Result;
+        return l1Past || l2Past;
+      })
+      .map(c => c.id),
+  [candidates, todayStr]);
+
+  const todayIds = useMemo(() =>
+    candidates
+      .filter(c =>
+        (c.l1Status === "Scheduled" && c.l1ScheduledDate === todayStr) ||
+        (c.l2Status === "Scheduled" && c.l2ScheduledDate === todayStr)
+      )
+      .map(c => c.id),
+  [candidates, todayStr]);
+
+  // ── Stats ─────────────────────────────────────────────────────────────────
+  // Card counts use ID sets (match history). Round breakdown uses `filtered`.
   const stats = useMemo(() => {
     const l1Scheduled = filtered.filter(c => c.l1Status === "Scheduled").length;
     const l2Scheduled = filtered.filter(c => c.l2Status === "Scheduled").length;
@@ -249,29 +281,18 @@ export default function PanelDashboard() {
     const l1Rejected  = filtered.filter(c => c.l1Status === "Rejected").length;
     const l2Rejected  = filtered.filter(c => c.l2Status === "Rejected").length;
 
-    const todayCount = filtered.filter(c =>
-      (c.l1Status === "Scheduled" && c.l1ScheduledDate === todayStr) ||
-      (c.l2Status === "Scheduled" && c.l2ScheduledDate === todayStr)
-    ).length;
-
-    const pendingFeedback = filtered.filter(c => {
-      const l1Past = c.l1Status === "Scheduled" && c.l1ScheduledDate && c.l1ScheduledDate < todayStr && !c.l1Result;
-      const l2Past = c.l2Status === "Scheduled" && c.l2ScheduledDate && c.l2ScheduledDate < todayStr && !c.l2Result;
-      return l1Past || l2Past;
-    }).length;
-
     return {
-      totalAssigned: filtered.length,
-      todayCount,
-      pendingFeedback,
-      totalScheduled: l1Scheduled + l2Scheduled,
-      totalSelected:  l1Selected  + l2Selected,
-      totalRejected:  l1Rejected  + l2Rejected,
+      totalAssigned:   candidates.length,
+      todayCount:      todayIds.length,
+      pendingFeedback: pendingFeedbackIds.length,
+      totalSelected:   selectedIds.length,
+      totalScheduled:  l1Scheduled + l2Scheduled,
+      totalRejected:   l1Rejected  + l2Rejected,
       l1Scheduled, l2Scheduled,
       l1Selected,  l2Selected,
       l1Rejected,  l2Rejected,
     };
-  }, [filtered, todayStr]);
+  }, [filtered, candidates, todayIds, pendingFeedbackIds, selectedIds]);
 
   // ── Interview lists (from filtered set) ───────────────────────────────────
   const { todayInterviews, upcomingInterviews, pendingFeedbackList } = useMemo(() => {
@@ -468,12 +489,12 @@ export default function PanelDashboard() {
       )}
 
       {/* ── ROW 1: Summary Stats ── */}
-      {/* Each card navigates to history page with exact candidate IDs already computed here */}
+      {/* href uses pre-computed ID arrays so count on card == rows in history */}
       <div>
         <SectionLabel>My Interview Overview</SectionLabel>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
 
-          {/* Total assigned — all candidates assigned to this panel member */}
+          {/* Total assigned */}
           <StatCard
             title="Assigned to Me"
             value={stats.totalAssigned}
@@ -483,68 +504,39 @@ export default function PanelDashboard() {
             description="Total candidates assigned"
           />
 
-          {/* Today — only candidates scheduled today */}
+          {/* Today's interviews — uses todayIds (computed from full candidates list) */}
           <StatCard
             title="Today's Interviews"
             value={stats.todayCount}
             icon={Calendar}
             accent="bg-emerald-500"
-            href={buildHistoryUrl({
-              panelUid,
-              stage: "l1",
-              status: "Scheduled",
-              ids: candidates
-                .filter(c =>
-                  (c.l1Status === "Scheduled" && c.l1ScheduledDate === todayStr) ||
-                  (c.l2Status === "Scheduled" && c.l2ScheduledDate === todayStr)
-                )
-                .map(c => c.id)
-                .join(","),
-            })}
+            href={buildHistoryUrl({ panelUid, ids: todayIds.length > 0 ? todayIds.join(",") : "__empty__" })}
             description="Scheduled for today"
           />
 
-          {/* Pending Feedback — past-scheduled with no result */}
+          {/* Pending feedback — uses pendingFeedbackIds */}
           <StatCard
             title="Pending Feedback"
             value={stats.pendingFeedback}
             icon={AlertCircle}
             accent="bg-amber-500"
-            href={buildHistoryUrl({
-              panelUid,
-              ids: candidates
-                .filter(c => {
-                  const l1Past = c.l1Status === "Scheduled" && c.l1ScheduledDate && c.l1ScheduledDate < todayStr && !c.l1Result;
-                  const l2Past = c.l2Status === "Scheduled" && c.l2ScheduledDate && c.l2ScheduledDate < todayStr && !c.l2Result;
-                  return l1Past || l2Past;
-                })
-                .map(c => c.id)
-                .join(","),
-            })}
+            href={buildHistoryUrl({ panelUid, ids: pendingFeedbackIds.length > 0 ? pendingFeedbackIds.join(",") : "__empty__" })}
             description="Feedback not submitted"
             highlight={stats.pendingFeedback > 0}
           />
 
-          {/* Selected by Me — candidates where this panel selected in L1 or L2 */}
+          {/* Selected by Me — uses selectedIds (deduplicated, L1+L2) */}
           <StatCard
             title="Selected by Me"
             value={stats.totalSelected}
             icon={UserCheck}
             accent="bg-indigo-500"
-            href={buildHistoryUrl({
-              panelUid,
-              ids: candidates
-                .filter(c =>
-                  (c.l1InterviewerUid === panelUid && c.l1Status === "Selected") ||
-                  (c.l2InterviewerUid === panelUid && c.l2Status === "Selected")
-                )
-                .map(c => c.id)
-                .join(","),
-            })}
+            href={buildHistoryUrl({ panelUid, ids: selectedIds.length > 0 ? selectedIds.join(",") : "__empty__" })}
             description="L1 + L2 combined"
           />
         </div>
       </div>
+
 
       {/* ── ROW 2: Round Breakdown + Trend Chart ── */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -626,6 +618,19 @@ export default function PanelDashboard() {
                 ))}
               </div>
             </div>
+
+            {/* Pass rate */}
+            {(stats.totalSelected + stats.totalRejected) > 0 && (
+              <div className="px-3 py-3 rounded-xl bg-muted text-center">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">My Pass Rate</p>
+                <p className="text-2xl font-black text-primary mt-1">
+                  {Math.round((stats.totalSelected / (stats.totalSelected + stats.totalRejected)) * 100)}%
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  {stats.totalSelected} selected / {stats.totalSelected + stats.totalRejected} evaluated
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

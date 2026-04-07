@@ -92,8 +92,13 @@ export default function CandidateHistoryPage() {
         setUrlCreatedBy(createdBy);
         setUrlPanelUid(panelUid);
 
-        // If ids param is provided, build a Set for O(1) lookup
-        if (ids && ids.trim().length > 0) {
+        // If ids param is provided, build a Set for O(1) lookup.
+        // "__empty__" is a sentinel meaning "zero results" — used when the
+        // dashboard card count is 0 (e.g. Today's Interviews = 0). Without it,
+        // an empty ids="" string would fall through and show all candidates.
+        if (ids === "__empty__") {
+            setUrlIds(new Set()); // empty Set → zero rows shown
+        } else if (ids && ids.trim().length > 0) {
             const idSet = new Set(ids.split(",").map(s => s.trim()).filter(Boolean));
             setUrlIds(idSet.size > 0 ? idSet : null);
         } else {
@@ -126,9 +131,8 @@ export default function CandidateHistoryPage() {
         if (!Array.isArray(candidates)) return [];
 
         // ── PRIORITY 1: ids param — show ONLY these exact candidates ──────────
-        // This is used by dashboard stat cards (Selected by Me, Pending Feedback, etc.)
-        // It overrides all other filters because the dashboard already computed
-        // the exact matching set.
+        // urlIds is a Set of IDs. An empty Set means zero results (e.g. Today = 0).
+        // null means no ids param was passed — fall through to other filters.
         if (urlIds !== null) {
             return [...candidates]
                 .filter(c => urlIds.has(c.id))
