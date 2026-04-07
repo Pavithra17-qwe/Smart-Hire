@@ -9,7 +9,6 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useSearchParams } from "next/navigation";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -126,7 +125,7 @@ function InterviewCard({
   isToday: boolean; isPast: boolean; candidateId: string;
 }) {
   return (
-    <Link href={`/panel/candidates/history/${candidateId}`} className="block group">
+    <Link href={`/candidates/${candidateId}`} className="block group">
       <div className={cn(
         "p-4 rounded-xl border bg-card hover:bg-muted/30 hover:border-primary/40 transition-all",
         isToday && "border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/10",
@@ -176,14 +175,7 @@ export default function PanelDashboard() {
   const panelUid  = user?.uid ?? "";
   const router    = useRouter();
 
-  const searchParams = useSearchParams();
-const candidateId = searchParams.get("candidateId");
-
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const filteredCandidates = candidates.filter(c => {
-    if (candidateId) return c.id === candidateId;
-    return true;
-  });
   const [loading,    setLoading]    = useState(true);
   const [isMounted,  setIsMounted]  = useState(false);
 
@@ -280,10 +272,6 @@ const candidateId = searchParams.get("candidateId");
       l1Rejected,  l2Rejected,
     };
   }, [filtered, todayStr]);
-
-
-
-  
 
   // ── Interview lists (from filtered set) ───────────────────────────────────
   const { todayInterviews, upcomingInterviews, pendingFeedbackList } = useMemo(() => {
@@ -480,12 +468,12 @@ const candidateId = searchParams.get("candidateId");
       )}
 
       {/* ── ROW 1: Summary Stats ── */}
-      {/* Each card href passes panelUid + the relevant filter so history page shows ONLY those N candidates */}
+      {/* Each card navigates to history page with exact candidate IDs already computed here */}
       <div>
         <SectionLabel>My Interview Overview</SectionLabel>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
 
-          {/* Total assigned — history filtered to panelUid only */}
+          {/* Total assigned — all candidates assigned to this panel member */}
           <StatCard
             title="Assigned to Me"
             value={stats.totalAssigned}
@@ -495,34 +483,64 @@ const candidateId = searchParams.get("candidateId");
             description="Total candidates assigned"
           />
 
-          {/* Today — history filtered to panelUid + today's scheduled */}
+          {/* Today — only candidates scheduled today */}
           <StatCard
             title="Today's Interviews"
             value={stats.todayCount}
             icon={Calendar}
             accent="bg-emerald-500"
-            href={buildHistoryUrl({ panelUid, scheduledDate: todayStr })}
+            href={buildHistoryUrl({
+              panelUid,
+              stage: "l1",
+              status: "Scheduled",
+              ids: candidates
+                .filter(c =>
+                  (c.l1Status === "Scheduled" && c.l1ScheduledDate === todayStr) ||
+                  (c.l2Status === "Scheduled" && c.l2ScheduledDate === todayStr)
+                )
+                .map(c => c.id)
+                .join(","),
+            })}
             description="Scheduled for today"
           />
 
-          {/* Pending feedback — history filtered to panelUid + pending */}
+          {/* Pending Feedback — past-scheduled with no result */}
           <StatCard
             title="Pending Feedback"
             value={stats.pendingFeedback}
             icon={AlertCircle}
             accent="bg-amber-500"
-            href={buildHistoryUrl({ panelUid, pendingFeedback: "true" })}
+            href={buildHistoryUrl({
+              panelUid,
+              ids: candidates
+                .filter(c => {
+                  const l1Past = c.l1Status === "Scheduled" && c.l1ScheduledDate && c.l1ScheduledDate < todayStr && !c.l1Result;
+                  const l2Past = c.l2Status === "Scheduled" && c.l2ScheduledDate && c.l2ScheduledDate < todayStr && !c.l2Result;
+                  return l1Past || l2Past;
+                })
+                .map(c => c.id)
+                .join(","),
+            })}
             description="Feedback not submitted"
             highlight={stats.pendingFeedback > 0}
           />
 
-          {/* Selected — history filtered to panelUid + selected across rounds */}
+          {/* Selected by Me — candidates where this panel selected in L1 or L2 */}
           <StatCard
             title="Selected by Me"
             value={stats.totalSelected}
             icon={UserCheck}
             accent="bg-indigo-500"
-            href={buildHistoryUrl({ panelUid, status: "Selected" })}
+            href={buildHistoryUrl({
+              panelUid,
+              ids: candidates
+                .filter(c =>
+                  (c.l1InterviewerUid === panelUid && c.l1Status === "Selected") ||
+                  (c.l2InterviewerUid === panelUid && c.l2Status === "Selected")
+                )
+                .map(c => c.id)
+                .join(","),
+            })}
             description="L1 + L2 combined"
           />
         </div>
@@ -608,19 +626,6 @@ const candidateId = searchParams.get("candidateId");
                 ))}
               </div>
             </div>
-
-            {/* Pass rate */}
-            {(stats.totalSelected + stats.totalRejected) > 0 && (
-              <div className="px-3 py-3 rounded-xl bg-muted text-center">
-                <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">My Pass Rate</p>
-                <p className="text-2xl font-black text-primary mt-1">
-                  {Math.round((stats.totalSelected / (stats.totalSelected + stats.totalRejected)) * 100)}%
-                </p>
-                <p className="text-[10px] text-muted-foreground">
-                  {stats.totalSelected} selected / {stats.totalSelected + stats.totalRejected} evaluated
-                </p>
-              </div>
-            )}
           </CardContent>
         </Card>
 
@@ -708,18 +713,15 @@ const candidateId = searchParams.get("candidateId");
               {pendingFeedbackList.length > 0 ? (
                 <div className="divide-y divide-border">
                   {pendingFeedbackList.slice(0, 5).map(item => (
-                    // ── FIX: Clicking candidate name goes to the candidate detail page ──
-                    <Link
-                      key={item.id}
-                      href={buildHistoryUrl({
-                        panelUid,
-                        candidateId: item.candidateId,
-                      })}                      className="flex items-center justify-between py-3 group"
-                    >
+                    <div key={item.id} className="flex items-center justify-between py-3 group">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">
+                        {/* Name is the clickable link — uses router.push to navigate to detail page */}
+                        <button
+                          onClick={() => router.push(`/candidates/${item.candidateId}`)}
+                          className="text-sm font-semibold text-primary hover:underline truncate text-left block"
+                        >
                           {item.candidate}
-                        </p>
+                        </button>
                         <p className="text-[11px] text-muted-foreground">{item.round}</p>
                         <p className="text-[10px] text-amber-600 mt-0.5">
                           Interview was on{" "}
@@ -730,9 +732,9 @@ const candidateId = searchParams.get("candidateId");
                       </div>
                       <div className="flex items-center gap-2 ml-3 shrink-0">
                         <Badge className="bg-amber-500 text-[10px]">Pending</Badge>
-                        <MessageSquare className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                        <MessageSquare className="h-4 w-4 text-muted-foreground" />
                       </div>
-                    </Link>
+                    </div>
                   ))}
                 </div>
               ) : (
@@ -760,18 +762,15 @@ const candidateId = searchParams.get("candidateId");
                     const round  = isL1 ? "L1" : "L2";
                     const status = isL1 ? c.l1Status : c.l2Status;
                     return (
-                      // ── FIX: Links directly to the candidate's detail page ──
-                      <Link
-                        key={c.id}
-                        href={buildHistoryUrl({
-                          panelUid,
-                          candidateId: c.id,
-                        })}                        className="flex items-center justify-between py-3 group"
-                      >
+                      <div key={c.id} className="flex items-center justify-between py-3 group">
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">
+                          {/* Name is the clickable link — uses router.push to navigate to detail page */}
+                          <button
+                            onClick={() => router.push(`/candidates/${c.id}`)}
+                            className="text-sm font-semibold text-left hover:text-primary hover:underline truncate block transition-colors"
+                          >
                             {c.candidateName || "Unknown"}
-                          </p>
+                          </button>
                           <p className="text-[11px] text-muted-foreground truncate">
                             {c.candidateDesignation}
                           </p>
@@ -789,7 +788,7 @@ const candidateId = searchParams.get("candidateId");
                             {status}
                           </Badge>
                         </div>
-                      </Link>
+                      </div>
                     );
                   })}
                 </div>

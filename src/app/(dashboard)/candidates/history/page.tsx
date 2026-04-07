@@ -21,21 +21,13 @@ const StageStatusBadge = ({ status }: { status: Status }) => {
     const displayStatus = status || 'Pending';
     const normalized = displayStatus.toLowerCase();
 
-    let color = "!bg-gray-100 !text-gray-700"; // Pending (default)
-
-    if (normalized === "rejected") {
-        color = "!bg-red-100 !text-red-700";
-    } else if (["accepted", "selected", "completed", "joined"].includes(normalized)) {
-        color = "!bg-green-100 !text-green-700";
-    } else if (normalized === "scheduled") {
-        color = "!bg-blue-100 !text-blue-700";
-    } else if (normalized === "released") {
-        color = "!bg-orange-100 !text-orange-700";
-    } else if (normalized === "in progress") {
-        color = "!bg-purple-100 !text-purple-700";
-    } else if (normalized === "locked") {
-        color = "!bg-gray-100 !text-gray-500";
-    }
+    let color = "!bg-gray-100 !text-gray-700";
+    if (normalized === "rejected")                                                    color = "!bg-red-100 !text-red-700";
+    else if (["accepted", "selected", "completed", "joined"].includes(normalized))   color = "!bg-green-100 !text-green-700";
+    else if (normalized === "scheduled")                                              color = "!bg-blue-100 !text-blue-700";
+    else if (normalized === "released")                                               color = "!bg-orange-100 !text-orange-700";
+    else if (normalized === "in progress")                                            color = "!bg-purple-100 !text-purple-700";
+    else if (normalized === "locked")                                                 color = "!bg-gray-100 !text-gray-500";
 
     return <Badge className={`capitalize ${color}`}>{displayStatus}</Badge>;
 };
@@ -44,49 +36,75 @@ const FINAL_STATUSES = ['In Progress', 'Completed', 'Rejected'];
 
 const STAGE_OPTIONS = {
     resumeReview: ['Pending', 'Accepted', 'Rejected'],
-    l1: ['Pending', 'Scheduled', 'Selected', 'Rejected'],
-    l2: ['Pending', 'Scheduled', 'Selected', 'Rejected'],
-    hr: ['Pending', 'Scheduled', 'Selected', 'Rejected'],
+    l1:    ['Pending', 'Scheduled', 'Selected', 'Rejected'],
+    l2:    ['Pending', 'Scheduled', 'Selected', 'Rejected'],
+    hr:    ['Pending', 'Scheduled', 'Selected', 'Rejected'],
     offer: ['Pending', 'Released', 'Accepted', 'Rejected'],
 };
 
 const INITIAL_FILTERS = {
-    name: '',
-    role: '',
-    status: '',
-    resumeReview: '',
-    l1: '',
-    l2: '',
-    hr: '',
-    offer: '',
+    name: '', role: '', status: '',
+    resumeReview: '', l1: '', l2: '', hr: '', offer: '',
+};
+
+// Maps URL stage param → candidate field name
+const STAGE_FIELD_MAP: Record<string, string> = {
+    resume: "resumeReviewStatus",
+    l1:     "l1Status",
+    l2:     "l2Status",
+    hr:     "hrStatus",
+    offer:  "offerStatus",
+    final:  "finalStatus",
 };
 
 export default function CandidateHistoryPage() {
     const { candidates, loading, error } = useCandidate();
     const searchParams = useSearchParams();
-    const isActiveFilter = searchParams.get("active") === "true";
-    const [filters, setFilters] = useState(INITIAL_FILTERS);
-    const candidateId = searchParams.get("candidateId");
+
+    // ── UI filter state ───────────────────────────────────────────────────────
+    const [filters,          setFilters]          = useState(INITIAL_FILTERS);
     const [showStageFilters, setShowStageFilters] = useState(false);
-    const [page, setPage] = useState(0);
-    const [rowsPerPage, setRowsPerPage] = useState(10);
-    const [filterStage,     setFilterStage]     = useState("all");
-const [filterStatus,    setFilterStatus]    = useState("all");
-const [filterCreatedBy, setFilterCreatedBy] = useState("all"); // for agency/HR filter
-const [panelUid, setPanelUid] = useState<string | null>(null);
-useEffect(() => {
-    const stage = searchParams.get("stage");
-    const status = searchParams.get("status");
-    const createdBy = searchParams.get("createdBy");
-    const panelUid = searchParams.get("panelUid");
-    if (panelUid) {
-        setFilterCreatedBy("panel"); // optional flag
-        setPanelUid(panelUid);       // NEW STATE
-      }
-    if (stage && stage !== "all") setFilterStage(stage);
-    if (status && status !== "all") setFilterStatus(status);
-    if (createdBy) setFilterCreatedBy(createdBy);
-  }, [searchParams]);
+    const [page,             setPage]             = useState(0);
+    const [rowsPerPage,      setRowsPerPage]      = useState(10);
+
+    // ── URL-driven filter state ───────────────────────────────────────────────
+    // These are set once on mount from query params sent by the dashboard cards.
+    const [urlPanelUid,   setUrlPanelUid]   = useState<string | null>(null);
+    const [urlStage,      setUrlStage]      = useState<string>("all");
+    const [urlStatus,     setUrlStatus]     = useState<string>("all");
+    const [urlCreatedBy,  setUrlCreatedBy]  = useState<string | null>(null);
+    // ── ids: comma-separated list of candidate IDs passed by dashboard stat cards
+    // When present, ONLY these candidates are shown (exact match, no other filtering needed)
+    const [urlIds,        setUrlIds]        = useState<Set<string> | null>(null);
+    const [isActiveFilter, setIsActiveFilter] = useState(false);
+
+    useEffect(() => {
+        const active      = searchParams.get("active") === "true";
+        const stage       = searchParams.get("stage")      || "all";
+        const status      = searchParams.get("status")     || "all";
+        const createdBy   = searchParams.get("createdBy");
+        const panelUid    = searchParams.get("panelUid");
+        const ids         = searchParams.get("ids");        // ← NEW: comma-separated candidate IDs
+
+        setIsActiveFilter(active);
+        setUrlStage(stage);
+        setUrlStatus(status);
+        setUrlCreatedBy(createdBy);
+        setUrlPanelUid(panelUid);
+
+        // If ids param is provided, build a Set for O(1) lookup
+        if (ids && ids.trim().length > 0) {
+            const idSet = new Set(ids.split(",").map(s => s.trim()).filter(Boolean));
+            setUrlIds(idSet.size > 0 ? idSet : null);
+        } else {
+            setUrlIds(null);
+        }
+
+        // Auto-expand stage filters if coming from a dashboard stage link
+        if (stage !== "all" || status !== "all") {
+            setShowStageFilters(true);
+        }
+    }, [searchParams]);
 
     const handleFilterChange = (filterName: string, value: string) => {
         setFilters(prev => ({ ...prev, [filterName]: value }));
@@ -99,135 +117,152 @@ useEffect(() => {
     };
 
     const clearStageFilters = () => {
-        setFilters(prev => ({
-            ...prev,
-            resumeReview: '',
-            l1: '',
-            l2: '',
-            hr: '',
-            offer: '',
-        }));
+        setFilters(prev => ({ ...prev, resumeReview: '', l1: '', l2: '', hr: '', offer: '' }));
         setPage(0);
     };
 
+    // ── Main filter logic ─────────────────────────────────────────────────────
     const filteredCandidates = useMemo(() => {
+        if (!Array.isArray(candidates)) return [];
+
+        // ── PRIORITY 1: ids param — show ONLY these exact candidates ──────────
+        // This is used by dashboard stat cards (Selected by Me, Pending Feedback, etc.)
+        // It overrides all other filters because the dashboard already computed
+        // the exact matching set.
+        if (urlIds !== null) {
+            return [...candidates]
+                .filter(c => urlIds.has(c.id))
+                .sort((a, b) => {
+                    const dateA = a.createdDate?.toMillis?.() ?? 0;
+                    const dateB = b.createdDate?.toMillis?.() ?? 0;
+                    return dateB - dateA;
+                });
+        }
+
+        // ── PRIORITY 2: active filter ─────────────────────────────────────────
         if (isActiveFilter) {
             return candidates.filter(c => {
-              const final = (c.finalStatus ?? "").toLowerCase();
-              return final !== "completed" && final !== "rejected";
+                const final = (c.finalStatus ?? "").toLowerCase();
+                return final !== "completed" && final !== "rejected";
             });
-          }
-        if (!Array.isArray(candidates)) return [];
-      
-        const stageFieldMap: Record<string, string> = {
-          resume: "resumeReviewStatus",
-          l1: "l1Status",
-          l2: "l2Status",
-          hr: "hrStatus",
-          offer: "offerStatus",
-          final: "finalStatus",
-        };
-      
-        const sorted = [...candidates].sort((a, b) => {
-          const dateA = a.createdDate ? a.createdDate.toMillis() : 0;
-          const dateB = b.createdDate ? b.createdDate.toMillis() : 0;
-          return dateB - dateA;
-        });
-      
-        return sorted.filter(candidate => {
-      
-          // 🔹 Basic filters
-          const nameMatch =
-            !filters.name ||
-            (candidate.candidateName ?? '').toLowerCase().includes(filters.name.toLowerCase());
-      
-          const roleMatch =
-            !filters.role ||
-            (candidate.createdByRole ?? '').toLowerCase() === filters.role.toLowerCase();
-      
-          const statusMatch =
-            !filters.status ||
-            (candidate.finalStatus ?? '').toLowerCase() === filters.status.toLowerCase();
-      
-          // 🔹 Stage filters (existing UI)
-          const rrMatch =
-            !filters.resumeReview ||
-            (candidate.resumeReviewStatus ?? 'Pending').toLowerCase() === filters.resumeReview.toLowerCase();
-      
-          const l1Match =
-            !filters.l1 ||
-            (candidate.l1Status ?? 'Pending').toLowerCase() === filters.l1.toLowerCase();
-      
-          const l2Match =
-            !filters.l2 ||
-            (candidate.l2Status ?? 'Pending').toLowerCase() === filters.l2.toLowerCase();
-      
-          const hrMatch =
-            !filters.hr ||
-            (candidate.hrStatus ?? 'Pending').toLowerCase() === filters.hr.toLowerCase();
-      
-          const offerMatch =
-            !filters.offer ||
-            (candidate.offerStatus ?? 'Pending').toLowerCase() === filters.offer.toLowerCase();
-      
-          // 🔥 NEW: Dashboard filter (URL based)
-          let stageMatch = true;
-      
-          if (filterStage !== "all" && filterStatus !== "all") {
-            const field = stageFieldMap[filterStage];
-            if (field) {
-              stageMatch =
-                (candidate[field] ?? "Pending").toLowerCase() === filterStatus.toLowerCase();
-            }
-          } else if (filterStage === "all" && filterStatus !== "all") {
-            stageMatch =
-              (candidate.finalStatus ?? "").toLowerCase() === filterStatus.toLowerCase();
-          }
-      
-          // 🔥 NEW: createdBy filter
-          let uploaderMatch = true;
+        }
 
-          // HR / Agency
-          if (filterCreatedBy !== "all" && filterCreatedBy !== "panel") {
-            uploaderMatch = candidate.createdBy === filterCreatedBy;
-          }
-          
-          // 🔥 PANEL FILTER (THIS IS THE FIX)
-          if (panelUid) {
-            uploaderMatch =
-              candidate.l1InterviewerUid === panelUid ||
-              candidate.l2InterviewerUid === panelUid;
-          }
-      
-          return (
-            nameMatch &&
-            roleMatch &&
-            statusMatch &&
-            rrMatch &&
-            l1Match &&
-            l2Match &&
-            hrMatch &&
-            offerMatch &&
-            stageMatch &&
-            uploaderMatch
-          );
+        // ── Sort newest first ─────────────────────────────────────────────────
+        const sorted = [...candidates].sort((a, b) => {
+            const dateA = a.createdDate?.toMillis?.() ?? 0;
+            const dateB = b.createdDate?.toMillis?.() ?? 0;
+            return dateB - dateA;
         });
-      
-    }, [candidates, filters, isActiveFilter]);
-    const start = page * rowsPerPage;
-    const end = start + rowsPerPage;
+
+        return sorted.filter(candidate => {
+
+            // ── UI text/dropdown filters ──────────────────────────────────────
+            const nameMatch =
+                !filters.name ||
+                (candidate.candidateName ?? '').toLowerCase().includes(filters.name.toLowerCase());
+
+            const roleMatch =
+                !filters.role ||
+                (candidate.createdByRole ?? '').toLowerCase() === filters.role.toLowerCase();
+
+            const statusMatch =
+                !filters.status ||
+                (candidate.finalStatus ?? '').toLowerCase() === filters.status.toLowerCase();
+
+            const rrMatch =
+                !filters.resumeReview ||
+                (candidate.resumeReviewStatus ?? 'Pending').toLowerCase() === filters.resumeReview.toLowerCase();
+
+            const l1Match =
+                !filters.l1 ||
+                (candidate.l1Status ?? 'Pending').toLowerCase() === filters.l1.toLowerCase();
+
+            const l2Match =
+                !filters.l2 ||
+                (candidate.l2Status ?? 'Pending').toLowerCase() === filters.l2.toLowerCase();
+
+            const hrMatch =
+                !filters.hr ||
+                (candidate.hrStatus ?? 'Pending').toLowerCase() === filters.hr.toLowerCase();
+
+            const offerMatch =
+                !filters.offer ||
+                (candidate.offerStatus ?? 'Pending').toLowerCase() === filters.offer.toLowerCase();
+
+            // ── URL stage+status filter (from admin/panel dashboard clicks) ───
+            // Applies when no ids param is present
+            let stageStatusMatch = true;
+            if (urlStage !== "all" && urlStatus !== "all") {
+                const field = STAGE_FIELD_MAP[urlStage];
+                if (field) {
+                    stageStatusMatch =
+                        (candidate[field] ?? "Pending").toLowerCase() === urlStatus.toLowerCase();
+                }
+            } else if (urlStage === "all" && urlStatus !== "all") {
+                stageStatusMatch =
+                    (candidate.finalStatus ?? "").toLowerCase() === urlStatus.toLowerCase();
+            }
+
+            // ── panelUid filter: show only candidates this panel member handles ──
+            // Works independently and stacks with stage+status filter above
+            let panelMatch = true;
+            if (urlPanelUid) {
+                panelMatch =
+                    candidate.l1InterviewerUid === urlPanelUid ||
+                    candidate.l2InterviewerUid === urlPanelUid;
+            }
+
+            // ── createdBy filter (HR / Agency uploader) ───────────────────────
+            let uploaderMatch = true;
+            if (urlCreatedBy && urlCreatedBy !== "all" && urlCreatedBy !== "panel") {
+                uploaderMatch = candidate.createdBy === urlCreatedBy;
+            }
+
+            return (
+                nameMatch    &&
+                roleMatch    &&
+                statusMatch  &&
+                rrMatch      &&
+                l1Match      &&
+                l2Match      &&
+                hrMatch      &&
+                offerMatch   &&
+                stageStatusMatch &&
+                panelMatch   &&
+                uploaderMatch
+            );
+        });
+
+    }, [
+        candidates, filters, isActiveFilter,
+        urlIds, urlStage, urlStatus, urlPanelUid, urlCreatedBy,
+    ]);
+
+    const start  = page * rowsPerPage;
+    const end    = start + rowsPerPage;
     const paginatedCandidates = filteredCandidates.slice(start, end);
     const totalPages = Math.ceil(filteredCandidates.length / rowsPerPage);
 
     const handleChangePage = (newPage: number) => setPage(newPage);
-
     const handleChangeRowsPerPage = (event: React.ChangeEvent<HTMLSelectElement>) => {
         setRowsPerPage(parseInt(event.target.value, 10));
         setPage(0);
     };
 
-    const isFiltered = Object.values(filters).some(v => v !== '');
-    const isStageFiltered = [filters.resumeReview, filters.l1, filters.l2, filters.hr, filters.offer].some(v => v !== '');
+    const isFiltered       = Object.values(filters).some(v => v !== '');
+    const isStageFiltered  = [filters.resumeReview, filters.l1, filters.l2, filters.hr, filters.offer].some(v => v !== '');
+
+    // Label shown when a URL-driven filter is active (from dashboard card clicks)
+    const urlFilterLabel = useMemo(() => {
+        if (urlIds !== null)         return `Showing ${urlIds.size} candidate${urlIds.size !== 1 ? 's' : ''} from dashboard filter`;
+        if (urlPanelUid && urlStage !== "all" && urlStatus !== "all")
+            return `Filtered: ${urlStage.toUpperCase()} → ${urlStatus} (panel view)`;
+        if (urlPanelUid)             return "Showing your assigned candidates";
+        if (urlCreatedBy)            return `Filtered by uploader`;
+        if (urlStage !== "all" || urlStatus !== "all")
+            return `Stage: ${urlStage !== "all" ? urlStage.toUpperCase() : "All"} · Status: ${urlStatus !== "all" ? urlStatus : "All"}`;
+        return null;
+    }, [urlIds, urlPanelUid, urlStage, urlStatus, urlCreatedBy]);
 
     const roles = useMemo(
         () => Array.from(new Set(candidates.map(c => c.createdByRole).filter(Boolean))),
@@ -237,6 +272,17 @@ useEffect(() => {
     return (
         <div className="p-4 md:p-8 space-y-6">
             <h1 className="text-2xl font-bold">Candidate History</h1>
+
+            {/* URL filter badge — shown when navigated from dashboard */}
+            {urlFilterLabel && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/20 text-sm">
+                    <span className="h-2 w-2 rounded-full bg-primary inline-block" />
+                    <span className="font-medium text-primary">{urlFilterLabel}</span>
+                    <span className="text-muted-foreground ml-1">
+                        — {filteredCandidates.length} candidate{filteredCandidates.length !== 1 ? 's' : ''} shown
+                    </span>
+                </div>
+            )}
 
             {/* Main Filters */}
             <Card>
@@ -319,7 +365,6 @@ useEffect(() => {
                                             </SelectContent>
                                         </Select>
                                     </div>
-
                                     <div className="space-y-1">
                                         <Label>L1 Status</Label>
                                         <Select value={filters.l1} onValueChange={v => handleFilterChange('l1', v)}>
@@ -331,7 +376,6 @@ useEffect(() => {
                                             </SelectContent>
                                         </Select>
                                     </div>
-
                                     <div className="space-y-1">
                                         <Label>L2 Status</Label>
                                         <Select value={filters.l2} onValueChange={v => handleFilterChange('l2', v)}>
@@ -343,7 +387,6 @@ useEffect(() => {
                                             </SelectContent>
                                         </Select>
                                     </div>
-
                                     <div className="space-y-1">
                                         <Label>HR Status</Label>
                                         <Select value={filters.hr} onValueChange={v => handleFilterChange('hr', v)}>
@@ -355,7 +398,6 @@ useEffect(() => {
                                             </SelectContent>
                                         </Select>
                                     </div>
-
                                     <div className="space-y-1">
                                         <Label>Offer Status</Label>
                                         <Select value={filters.offer} onValueChange={v => handleFilterChange('offer', v)}>
@@ -367,7 +409,6 @@ useEffect(() => {
                                             </SelectContent>
                                         </Select>
                                     </div>
-
                                     <div className="flex h-full items-end">
                                         {isStageFiltered && (
                                             <Button variant="ghost" size="sm" onClick={clearStageFilters} className="w-full">
