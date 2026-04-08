@@ -3,15 +3,15 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  doc, onSnapshot, updateDoc, addDoc, getDoc,
-  collection, Timestamp,
+  doc, onSnapshot, updateDoc, addDoc, getDoc, getDocs,
+  collection, Timestamp, query, where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { Calendar, Lock, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Calendar, Lock, TrendingUp, TrendingDown, Minus, AlertCircle, Eye } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { Candidate } from '@/types/candidate';
 import { normalizeStatus } from '@/lib/normalizeStatus';
@@ -23,19 +23,12 @@ type Status =
   | 'Selected' | 'Offer Sent' | 'Joined' | 'In Progress'
   | 'Locked' | 'Released';
 
-interface StageCardProps {
-  title: string;
-  status: Status;
-  isLocked: boolean;
-  scheduledDate?: string;
-  timeSlot?: string;
-  schedulingNotes?: string;
-  savedFeedback?: string;
-  onAction: (action: string, payload: any) => void;
-  isResume?: boolean;
-  isOffer?: boolean;
-  canUpdate: boolean;
-  role: string | null;
+type UserRole = 'admin' | 'hr' | 'agency' | 'panel';
+
+interface PanelUser {
+  uid: string;
+  name: string;
+  email: string;
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -86,145 +79,52 @@ async function sendEmail(params: any) {
 }
 
 // ─── AI SCORE DISPLAY HELPER ─────────────────────────────────────────────────
-// Returns the color theme and a label for any score value including 0
 function getScoreDisplay(score: number | undefined | null): {
-  color: string;
-  bg: string;
-  border: string;
-  label: string;
-  icon: React.ReactNode;
-  textColor: string;
+  color: string; bg: string; border: string; label: string; icon: React.ReactNode; textColor: string;
 } {
   const s = typeof score === 'number' ? score : -1;
-
-  if (s < 0) return {
-    color: '#6B7280', bg: '#F3F4F6', border: '#E5E7EB',
-    label: 'Not Evaluated', icon: <Minus className="h-4 w-4" />, textColor: '#374151',
-  };
-  if (s === 0) return {
-    color: '#DC2626', bg: '#FEF2F2', border: '#FECACA',
-    label: 'No Match', icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B',
-  };
-  if (s <= 30) return {
-    color: '#DC2626', bg: '#FEF2F2', border: '#FECACA',
-    label: 'Very Low Match', icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B',
-  };
-  if (s <= 50) return {
-    color: '#D97706', bg: '#FFFBEB', border: '#FDE68A',
-    label: 'Below Average', icon: <TrendingDown className="h-4 w-4" />, textColor: '#92400E',
-  };
-  if (s <= 65) return {
-    color: '#F59E0B', bg: '#FEF3C7', border: '#FCD34D',
-    label: 'Moderate Match', icon: <Minus className="h-4 w-4" />, textColor: '#78350F',
-  };
-  if (s <= 80) return {
-    color: '#16A34A', bg: '#F0FDF4', border: '#86EFAC',
-    label: 'Good Match', icon: <TrendingUp className="h-4 w-4" />, textColor: '#14532D',
-  };
-  return {
-    color: '#059669', bg: '#ECFDF5', border: '#6EE7B7',
-    label: 'Strong Match', icon: <TrendingUp className="h-4 w-4" />, textColor: '#064E3B',
-  };
+  if (s < 0)   return { color: '#6B7280', bg: '#F3F4F6', border: '#E5E7EB', label: 'Not Evaluated', icon: <Minus className="h-4 w-4" />, textColor: '#374151' };
+  if (s === 0) return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'No Match',       icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B' };
+  if (s <= 30) return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'Very Low Match', icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B' };
+  if (s <= 50) return { color: '#D97706', bg: '#FFFBEB', border: '#FDE68A', label: 'Below Average',  icon: <TrendingDown className="h-4 w-4" />, textColor: '#92400E' };
+  if (s <= 65) return { color: '#F59E0B', bg: '#FEF3C7', border: '#FCD34D', label: 'Moderate Match', icon: <Minus className="h-4 w-4" />,        textColor: '#78350F' };
+  if (s <= 80) return { color: '#16A34A', bg: '#F0FDF4', border: '#86EFAC', label: 'Good Match',     icon: <TrendingUp className="h-4 w-4" />,   textColor: '#14532D' };
+  return              { color: '#059669', bg: '#ECFDF5', border: '#6EE7B7', label: 'Strong Match',   icon: <TrendingUp className="h-4 w-4" />,   textColor: '#064E3B' };
 }
 
-// Generates a rich summary when the stored summary is missing or too short
 function buildFallbackSummary(score: number | undefined | null, candidate: Candidate): string {
   const s = typeof score === 'number' ? score : -1;
-
-  if (s < 0) {
-    return "This candidate has not been evaluated yet. Go to Candidate Evaluation and re-submit to generate an AI match score.";
-  }
-  if (s === 0) {
-    return "Score: 0% — The resume could not be matched against the Job Description. Possible reasons:\n\n• The resume file may be unreadable or encrypted.\n• The resume content does not relate to the job requirements.\n• The JD file was not available at the time of submission.\n\nPlease verify the uploaded resume and re-evaluate if needed.";
-  }
-  if (s <= 30) {
-    return `Score: ${s}% — Very low match.\n\nThe candidate's profile has significant gaps compared to the job requirements. Key qualifications, required skills, or experience level may be missing or insufficient. It is not recommended to proceed without a more detailed review.`;
-  }
-  if (s <= 50) {
-    return `Score: ${s}% — Below average match.\n\nThe candidate meets only a few of the required qualifications. There are notable gaps in skills or experience. A manual review is recommended before proceeding to the interview stage.`;
-  }
-  if (s <= 65) {
-    return `Score: ${s}% — Moderate match.\n\nThe candidate meets some key criteria but does not fully align with all job requirements. There are areas of partial fit alongside a few gaps. Further evaluation through screening is recommended.`;
-  }
-  if (s <= 80) {
-    return `Score: ${s}% — Good match.\n\nThe candidate meets most of the required qualifications with only minor gaps. They are a strong candidate and are recommended for the interview process.`;
-  }
+  if (s < 0)   return "This candidate has not been evaluated yet. Go to Candidate Evaluation and re-submit to generate an AI match score.";
+  if (s === 0) return "Score: 0% — The resume could not be matched against the Job Description. Possible reasons:\n\n• The resume file may be unreadable or encrypted.\n• The resume content does not relate to the job requirements.\n• The JD file was not available at the time of submission.\n\nPlease verify the uploaded resume and re-evaluate if needed.";
+  if (s <= 30) return `Score: ${s}% — Very low match.\n\nThe candidate's profile has significant gaps compared to the job requirements. Key qualifications, required skills, or experience level may be missing or insufficient. It is not recommended to proceed without a more detailed review.`;
+  if (s <= 50) return `Score: ${s}% — Below average match.\n\nThe candidate meets only a few of the required qualifications. There are notable gaps in skills or experience. A manual review is recommended before proceeding to the interview stage.`;
+  if (s <= 65) return `Score: ${s}% — Moderate match.\n\nThe candidate meets some key criteria but does not fully align with all job requirements. There are areas of partial fit alongside a few gaps. Further evaluation through screening is recommended.`;
+  if (s <= 80) return `Score: ${s}% — Good match.\n\nThe candidate meets most of the required qualifications with only minor gaps. They are a strong candidate and are recommended for the interview process.`;
   return `Score: ${s}% — Strong match.\n\nThe candidate closely aligns with the role requirements and demonstrates the key skills and experience needed. Highly recommended for the next stage.`;
 }
 
-// ─── AI MATCH CARD ────────────────────────────────────────────────────────────
+// ─── AI MATCH CARD ─── UNCHANGED ─────────────────────────────────────────────
 const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
-  // Support both matchScore (old) and aiScore (new field name used in dashboard)
   const rawScore  = candidate.matchScore ?? candidate.aiScore;
   const score     = typeof rawScore === 'number' ? rawScore : undefined;
   const display   = getScoreDisplay(score);
-
-  // Use stored summary if it's meaningful (>30 chars), otherwise generate one
   const storedSummary = candidate.matchSummary || "";
-  const summary = storedSummary.trim().length > 30
-    ? storedSummary
-    : buildFallbackSummary(score, candidate);
-
+  const summary = storedSummary.trim().length > 30 ? storedSummary : buildFallbackSummary(score, candidate);
   const scoreLabel = score !== undefined ? `${score}%` : '—';
 
   return (
-    <div style={{
-      background: 'white',
-      borderRadius: '12px',
-      padding: '20px',
-      border: `1.5px solid ${display.border}`,
-    }}>
-      {/* Header */}
+    <div style={{ background: 'white', borderRadius: '12px', padding: '20px', border: `1.5px solid ${display.border}` }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-        <p style={{ fontWeight: 'bold', fontSize: '14px', color: '#111827', margin: 0 }}>
-          🤖 AI Match Analysis
-        </p>
-        <span style={{
-          fontSize: '11px',
-          fontWeight: '600',
-          color: display.color,
-          background: display.bg,
-          border: `1px solid ${display.border}`,
-          padding: '2px 8px',
-          borderRadius: '999px',
-        }}>
+        <p style={{ fontWeight: 'bold', fontSize: '14px', color: '#111827', margin: 0 }}>🤖 AI Match Analysis</p>
+        <span style={{ fontSize: '11px', fontWeight: '600', color: display.color, background: display.bg, border: `1px solid ${display.border}`, padding: '2px 8px', borderRadius: '999px' }}>
           {display.label}
         </span>
       </div>
-
-      {/* Score ring + score number */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '16px',
-        background: display.bg,
-        border: `1px solid ${display.border}`,
-        borderRadius: '10px',
-        padding: '12px 16px',
-        marginBottom: '14px',
-      }}>
-        {/* Circle score */}
-        <div style={{
-          width: '64px',
-          height: '64px',
-          borderRadius: '50%',
-          border: `4px solid ${display.color}`,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          background: 'white',
-        }}>
-          <span style={{ fontSize: score !== undefined ? '18px' : '20px', fontWeight: '900', color: display.color, lineHeight: 1 }}>
-            {scoreLabel}
-          </span>
-          {score !== undefined && (
-            <span style={{ fontSize: '9px', color: display.color, fontWeight: '600', opacity: 0.8 }}>score</span>
-          )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', background: display.bg, border: `1px solid ${display.border}`, borderRadius: '10px', padding: '12px 16px', marginBottom: '14px' }}>
+        <div style={{ width: '64px', height: '64px', borderRadius: '50%', border: `4px solid ${display.color}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: 'white' }}>
+          <span style={{ fontSize: score !== undefined ? '18px' : '20px', fontWeight: '900', color: display.color, lineHeight: 1 }}>{scoreLabel}</span>
+          {score !== undefined && <span style={{ fontSize: '9px', color: display.color, fontWeight: '600', opacity: 0.8 }}>score</span>}
         </div>
-
-        {/* Score bar */}
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', color: display.textColor }}>
             {display.icon}
@@ -232,57 +132,30 @@ const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
           </div>
           {score !== undefined && (
             <div style={{ height: '8px', background: '#E5E7EB', borderRadius: '4px', overflow: 'hidden' }}>
-              <div style={{
-                height: '100%',
-                width: `${score}%`,
-                background: display.color,
-                borderRadius: '4px',
-                transition: 'width 0.5s ease',
-              }} />
+              <div style={{ height: '100%', width: `${score}%`, background: display.color, borderRadius: '4px', transition: 'width 0.5s ease' }} />
             </div>
           )}
           <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
-            {score === undefined
-              ? 'Not yet evaluated'
-              : score === 0
-                ? 'Resume could not be matched'
-                : `${score}/100 match score`
-            }
+            {score === undefined ? 'Not yet evaluated' : score === 0 ? 'Resume could not be matched' : `${score}/100 match score`}
           </p>
         </div>
       </div>
-
-      {/* Summary text */}
       <div>
         <p style={{ fontSize: '12px', fontWeight: '600', color: '#6B7280', marginBottom: '6px' }}>WHY THIS SCORE</p>
-        <div style={{
-          fontSize: '13px',
-          lineHeight: '1.7',
-          color: '#374151',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}>
-{summary.split('\n\n').map((para: string, i: number) => (
-  <p key={i} style={{ margin: '0 0 8px 0' }}>
-    {para}
-  </p>
-))}
+        <div style={{ fontSize: '13px', lineHeight: '1.7', color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {summary.split('\n\n').map((para: string, i: number) => (
+            <p key={i} style={{ margin: '0 0 8px 0' }}>{para}</p>
+          ))}
         </div>
       </div>
-
-      {/* Scoring method badge */}
       {candidate.matchSummary?.includes('Job Description') || candidate.matchSummary?.includes('JD') ? (
         <div style={{ marginTop: '12px', fontSize: '11px', color: '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <span style={{ background: '#EDE9FE', color: '#5B21B6', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>
-            JD-based
-          </span>
+          <span style={{ background: '#EDE9FE', color: '#5B21B6', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>JD-based</span>
           AI compared resume against Job Description
         </div>
       ) : candidate.matchSummary ? (
         <div style={{ marginTop: '12px', fontSize: '11px', color: '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <span style={{ background: '#FEF3C7', color: '#92400E', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>
-            Profile-based
-          </span>
+          <span style={{ background: '#FEF3C7', color: '#92400E', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>Profile-based</span>
           Scored on candidate profile fields (no JD available)
         </div>
       ) : null}
@@ -290,232 +163,439 @@ const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
   );
 };
 
-// ─── STAGE CARD ───────────────────────────────────────────────────────────────
-const StageCard: React.FC<StageCardProps> = ({
-  title, status, isLocked, scheduledDate, timeSlot,
-  schedulingNotes, savedFeedback,
-  onAction, isResume = false, isOffer = false, canUpdate, role,
-}) => {
-  const [date, setDate]                 = useState('');
-  const [slot, setSlot]                 = useState('');
-  const [schedNotes, setSchedNotes]     = useState('');
-  const [schedError, setSchedError]     = useState('');
-  const [postFeedback, setPostFeedback] = useState('');
-  const [postError, setPostError]       = useState('');
-  const [resumeFeedback, setResumeFeedback] = useState('');
-  const [offerFeedback, setOfferFeedback]   = useState('');
-  const [offerError, setOfferError]         = useState('');
+// ─── INTERVIEW WORKFLOW HELPERS ───────────────────────────────────────────────
+const iBox: React.CSSProperties  = { background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', border: '1px solid #E5E7EB' };
+const lbl: React.CSSProperties   = { fontSize: '12px', fontWeight: '600', color: '#6B7280', marginBottom: '4px' };
+const saved: React.CSSProperties = { fontSize: '13px', lineHeight: '1.6', wordBreak: 'break-word', whiteSpace: 'pre-wrap' };
+const errS: React.CSSProperties  = { color: '#DC2626', fontSize: '12px', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px' };
 
-  const today      = new Date().toISOString().split('T')[0];
-  const normalized = normalizeStatus(status);
+const TIME_SLOTS = [
+  '09:00am - 10:00am', '10:00am - 11:00am', '11:00am - 12:00pm',
+  '01:00pm - 02:00pm', '02:00pm - 03:00pm', '03:00pm - 04:00pm', '04:00pm - 05:00pm',
+];
+
+// Read-only notice for non-acting roles
+const ReadOnlyNote: React.FC<{ msg: string }> = ({ msg }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#9CA3AF', background: '#F9FAFB', borderRadius: '8px', padding: '8px 12px', border: '1px solid #E5E7EB' }}>
+    <Eye className="h-4 w-4" style={{ flexShrink: 0 }} /> {msg}
+  </div>
+);
+
+// Card shell — same visual style as original StageCard
+const StageShell: React.FC<{ title: string; status: string; isLocked: boolean; children: React.ReactNode }> = ({ title, status, isLocked, children }) => {
+  const normalized = normalizeStatus(status as any);
   const isActive   = !isLocked && ['Pending', 'Scheduled', 'Released'].includes(normalized.name);
-
-  const canPerformAction = () => {
-    if (!canUpdate)                                                         return false;
-    if (role === 'admin' || role === 'agency')                              return false;
-    if (role === 'panel' && (title === 'HR Round' || title === 'Offer Stage')) return false;
-    if (role === 'hr' && ['Resume Review','L1 Interview','L2 Interview'].includes(title)) return false;
-    return true;
-  };
-
-  const handlePropose = () => {
-    if (!date || !slot) { alert('Please pick a date and time slot.'); return; }
-    if (!schedNotes.trim()) { setSchedError('Scheduling notes are required.'); return; }
-    setSchedError('');
-    onAction('schedule', { scheduledDate: date, timeSlot: slot, schedulingNotes: schedNotes.trim() });
-  };
-
-  const handlePostAction = (action: 'select' | 'reject') => {
-    if (!postFeedback.trim()) { setPostError('Interview feedback is required.'); return; }
-    setPostError('');
-    onAction(action, { feedback: postFeedback.trim() });
-  };
-
-  const handleOfferAction = (action: 'offer-accept' | 'offer-reject') => {
-    if (!offerFeedback.trim()) { setOfferError('Feedback is required.'); return; }
-    setOfferError('');
-    onAction(action, { feedback: offerFeedback.trim() });
-  };
-
-  const timeSlots = [
-    '09:00am - 10:00am', '10:00am - 11:00am', '11:00am - 12:00pm',
-    '01:00pm - 02:00pm', '02:00pm - 03:00pm', '03:00pm - 04:00pm', '04:00pm - 05:00pm',
-  ];
-
-  const infoBox: React.CSSProperties  = { background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', border: '1px solid #E5E7EB' };
-  const lbl: React.CSSProperties      = { fontSize: '12px', fontWeight: '600', color: '#6B7280', marginBottom: '4px' };
-  const saved: React.CSSProperties    = { fontSize: '13px', lineHeight: '1.6', wordBreak: 'break-word', whiteSpace: 'pre-wrap' };
-  const errStyle: React.CSSProperties = { color: '#DC2626', fontSize: '12px', marginTop: '4px' };
-
   return (
-    <div style={{
-      borderRadius: '12px',
-      border: `1.5px solid ${isActive ? '#7C3AED' : '#E5E7EB'}`,
-      boxShadow: isActive ? '0 2px 10px rgba(124,58,237,0.08)' : 'none',
-      background: 'white',
-    }}>
+    <div style={{ borderRadius: '12px', border: `1.5px solid ${isActive ? '#7C3AED' : '#E5E7EB'}`, boxShadow: isActive ? '0 2px 10px rgba(124,58,237,0.08)' : 'none', background: 'white' }}>
       <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #F3F4F6' }}>
         <h3 style={{ fontWeight: 'bold', fontSize: '15px', margin: 0 }}>{title}</h3>
-        <Badge className={normalized.color}>{normalized.name}</Badge>
+        <Badge className={normalized.color}>{isLocked ? 'Locked' : normalized.name}</Badge>
       </div>
-
       <div style={{ padding: '14px 16px' }}>
         {isLocked ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#9CA3AF', fontSize: '13px' }}>
-            <Lock className="h-4 w-4" />
-            <span>Complete the previous stage to unlock this step.</span>
+            <Lock className="h-4 w-4" /><span>Complete the previous stage to unlock this step.</span>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-
-            {/* RESUME REVIEW */}
-            {isResume && (
-              <>
-                {(normalized.name === 'Accepted' || normalized.name === 'Rejected') && (
-                  <div style={infoBox}>
-                    <p style={lbl}>Feedback</p>
-                    <p style={{ ...saved, color: normalized.name === 'Rejected' ? '#DC2626' : '#374151' }}>
-                      {savedFeedback || 'No feedback provided.'}
-                    </p>
-                  </div>
-                )}
-                {canPerformAction() && normalized.name === 'Pending' && (
-                  <>
-                    <Textarea
-                      placeholder="Enter resume review feedback (mandatory)…"
-                      value={resumeFeedback}
-                      onChange={e => setResumeFeedback(e.target.value)}
-                      style={{ resize: 'vertical', minHeight: '80px' }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                      <Button variant="destructive" onClick={() => { if (!resumeFeedback.trim()) { alert('Feedback is required.'); return; } onAction('reject', { feedback: resumeFeedback.trim() }); }}>✕ Reject</Button>
-                      <Button variant="default"     onClick={() => { if (!resumeFeedback.trim()) { alert('Feedback is required.'); return; } onAction('accept', { feedback: resumeFeedback.trim() }); }}>✓ Accept</Button>
-                    </div>
-                  </>
-                )}
-              </>
-            )}
-
-            {/* L1 / L2 / HR INTERVIEWS */}
-            {!isResume && !isOffer && (
-              <>
-                {['Scheduled','Selected','Rejected'].includes(normalized.name) && scheduledDate && (
-                  <div style={infoBox}>
-                    <p style={lbl}>📅 Scheduled</p>
-                    <p style={{ ...saved, fontWeight: '600', color: '#374151' }}>
-                      {new Date(scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {timeSlot}
-                    </p>
-                  </div>
-                )}
-                {['Scheduled','Selected','Rejected'].includes(normalized.name) && schedulingNotes && (
-                  <div style={infoBox}>
-                    <p style={lbl}>📝 Scheduling Notes</p>
-                    <p style={{ ...saved, color: '#374151' }}>{schedulingNotes}</p>
-                  </div>
-                )}
-                {['Selected','Rejected'].includes(normalized.name) && savedFeedback && (
-                  <div style={{ ...infoBox, borderColor: normalized.name === 'Rejected' ? '#FCA5A5' : '#6EE7B7' }}>
-                    <p style={lbl}>💬 Interview Feedback</p>
-                    <p style={{ ...saved, color: normalized.name === 'Rejected' ? '#DC2626' : '#065F46' }}>{savedFeedback}</p>
-                  </div>
-                )}
-                {canPerformAction() && normalized.name === 'Pending' && (
-                  <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
-                    <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Propose Interview Time</p>
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
-                      <div style={{ position: 'relative', minWidth: '150px' }}>
-                        <Calendar className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" style={{ pointerEvents: 'none' }} />
-                        <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="pl-10" min={today} style={{ background: 'white', borderRadius: '8px' }} />
-                      </div>
-                      <select value={slot} onChange={e => setSlot(e.target.value)} style={{ borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px', background: 'white', flex: 1, minWidth: '160px' }}>
-                        <option value="">Select a time slot</option>
-                        {timeSlots.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                    <p style={{ ...lbl, marginBottom: '6px' }}>Scheduling Notes <span style={{ color: '#DC2626' }}>*</span></p>
-                    <Textarea
-                      placeholder="Add notes for this interview…"
-                      value={schedNotes}
-                      onChange={e => { setSchedNotes(e.target.value); if (e.target.value.trim()) setSchedError(''); }}
-                      style={{ resize: 'vertical', minHeight: '80px', background: 'white' }}
-                    />
-                    {schedError && <p style={errStyle}>⚠ {schedError}</p>}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
-                      <Button onClick={handlePropose} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>📅 Propose</Button>
-                    </div>
-                  </div>
-                )}
-                {canPerformAction() && normalized.name === 'Scheduled' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <p style={{ ...lbl, marginBottom: '2px' }}>Interview Feedback <span style={{ color: '#DC2626' }}>*</span></p>
-                    <Textarea
-                      placeholder="Enter post-interview feedback (mandatory)…"
-                      value={postFeedback}
-                      onChange={e => { setPostFeedback(e.target.value); if (e.target.value.trim()) setPostError(''); }}
-                      style={{ resize: 'vertical', minHeight: '90px' }}
-                    />
-                    {postError && <p style={errStyle}>⚠ {postError}</p>}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
-                      <Button variant="destructive" onClick={() => handlePostAction('reject')}>✕ Reject</Button>
-                      <Button variant="default"     onClick={() => handlePostAction('select')}>✓ Select</Button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* OFFER STAGE */}
-            {isOffer && (
-              <>
-                {normalized.name === 'Released' && !canPerformAction() && (
-                  <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600' }}>📨 Offer has been released. Awaiting candidate response.</p>
-                )}
-                {(normalized.name === 'Accepted' || normalized.name === 'Rejected') && savedFeedback && (
-                  <div style={{ ...infoBox, borderColor: normalized.name === 'Accepted' ? '#6EE7B7' : '#FCA5A5' }}>
-                    <p style={lbl}>Response Notes</p>
-                    <p style={{ ...saved, color: normalized.name === 'Accepted' ? '#065F46' : '#DC2626' }}>
-                      {normalized.name === 'Accepted' ? '🎉 ' : ''}{savedFeedback}
-                    </p>
-                  </div>
-                )}
-                {canPerformAction() && normalized.name === 'Pending' && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <Button onClick={() => onAction('release-offer', {})} style={{ background: '#7C3AED', color: 'white' }}>📨 Release Offer</Button>
-                  </div>
-                )}
-                {canPerformAction() && normalized.name === 'Released' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600' }}>📨 Offer has been released</p>
-                    <p style={{ ...lbl, marginBottom: '2px' }}>Response Notes <span style={{ color: '#DC2626' }}>*</span></p>
-                    <Textarea
-                      placeholder="Enter candidate's response or notes (mandatory)…"
-                      value={offerFeedback}
-                      onChange={e => { setOfferFeedback(e.target.value); if (e.target.value.trim()) setOfferError(''); }}
-                      style={{ resize: 'vertical', minHeight: '80px' }}
-                    />
-                    {offerError && <p style={errStyle}>⚠ {offerError}</p>}
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
-                      <Button variant="destructive" onClick={() => handleOfferAction('offer-reject')}>✕ Mark Rejected</Button>
-                      <Button variant="default"     onClick={() => handleOfferAction('offer-accept')}>✓ Mark Accepted</Button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>{children}</div>
         )}
       </div>
     </div>
   );
 };
 
+// ─── STAGE 1: RESUME REVIEW ── HR only ───────────────────────────────────────
+const ResumeReviewCard: React.FC<{
+  candidate: Candidate; role: UserRole | null;
+  onAction: (action: string, payload: any) => void;
+}> = ({ candidate, role, onAction }) => {
+  const [feedback, setFeedback] = useState('');
+  const [err, setErr]           = useState('');
+  const status = candidate.resumeReviewStatus || 'Pending';
+  const isDone = ['Accepted', 'Rejected'].includes(status);
+
+  const handleAct = (action: 'accept' | 'reject') => {
+    if (!feedback.trim()) { setErr('Feedback is required.'); return; }
+    setErr('');
+    onAction(action, { feedback: feedback.trim() });
+  };
+
+  return (
+    <StageShell title="Resume Review" status={status} isLocked={false}>
+      {isDone && (
+        <div style={iBox}>
+          <p style={lbl}>Feedback</p>
+          <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#374151' }}>
+            {candidate.resumeFeedback || 'No feedback provided.'}
+          </p>
+        </div>
+      )}
+      {role === 'hr' && status === 'Pending' && (
+        <>
+          <Textarea
+            placeholder="Enter resume review feedback (mandatory)…"
+            value={feedback}
+            onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
+            style={{ resize: 'vertical', minHeight: '80px' }}
+          />
+          {err && <p style={errS}><AlertCircle className="h-3 w-3" />{err}</p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <Button variant="destructive" onClick={() => handleAct('reject')}>✕ Reject</Button>
+            <Button variant="default"     onClick={() => handleAct('accept')}>✓ Move to L1</Button>
+          </div>
+        </>
+      )}
+      {role !== 'hr' && status === 'Pending' && (
+        <ReadOnlyNote msg="Only HR can review and action the resume." />
+      )}
+    </StageShell>
+  );
+};
+
+// ─── STAGE 2 & 3: L1 / L2 INTERVIEW ─────────────────────────────────────────
+// HR schedules + assigns panel → Panel submits feedback → HR makes final call
+const InterviewStageCard: React.FC<{
+  candidate: Candidate; role: UserRole | null; user: any;
+  panelUsers: PanelUser[]; stageKey: 'l1' | 'l2'; title: string;
+  onAction: (action: string, payload: any) => void;
+}> = ({ candidate, role, user, panelUsers, stageKey, title, onAction }) => {
+  const [date, setDate]         = useState('');
+  const [slot, setSlot]         = useState('');
+  const [notes, setNotes]       = useState('');
+  const [panelUid, setPanelUid] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [schedErr, setSchedErr] = useState('');
+  const [fbErr, setFbErr]       = useState('');
+  const today = new Date().toISOString().split('T')[0];
+
+  const statusKey    = stageKey === 'l1' ? 'l1Status'          : 'l2Status';
+  const dateKey      = stageKey === 'l1' ? 'l1ScheduledDate'   : 'l2ScheduledDate';
+  const slotKey      = stageKey === 'l1' ? 'l1TimeSlot'        : 'l2TimeSlot';
+  const notesKey     = stageKey === 'l1' ? 'l1SchedulingNotes' : 'l2SchedulingNotes';
+  const fbKey        = stageKey === 'l1' ? 'l1Feedback'        : 'l2Feedback';
+  const panelFbKey   = stageKey === 'l1' ? 'l1PanelFeedback'   : 'l2PanelFeedback';
+  const panelUidKey  = stageKey === 'l1' ? 'l1PanelUid'        : 'l2PanelUid';
+  const panelNmKey   = stageKey === 'l1' ? 'l1PanelName'       : 'l2PanelName';
+
+  const status        = (candidate as any)[statusKey]  || 'Locked';
+  const savedDate     = (candidate as any)[dateKey];
+  const savedSlot     = (candidate as any)[slotKey];
+  const savedNotes    = (candidate as any)[notesKey];
+  const savedFeedback = (candidate as any)[fbKey];
+  const panelFeedback = (candidate as any)[panelFbKey];
+  const assignedPanel = (candidate as any)[panelUidKey];
+  const panelName     = (candidate as any)[panelNmKey];
+
+  const isLocked        = status === 'Locked';
+  const isHR            = role === 'hr';
+  const isPanel         = role === 'panel';
+  const isAssignedPanel = isPanel && user?.uid === assignedPanel;
+
+  const canHRSchedule    = isHR && status === 'Pending';
+  const canPanelFeedback = isAssignedPanel && status === 'Scheduled' && !panelFeedback;
+  const canHRDecide      = isHR && status === 'Scheduled' && !!panelFeedback;
+
+  const handleSchedule = () => {
+    if (!panelUid)      { setSchedErr('Please select a panel member.'); return; }
+    if (!date || !slot) { setSchedErr('Please select date and time.'); return; }
+    if (!notes.trim())  { setSchedErr('Scheduling notes are required.'); return; }
+    setSchedErr('');
+    const panel = panelUsers.find(p => p.uid === panelUid);
+    onAction('schedule', {
+      scheduledDate: date, timeSlot: slot, schedulingNotes: notes.trim(),
+      panelUid, panelName: panel?.name || panel?.email || 'Panel', panelEmail: panel?.email || '',
+    });
+  };
+
+  const handlePanelFeedback = (action: 'panel-select' | 'panel-reject') => {
+    if (!feedback.trim()) { setFbErr('Feedback is required.'); return; }
+    setFbErr('');
+    onAction(action, { feedback: feedback.trim() });
+  };
+
+  return (
+    <StageShell title={title} status={status} isLocked={isLocked}>
+
+      {/* Saved schedule info */}
+      {['Scheduled','Selected','Rejected'].includes(status) && savedDate && (
+        <div style={iBox}>
+          <p style={lbl}>📅 Scheduled</p>
+          <p style={{ ...saved, fontWeight: '600', color: '#374151' }}>
+            {new Date(savedDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {savedSlot}
+          </p>
+        </div>
+      )}
+      {['Scheduled','Selected','Rejected'].includes(status) && savedNotes && (
+        <div style={iBox}><p style={lbl}>📝 Scheduling Notes</p><p style={{ ...saved, color: '#374151' }}>{savedNotes}</p></div>
+      )}
+      {['Scheduled','Selected','Rejected'].includes(status) && panelName && (
+        <div style={iBox}><p style={lbl}>👤 Assigned Panel</p><p style={{ ...saved, color: '#1D4ED8', fontWeight: '600' }}>{panelName}</p></div>
+      )}
+
+      {/* Final feedback (after HR decision) */}
+      {['Selected','Rejected'].includes(status) && savedFeedback && (
+        <div style={{ ...iBox, borderColor: status === 'Rejected' ? '#FCA5A5' : '#6EE7B7' }}>
+          <p style={lbl}>💬 Interview Feedback</p>
+          <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46' }}>{savedFeedback}</p>
+        </div>
+      )}
+
+      {/* Panel feedback visible to HR while awaiting decision */}
+      {isHR && panelFeedback && status === 'Scheduled' && (
+        <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: '8px', padding: '10px 12px' }}>
+          <p style={{ ...lbl, color: '#92400E' }}>📋 Panel Feedback — Awaiting Your Decision</p>
+          <p style={{ ...saved, color: '#78350F' }}>{panelFeedback}</p>
+        </div>
+      )}
+
+      {/* HR: Schedule form */}
+      {canHRSchedule && (
+        <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
+          <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Schedule {title}</p>
+          <p style={{ ...lbl, marginBottom: '6px' }}>Assign Panel Member <span style={{ color: '#DC2626' }}>*</span></p>
+          <select
+            value={panelUid}
+            onChange={e => { setPanelUid(e.target.value); if (e.target.value) setSchedErr(''); }}
+            style={{ width: '100%', borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px 12px', fontSize: '13px', marginBottom: '12px', background: 'white' }}
+          >
+            <option value="">— Select Panel Member —</option>
+            {panelUsers.map(p =><option key={p.uid} value={p.uid}>
+  {p.name ? `${p.name} (${p.email})` : p.email}
+</option>)}
+          </select>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
+            <div style={{ position: 'relative', minWidth: '150px' }}>
+              <Calendar className="h-4 w-4" style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
+              <Input type="date" value={date} min={today} onChange={e => setDate(e.target.value)} className="pl-10" style={{ background: 'white', borderRadius: '8px' }} />
+            </div>
+            <select value={slot} onChange={e => setSlot(e.target.value)} style={{ borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px', background: 'white', flex: 1, minWidth: '160px', fontSize: '13px' }}>
+              <option value="">Select a time slot</option>
+              {TIME_SLOTS.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <p style={{ ...lbl, marginBottom: '6px' }}>Scheduling Notes <span style={{ color: '#DC2626' }}>*</span></p>
+          <Textarea
+            placeholder="Add notes for this interview…"
+            value={notes}
+            onChange={e => { setNotes(e.target.value); if (e.target.value.trim()) setSchedErr(''); }}
+            style={{ resize: 'vertical', minHeight: '80px', background: 'white' }}
+          />
+          {schedErr && <p style={errS}><AlertCircle className="h-3 w-3" />{schedErr}</p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+            <Button onClick={handleSchedule} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>📅 Schedule</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Panel: Submit feedback — only if assigned */}
+      {canPanelFeedback && (
+        <div style={{ background: '#F0FDF4', borderRadius: '10px', padding: '14px', border: '1px solid #86EFAC' }}>
+          <p style={{ fontWeight: 'bold', fontSize: '13px', color: '#065F46', marginBottom: '8px' }}>Submit Interview Feedback</p>
+          <Textarea
+            placeholder="Enter your technical interview feedback (mandatory)…"
+            value={feedback}
+            onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }}
+            style={{ resize: 'vertical', minHeight: '90px' }}
+          />
+          {fbErr && <p style={errS}><AlertCircle className="h-3 w-3" />{fbErr}</p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+            <Button variant="destructive" onClick={() => handlePanelFeedback('panel-reject')}>✕ Reject</Button>
+            <Button variant="default"     onClick={() => handlePanelFeedback('panel-select')}>✓ Select</Button>
+          </div>
+        </div>
+      )}
+
+      {/* HR: Final decision after panel submits feedback */}
+      {canHRDecide && (
+        <div style={{ background: '#EFF6FF', borderRadius: '10px', padding: '14px', border: '1px solid #BFDBFE' }}>
+          <p style={{ fontWeight: 'bold', fontSize: '13px', color: '#1D4ED8', marginBottom: '4px' }}>HR Decision</p>
+          <p style={{ fontSize: '12px', color: '#3B82F6', marginBottom: '10px' }}>Panel has submitted feedback above. Make your final decision.</p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <Button variant="destructive" onClick={() => onAction('reject', {})}>✕ Reject</Button>
+            <Button variant="default"     onClick={() => onAction('select', {})}>✓ Move to {stageKey === 'l1' ? 'L2' : 'HR Round'}</Button>
+          </div>
+        </div>
+      )}
+
+      {/* HR waiting for panel feedback */}
+      {isHR && status === 'Scheduled' && !panelFeedback && (
+        <ReadOnlyNote msg="Waiting for the assigned panel member to submit their feedback." />
+      )}
+
+      {/* Panel not assigned */}
+      {isPanel && !isAssignedPanel && !isLocked && (
+        <ReadOnlyNote msg="You are not assigned to this interview. View only." />
+      )}
+
+      {/* Panel already submitted feedback */}
+      {isPanel && isAssignedPanel && status === 'Scheduled' && panelFeedback && (
+        <div style={{ ...iBox, borderColor: '#86EFAC' }}>
+          <p style={{ ...lbl, color: '#065F46' }}>✅ Your Feedback Submitted</p>
+          <p style={{ ...saved, color: '#065F46' }}>{panelFeedback}</p>
+        </div>
+      )}
+
+      {/* Admin / Agency view */}
+      {(role === 'admin' || role === 'agency') && !isLocked && (
+        <ReadOnlyNote msg={`Only HR and assigned panel can manage ${title}.`} />
+      )}
+    </StageShell>
+  );
+};
+
+// ─── STAGE 4: HR ROUND ── HR only ────────────────────────────────────────────
+const HRRoundCard: React.FC<{
+  candidate: Candidate; role: UserRole | null;
+  onAction: (action: string, payload: any) => void;
+}> = ({ candidate, role, onAction }) => {
+  const [date, setDate]         = useState('');
+  const [slot, setSlot]         = useState('');
+  const [notes, setNotes]       = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [schedErr, setSchedErr] = useState('');
+  const [fbErr, setFbErr]       = useState('');
+  const today  = new Date().toISOString().split('T')[0];
+  const status = candidate.hrStatus || 'Locked';
+  const isHR   = role === 'hr';
+
+  const handleSchedule = () => {
+    if (!date || !slot)  { setSchedErr('Please select date and time.'); return; }
+    if (!notes.trim())   { setSchedErr('Scheduling notes are required.'); return; }
+    setSchedErr('');
+    onAction('schedule', { scheduledDate: date, timeSlot: slot, schedulingNotes: notes.trim() });
+  };
+
+  const handleDecide = (action: 'select' | 'reject') => {
+    if (!feedback.trim()) { setFbErr('Feedback is required.'); return; }
+    setFbErr('');
+    onAction(action, { feedback: feedback.trim() });
+  };
+
+  return (
+    <StageShell title="HR Round" status={status} isLocked={status === 'Locked'}>
+      {['Scheduled','Selected','Rejected'].includes(status) && candidate.hrScheduledDate && (
+        <div style={iBox}>
+          <p style={lbl}>📅 Scheduled</p>
+          <p style={{ ...saved, fontWeight: '600', color: '#374151' }}>
+            {new Date(candidate.hrScheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {candidate.hrTimeSlot}
+          </p>
+        </div>
+      )}
+      {['Scheduled','Selected','Rejected'].includes(status) && candidate.hrSchedulingNotes && (
+        <div style={iBox}><p style={lbl}>📝 Scheduling Notes</p><p style={{ ...saved, color: '#374151' }}>{candidate.hrSchedulingNotes}</p></div>
+      )}
+      {['Selected','Rejected'].includes(status) && candidate.hrFeedback && (
+        <div style={{ ...iBox, borderColor: status === 'Rejected' ? '#FCA5A5' : '#6EE7B7' }}>
+          <p style={lbl}>💬 HR Feedback</p>
+          <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46' }}>{candidate.hrFeedback}</p>
+        </div>
+      )}
+      {isHR && status === 'Pending' && (
+        <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
+          <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Schedule HR Round</p>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
+            <div style={{ position: 'relative', minWidth: '150px' }}>
+              <Calendar className="h-4 w-4" style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
+              <Input type="date" value={date} min={today} onChange={e => setDate(e.target.value)} className="pl-10" style={{ background: 'white', borderRadius: '8px' }} />
+            </div>
+            <select value={slot} onChange={e => setSlot(e.target.value)} style={{ borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px', background: 'white', flex: 1, minWidth: '160px', fontSize: '13px' }}>
+              <option value="">Select a time slot</option>
+              {TIME_SLOTS.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <p style={{ ...lbl, marginBottom: '6px' }}>Scheduling Notes <span style={{ color: '#DC2626' }}>*</span></p>
+          <Textarea placeholder="Add notes for this HR round…" value={notes}
+            onChange={e => { setNotes(e.target.value); if (e.target.value.trim()) setSchedErr(''); }}
+            style={{ resize: 'vertical', minHeight: '80px', background: 'white' }} />
+          {schedErr && <p style={errS}><AlertCircle className="h-3 w-3" />{schedErr}</p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+            <Button onClick={handleSchedule} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>📅 Schedule</Button>
+          </div>
+        </div>
+      )}
+      {isHR && status === 'Scheduled' && (
+        <>
+          <p style={{ ...lbl, marginBottom: '2px' }}>Interview Feedback <span style={{ color: '#DC2626' }}>*</span></p>
+          <Textarea placeholder="Enter post-HR-round feedback (mandatory)…" value={feedback}
+            onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }}
+            style={{ resize: 'vertical', minHeight: '90px' }} />
+          {fbErr && <p style={errS}><AlertCircle className="h-3 w-3" />{fbErr}</p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
+            <Button variant="destructive" onClick={() => handleDecide('reject')}>✕ Reject</Button>
+            <Button variant="default"     onClick={() => handleDecide('select')}>✓ Move to Offer</Button>
+          </div>
+        </>
+      )}
+      {!isHR && status !== 'Locked' && (
+        <ReadOnlyNote msg="Only HR can manage the HR Round." />
+      )}
+    </StageShell>
+  );
+};
+
+// ─── STAGE 5: OFFER STAGE ── HR only ─────────────────────────────────────────
+const OfferStageCard: React.FC<{
+  candidate: Candidate; role: UserRole | null;
+  onAction: (action: string, payload: any) => void;
+}> = ({ candidate, role, onAction }) => {
+  const [offerFeedback, setOfferFeedback] = useState('');
+  const [offerError, setOfferError]       = useState('');
+  const status = candidate.offerStatus || 'Locked';
+  const isHR   = role === 'hr';
+
+  const handleOfferAction = (action: 'offer-accept' | 'offer-reject') => {
+    if (!offerFeedback.trim()) { setOfferError('Response notes are required.'); return; }
+    setOfferError('');
+    onAction(action, { feedback: offerFeedback.trim() });
+  };
+
+  return (
+    <StageShell title="Offer Stage" status={status} isLocked={status === 'Locked'}>
+      {status === 'Released' && !isHR && (
+        <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600' }}>📨 Offer has been released. Awaiting candidate response.</p>
+      )}
+      {(status === 'Accepted' || status === 'Rejected') && candidate.offerFeedback && (
+        <div style={{ ...iBox, borderColor: status === 'Accepted' ? '#6EE7B7' : '#FCA5A5' }}>
+          <p style={lbl}>Response Notes</p>
+          <p style={{ ...saved, color: status === 'Accepted' ? '#065F46' : '#DC2626' }}>
+            {status === 'Accepted' ? '🎉 ' : ''}{candidate.offerFeedback}
+          </p>
+        </div>
+      )}
+      {isHR && status === 'Pending' && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <Button onClick={() => onAction('release-offer', {})} style={{ background: '#7C3AED', color: 'white' }}>📨 Release Offer</Button>
+        </div>
+      )}
+      {isHR && status === 'Released' && (
+        <>
+          <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600' }}>📨 Offer has been released</p>
+          <p style={{ ...lbl, marginBottom: '2px' }}>Response Notes <span style={{ color: '#DC2626' }}>*</span></p>
+          <Textarea placeholder="Enter candidate's response or notes (mandatory)…" value={offerFeedback}
+            onChange={e => { setOfferFeedback(e.target.value); if (e.target.value.trim()) setOfferError(''); }}
+            style={{ resize: 'vertical', minHeight: '80px' }} />
+          {offerError && <p style={errS}><AlertCircle className="h-3 w-3" />{offerError}</p>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
+            <Button variant="destructive" onClick={() => handleOfferAction('offer-reject')}>✕ Mark Rejected</Button>
+            <Button variant="default"     onClick={() => handleOfferAction('offer-accept')}>✓ Mark Accepted</Button>
+          </div>
+        </>
+      )}
+      {!isHR && status !== 'Locked' && status !== 'Released' && (
+        <ReadOnlyNote msg="Only HR can manage the Offer Stage." />
+      )}
+    </StageShell>
+  );
+};
+
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 export default function CandidatePage({ params }: { params: { candidateId: string } }) {
   const { candidateId } = params;
-  const [candidate, setCandidate] = useState<Candidate | null>(null);
-  const [loading, setLoading]     = useState(true);
-  const router                    = useRouter();
-  const { role, user }            = useAuth();
+  const [candidate, setCandidate]   = useState<Candidate | null>(null);
+  const [loading, setLoading]       = useState(true);
+  const [panelUsers, setPanelUsers] = useState<PanelUser[]>([]);
+  const router                      = useRouter();
+  const { role, user }              = useAuth();
 
   useEffect(() => {
     if (!candidateId) return;
@@ -526,17 +606,31 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     return () => unsub();
   }, [candidateId]);
 
+  // HR needs panel list for L1/L2 scheduling dropdowns
+  useEffect(() => {
+    if (role !== 'hr') return;
+    getDocs(query(collection(db, 'users'), where('role', '==', 'panel'))).then(snap => {
+      setPanelUsers(snap.docs.map(d => {
+        const data = d.data();
+        return { uid: d.id, name: data.displayName || data.name || '', email: data.email || '' };
+      }));
+    });
+  }, [role]);
+
+  // ─── CENTRAL ACTION HANDLER ───────────────────────────────────────────────
   const handleAction = async (stage: string, action: string, payload: any) => {
     if (!candidate || !user) return;
 
-    let updateData: Partial<Candidate> = {};
+    let updateData: Partial<any> = {};
     const historyData: any = {
-      candidateId, stage,
+      candidateId, stage, action,
       status:          '',
       feedback:        payload.feedback        || '',
       schedulingNotes: payload.schedulingNotes || '',
       scheduledDate:   payload.scheduledDate   || null,
       timeSlot:        payload.timeSlot        || null,
+      panelUid:        payload.panelUid        || null,
+      panelName:       payload.panelName       || null,
       updatedBy:       user.uid,
       updatedAt:       Timestamp.now(),
     };
@@ -551,30 +645,52 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
           historyData.status = 'Rejected';
         }
         break;
+
       case 'L1 Interview':
         if (action === 'schedule') {
-          updateData = { l1Status: 'Scheduled', l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes, l1InterviewerUid: user.uid, l1InterviewerName: user.displayName || user.email };
+          // HR schedules and assigns panel
+          updateData = {
+            l1Status: 'Scheduled',
+            l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes,
+            l1PanelUid: payload.panelUid, l1PanelName: payload.panelName, l1PanelEmail: payload.panelEmail,
+            l1InterviewerUid: user.uid, l1InterviewerName: user.displayName || user.email, l1InterviewerEmail: user.email || '',
+          };
           historyData.status = 'Scheduled';
+        } else if (action === 'panel-select' || action === 'panel-reject') {
+          // Panel submits feedback; HR decides next
+          updateData = { l1PanelFeedback: payload.feedback };
+          historyData.status = 'Panel Feedback Submitted';
         } else if (action === 'select') {
-          updateData = { l1Status: 'Selected', l1Feedback: payload.feedback, l2Status: 'Pending', l1InterviewerUid: user.uid, l1InterviewerName: user.displayName || user.email };
+          // HR moves to L2
+          updateData = { l1Status: 'Selected', l1Feedback: (candidate as any).l1PanelFeedback || '', l2Status: 'Pending' };
           historyData.status = 'Selected';
-        } else {
-          updateData = { l1Status: 'Rejected', l1Feedback: payload.feedback, finalStatus: 'Rejected', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked', l1InterviewerUid: user.uid, l1InterviewerName: user.displayName || user.email };
+        } else if (action === 'reject') {
+          updateData = { l1Status: 'Rejected', l1Feedback: (candidate as any).l1PanelFeedback || '', finalStatus: 'Rejected', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
         }
         break;
+
       case 'L2 Interview':
         if (action === 'schedule') {
-          updateData = { l2Status: 'Scheduled', l2ScheduledDate: payload.scheduledDate, l2TimeSlot: payload.timeSlot, l2SchedulingNotes: payload.schedulingNotes, l2InterviewerUid: user.uid, l2InterviewerName: user.displayName || user.email };
+          updateData = {
+            l2Status: 'Scheduled',
+            l2ScheduledDate: payload.scheduledDate, l2TimeSlot: payload.timeSlot, l2SchedulingNotes: payload.schedulingNotes,
+            l2PanelUid: payload.panelUid, l2PanelName: payload.panelName, l2PanelEmail: payload.panelEmail,
+            l2InterviewerUid: user.uid, l2InterviewerName: user.displayName || user.email, l2InterviewerEmail: user.email || '',
+          };
           historyData.status = 'Scheduled';
+        } else if (action === 'panel-select' || action === 'panel-reject') {
+          updateData = { l2PanelFeedback: payload.feedback };
+          historyData.status = 'Panel Feedback Submitted';
         } else if (action === 'select') {
-          updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending', l2InterviewerUid: user.uid, l2InterviewerName: user.displayName || user.email };
+          updateData = { l2Status: 'Selected', l2Feedback: (candidate as any).l2PanelFeedback || '', hrStatus: 'Pending' };
           historyData.status = 'Selected';
-        } else {
-          updateData = { l2Status: 'Rejected', l2Feedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked', l2InterviewerUid: user.uid, l2InterviewerName: user.displayName || user.email };
+        } else if (action === 'reject') {
+          updateData = { l2Status: 'Rejected', l2Feedback: (candidate as any).l2PanelFeedback || '', finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
         }
         break;
+
       case 'HR Round':
         if (action === 'schedule') {
           updateData = { hrStatus: 'Scheduled', hrScheduledDate: payload.scheduledDate, hrTimeSlot: payload.timeSlot, hrSchedulingNotes: payload.schedulingNotes };
@@ -587,6 +703,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
           historyData.status = 'Rejected';
         }
         break;
+
       case 'Offer Stage':
         if (action === 'release-offer') {
           updateData = { offerStatus: 'Released' };
@@ -609,21 +726,14 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       return;
     }
 
-    // Emails
-    const needsEmail =
-      ['L1 Interview','L2 Interview','HR Round'].includes(stage) && ['schedule','select','reject'].includes(action) ||
-      stage === 'Offer Stage' && ['release-offer','offer-accept','offer-reject'].includes(action);
-
-    if (!needsEmail || !candidate.createdBy) return;
-
-    const uploader = await getUploaderInfo(candidate.createdBy);
-    if (!uploader.email?.includes('@')) return;
-
+    // ── EMAIL DISPATCH ─────────────────────────────────────────────────────
+    // Rule: Never email candidate. Email uploader + HR + panel as appropriate.
+    if (!candidate.createdBy) return;
+    const uploader         = await getUploaderInfo(candidate.createdBy);
     const loggedInUserName = await getLoggedInUserName(user.uid);
     const interviewerName  = loggedInUserName || user.displayName || (role === 'hr' ? 'HR Team' : 'Panel Team');
 
-    const base = {
-      toEmail:           uploader.email,
+    const baseParams = {
       candidateName:     candidate.candidateName        || 'Candidate',
       jobRole:           candidate.candidateDesignation || 'Not specified',
       interviewerName,
@@ -631,28 +741,51 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       experience:        String(candidate.experience || ''),
       location:          String(candidate.location   || ''),
       stage,
-      schedulingNotes:   payload.schedulingNotes || '',
-      interviewFeedback: payload.feedback        || '',
+      schedulingNotes:   payload.schedulingNotes  || '',
+      interviewFeedback: payload.feedback         || '',
+      interviewDate:     payload.scheduledDate    || '',
+      interviewTime:     payload.timeSlot         || '',
     };
 
-    const senderRole = stage === 'HR Round' || stage === 'Offer Stage' ? 'hr' : 'panel';
-    const actionToEmailType: Record<string, any> = {
-      schedule:      'interview_scheduled',
-      select:        'candidate_selected',
-      reject:        'candidate_rejected',
+    const actionToEmailType: Record<string, string> = {
+      'accept':        'resume_accepted',
+      'reject':        'candidate_rejected',
+      'schedule':      'interview_scheduled',
+      'panel-select':  'panel_feedback_submitted',
+      'panel-reject':  'panel_feedback_submitted',
+      'select':        'candidate_selected',
       'release-offer': 'offer_released',
       'offer-accept':  'offer_accepted',
       'offer-reject':  'offer_rejected',
     };
+    const emailType  = actionToEmailType[action] || 'status_update';
+    const senderRole = ['HR Round','Offer Stage','Resume Review'].includes(stage) ? 'hr' : role || 'hr';
 
-    await sendEmail({
-      ...base,
-      label:     `${stage} ${action}`,
-      senderRole,
-      emailType: actionToEmailType[action],
-      interviewDate: payload.scheduledDate || '',
-      interviewTime: payload.timeSlot      || '',
-    });
+    // 1. Always notify the uploader (HR or Agency who uploaded the candidate)
+    if (uploader.email?.includes('@')) {
+      await sendEmail({ ...baseParams, toEmail: uploader.email, senderRole, emailType });
+    }
+
+    // 2. If HR took the action AND is not the uploader, also CC the HR who acted
+    if (role === 'hr' && user.email?.includes('@') && user.email !== uploader.email) {
+      await sendEmail({ ...baseParams, toEmail: user.email, senderRole: 'hr', emailType });
+    }
+
+    // 3. On L1/L2 schedule: notify the newly assigned panel member
+    if (action === 'schedule' && payload.panelEmail?.includes('@')) {
+      await sendEmail({ ...baseParams, toEmail: payload.panelEmail, senderRole: 'hr', emailType: 'panel_assigned' });
+    }
+
+    // 4. On panel feedback: notify HR (the one who scheduled) so they can decide
+    if (action === 'panel-select' || action === 'panel-reject') {
+      const hrEmailKey = stage === 'L1 Interview' ? 'l1InterviewerEmail' : 'l2InterviewerEmail';
+      const hrEmail    = (candidate as any)[hrEmailKey];
+      if (hrEmail?.includes('@') && hrEmail !== uploader.email) {
+        await sendEmail({ ...baseParams, toEmail: hrEmail, senderRole: 'panel', emailType: 'hr_panel_feedback_notification' });
+      }
+      // Also notify uploader if they differ from HR
+      // (already covered in step 1 above)
+    }
   };
 
   if (loading) return (
@@ -666,29 +799,16 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     </div>
   );
 
+  // Agency: only their own candidates
+  if (role === 'agency' && candidate.createdBy !== user?.uid) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>
+        You don't have access to this candidate.
+      </div>
+    );
+  }
+
   const getStatus = (s: Status | undefined): Status => s || 'Pending';
-  const resumeReviewStatus = getStatus(candidate.resumeReviewStatus);
-  const l1Status           = getStatus(candidate.l1Status);
-  const l2Status           = getStatus(candidate.l2Status);
-  const hrStatus           = getStatus(candidate.hrStatus);
-  const offerStatus        = getStatus(candidate.offerStatus);
-
-  const lockedStates = {
-    l1:    resumeReviewStatus !== 'Accepted',
-    l2:    l1Status !== 'Selected',
-    hr:    l2Status !== 'Selected',
-    offer: hrStatus !== 'Selected',
-  };
-
-  const stageDefs: StageCardProps[] = [
-    { title: 'Resume Review', status: resumeReviewStatus, isLocked: false,     savedFeedback: candidate.resumeFeedback, onAction: (a,p) => handleAction('Resume Review', a, p), isResume: true, canUpdate: true, role },
-    { title: 'L1 Interview',  status: l1Status,           isLocked: lockedStates.l1, scheduledDate: candidate.l1ScheduledDate, timeSlot: candidate.l1TimeSlot, schedulingNotes: candidate.l1SchedulingNotes, savedFeedback: candidate.l1Feedback, onAction: (a,p) => handleAction('L1 Interview', a, p), canUpdate: true, role },
-    { title: 'L2 Interview',  status: l2Status,           isLocked: lockedStates.l2, scheduledDate: candidate.l2ScheduledDate, timeSlot: candidate.l2TimeSlot, schedulingNotes: candidate.l2SchedulingNotes, savedFeedback: candidate.l2Feedback, onAction: (a,p) => handleAction('L2 Interview', a, p), canUpdate: true, role },
-    { title: 'HR Round',      status: hrStatus,           isLocked: lockedStates.hr, scheduledDate: candidate.hrScheduledDate, timeSlot: candidate.hrTimeSlot, schedulingNotes: candidate.hrSchedulingNotes, savedFeedback: candidate.hrFeedback, onAction: (a,p) => handleAction('HR Round', a, p), canUpdate: true, role },
-    { title: 'Offer Stage',   status: offerStatus,        isLocked: lockedStates.offer, savedFeedback: candidate.offerFeedback, onAction: (a,p) => handleAction('Offer Stage', a, p), isOffer: true, canUpdate: true, role },
-  ];
-
-  // Final status badge color
   const finalStatus = candidate.finalStatus || 'In Progress';
   const finalBadgeStyle: React.CSSProperties = {
     background: finalStatus === 'Completed' ? '#D1FAE5' : finalStatus === 'Rejected' ? '#FEE2E2' : '#EDE9FE',
@@ -704,9 +824,16 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
         </Button>
       </div>
 
+      {/* Admin read-only banner */}
+      {role === 'admin' && (
+        <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: '10px', padding: '10px 16px', marginBottom: '16px', fontSize: '13px', color: '#92400E', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Eye className="h-4 w-4" /> <strong>Admin View:</strong> You can view all candidate details but cannot take any actions.
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '30% 70%', gap: '24px' }}>
 
-        {/* ── LEFT COLUMN ── */}
+        {/* ── LEFT COLUMN ── unchanged layout */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
           {/* Profile card */}
@@ -719,30 +846,25 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <span style={finalBadgeStyle}>{finalStatus}</span>
           </div>
 
-          {/* ── AI Match Card (the fixed one) ── */}
+          {/* AI Match Card — UNCHANGED */}
           <AIMatchCard candidate={candidate} />
 
-          {/* Resume viewer */}
+          {/* Resume viewer — UNCHANGED */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center' }}>
             {candidate.resumeFile?.data ? (
               <Button variant="outline" onClick={() => {
-                const bytes = atob(candidate.resumeFile.data);
-                const arr   = new Uint8Array(bytes.length).map((_, i) => bytes.charCodeAt(i));
+                const bytes    = atob(candidate.resumeFile.data);
+                const arr      = new Uint8Array(bytes.length).map((_, i) => bytes.charCodeAt(i));
                 const fileType = candidate.resumeFile.type || 'application/pdf';
-
-                const blob = new Blob([arr], { type: fileType });
-                const url = URL.createObjectURL(blob);
-                
+                const blob     = new Blob([arr], { type: fileType });
+                const url      = URL.createObjectURL(blob);
                 if (fileType.includes('pdf')) {
-                  window.open(url, '_blank'); // works
+                  window.open(url, '_blank');
                 } else {
-                  // download instead of preview
                   const a = document.createElement('a');
-                  a.href = url;
-                  a.download = candidate.resumeFile.name || 'resume';
-                  a.click();
+                  a.href = url; a.download = candidate.resumeFile.name || 'resume'; a.click();
                 }
-                              }}>
+              }}>
                 📄 View Resume
               </Button>
             ) : (
@@ -754,28 +876,51 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
         {/* ── RIGHT COLUMN ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-          {/* Interview Workflow */}
+          {/* Interview Workflow — MODIFIED */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
             <h2 style={{ fontWeight: 'bold', marginBottom: '6px' }}>Interview Workflow</h2>
             <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {stageDefs.map(stage => <StageCard key={stage.title} {...stage} />)}
+
+              <ResumeReviewCard
+                candidate={candidate} role={role as UserRole}
+                onAction={(a, p) => handleAction('Resume Review', a, p)}
+              />
+              <InterviewStageCard
+                candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
+                stageKey="l1" title="L1 Interview"
+                onAction={(a, p) => handleAction('L1 Interview', a, p)}
+              />
+              <InterviewStageCard
+                candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
+                stageKey="l2" title="L2 Interview"
+                onAction={(a, p) => handleAction('L2 Interview', a, p)}
+              />
+              <HRRoundCard
+                candidate={candidate} role={role as UserRole}
+                onAction={(a, p) => handleAction('HR Round', a, p)}
+              />
+              <OfferStageCard
+                candidate={candidate} role={role as UserRole}
+                onAction={(a, p) => handleAction('Offer Stage', a, p)}
+              />
+
             </div>
           </div>
 
-          {/* Professional Background */}
+          {/* Professional Background — UNCHANGED */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
             <h2 style={{ fontWeight: 'bold', marginBottom: '16px' }}>Professional Background</h2>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               {[
-                ['Full Name',         candidate.candidateName],
-                ['Email',             candidate.candidateEmail],
-                ['Phone',             candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'],
-                ['Experience',        candidate.experience ? `${candidate.experience} Years` : '—'],
-                ['Current CTC',       candidate.currentCtc  || '—'],
-                ['Expected CTC',      candidate.expectedCtc || '—'],
-                ['Notice Period',     candidate.noticePeriod || '—'],
-                ['Onsite Comfort',    candidate.isComfortableOnsite || '—'],
+                ['Full Name',      candidate.candidateName],
+                ['Email',          candidate.candidateEmail],
+                ['Phone',          candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'],
+                ['Experience',     candidate.experience ? `${candidate.experience} Years` : '—'],
+                ['Current CTC',    candidate.currentCtc   || '—'],
+                ['Expected CTC',   candidate.expectedCtc  || '—'],
+                ['Notice Period',  candidate.noticePeriod  || '—'],
+                ['Onsite Comfort', candidate.isComfortableOnsite || '—'],
               ].map(([label, value]) => (
                 <div key={label as string}>
                   <p style={{ color: 'gray', fontSize: '12px', marginBottom: '2px' }}>{label}</p>
@@ -784,6 +929,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
               ))}
             </div>
           </div>
+
         </div>
       </div>
     </div>
