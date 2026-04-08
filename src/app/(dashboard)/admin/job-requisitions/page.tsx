@@ -276,7 +276,7 @@ export default function JobRequisitions() {
         const ref = await addDoc(collection(db, "job_requisitions"), {
           ...data, createdBy: user!.uid, createdByRole: role!, createdByName: name!, createdDate: serverTimestamp(),
         });
-        toast({ title: "Success", description: "Project created successfully." });
+        toast({ title: "Success", description: "Client Project created successfully." });
         if (user && name && role) {
           await logActivity({ userId: user.uid, userName: name, userRole: role,
             action: "Project Created", stage: "Setup", targetType: "Project",
@@ -313,11 +313,11 @@ export default function JobRequisitions() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Job Requisitions</h1>
+          <h1 className="text-2xl font-bold">Client Requirements</h1>
           <p className="text-sm text-muted-foreground mt-1">Manage your active hiring projects and JD requirements.</p>
         </div>
         <Button onClick={() => handleModalOpen()} className="gap-2 shrink-0">
-          <Plus className="h-4 w-4" /> Create Project
+          <Plus className="h-4 w-4" /> Create Client Project
         </Button>
       </div>
 
@@ -379,7 +379,7 @@ export default function JobRequisitions() {
               </td></tr>
             ) : paginated.length === 0 ? (
               <tr><td colSpan={8} className="text-center py-12 text-sm text-muted-foreground">
-                {hasActiveFilters ? "No projects match your filters." : "No projects yet. Click Create Project to get started."}
+                {hasActiveFilters ? "No projects match your filters." : "No projects yet. Click Create Client Project to get started."}
               </td></tr>
             ) : paginated.map(req => (
               <tr key={req.id} className="hover:bg-gray-50 transition-colors">
@@ -464,7 +464,7 @@ export default function JobRequisitions() {
         <DialogContent className="sm:max-w-[580px] p-0">
           <DialogHeader className="p-6 pb-4">
             <DialogTitle className="text-xl font-bold">
-              {editingId ? "Edit Project" : "New Project"}
+              {editingId ? "Edit Project" : "New Client Project"}
             </DialogTitle>
             <p className="text-sm text-muted-foreground pt-1">
               Define the role, location, and upload the JD file.
@@ -530,49 +530,64 @@ export default function JobRequisitions() {
               </div>
             </div>
 
-            {/* ── JD Upload FIX ── */}
-            <div className="space-y-2">
-              <Label>Upload JD (PDF / Word)</Label>
-              <div className="border rounded-md overflow-hidden">
-                {/* Picker row */}
-                <div className="flex items-center">
-                  <span className="flex-1 text-sm text-muted-foreground px-3 py-2 truncate">
-                    {isProcessingFile ? "Reading file…" : formData.jdFileName || "No file chosen"}
-                  </span>
-                  <Label htmlFor="jdFileInput"
-                    className="bg-gray-100 border-l px-4 py-2 text-sm cursor-pointer hover:bg-gray-200 shrink-0 flex items-center gap-1.5">
-                    {isProcessingFile
-                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      : <FileText className="h-3.5 w-3.5" />}
-                    Choose File
-                  </Label>
-                  <Input id="jdFileInput" type="file" className="hidden"
-                    accept=".pdf,.doc,.docx" onChange={handleFileChange} disabled={isProcessingFile} />
-                </div>
+            <div className="space-y-3">
+  <Label>Job Description (JD)</Label>
 
-                {/* ── FIX: Preview row shown immediately — no refresh needed ── */}
-                {formData.jdFileData && !isProcessingFile && (
-                  <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border-t text-xs text-green-700">
-                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate flex-1">Ready: {formData.jdFileName}</span>
-                    <button type="button"
-                      onClick={() => openJDFile(formData.jdFileData, formData.jdFileName)}
-                      className="underline shrink-0 hover:no-underline flex items-center gap-1">
-                      <Eye className="h-3 w-3" /> Preview
-                    </button>
-                    <button type="button"
-                      onClick={() => setFormData(p => ({ ...p, jdFileName: "", jdFileType: "", jdFileData: "" }))}
-                      className="text-red-500 hover:text-red-700 shrink-0">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                File is stored securely. The eye icon will open it immediately after saving.
-              </p>
-            </div>
+  {/* Option selection */}
+  <RadioGroup
+    value={formData.jdFileType || "text"}
+    onValueChange={(v) => setFormData(p => ({
+      ...p,
+      jdFileType: v,
+      jdFileData: "",
+      jdFileName: ""
+    }))}
+    className="flex gap-6"
+  >
+    <div className="flex items-center gap-2">
+      <RadioGroupItem value="text" id="jd-text" />
+      <Label htmlFor="jd-text">Upload Text File</Label>
+    </div>
 
+    <div className="flex items-center gap-2">
+      <RadioGroupItem value="manual" id="jd-manual" />
+      <Label htmlFor="jd-manual">Enter Manually</Label>
+    </div>
+  </RadioGroup>
+
+  {/* TEXT FILE UPLOAD */}
+  {formData.jdFileType === "text" && (
+    <Input
+      type="file"
+      accept=".txt"
+      onChange={async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const text = await file.text();
+
+        setFormData(p => ({
+          ...p,
+          jdFileName: file.name,
+          jdFileData: text
+        }));
+      }}
+    />
+  )}
+
+  {/* MANUAL TEXT INPUT */}
+  {formData.jdFileType === "manual" && (
+    <textarea
+      className="w-full border rounded-md p-3 text-sm"
+      rows={6}
+      placeholder="Enter Job Description here..."
+      value={formData.jdFileData}
+      onChange={(e) =>
+        setFormData(p => ({ ...p, jdFileData: e.target.value }))
+      }
+    />
+  )}
+</div>
             {/* Status */}
             <div className="space-y-2">
               <Label>Status</Label>
@@ -594,7 +609,7 @@ export default function JobRequisitions() {
               className="bg-[#8A2BE2] hover:bg-[#7f26cc] text-white">
               {isLoading
                 ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…</>
-                : editingId ? "Update Project" : "Create Project"}
+                : editingId ? "Update Project" : "Create Client Project"}
             </Button>
           </DialogFooter>
         </DialogContent>

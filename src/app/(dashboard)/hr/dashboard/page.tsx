@@ -681,63 +681,6 @@ export default function HRDashboard() {
           </CardContent>
         </Card>
 
-        {/* AI Insights (1/3) */}
-        <Card className="shadow-sm border">
-          <CardHeader className="pb-3 pt-5 px-5">
-            <div className="flex items-center gap-2">
-              <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
-                <BrainCircuit className="h-4 w-4 text-primary" />
-              </div>
-              <CardTitle className="text-base font-semibold">AI Evaluation</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="px-5 pb-5 space-y-4">
-            <div className="text-center p-4 bg-muted rounded-xl">
-              <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">Avg. AI Match Score</p>
-              {aiInsights.scoredCount > 0 ? (
-                <>
-                  <p className="text-4xl font-black text-primary mt-1">{aiInsights.avg}%</p>
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Based on {aiInsights.scoredCount} of {aiInsights.total} candidates
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p className="text-4xl font-black text-muted-foreground/40 mt-1">—</p>
-                  <p className="text-[10px] text-muted-foreground mt-1">No AI-evaluated candidates yet</p>
-                </>
-              )}
-            </div>
-            <div>
-              <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Top Matches</p>
-              <div className="space-y-2">
-                {aiInsights.top.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-3">No AI-scored candidates yet.</p>
-                ) : aiInsights.top.map((c, i) => (
-                  <Link
-                    href={`/candidates/${c.id}`} key={c.id}
-                    className="flex items-center justify-between p-2.5 bg-emerald-50 dark:bg-emerald-950/20 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-950/40 transition-colors group"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-[10px] font-black text-emerald-500 shrink-0">#{i + 1}</span>
-                      <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 truncate">
-                        {c.candidateName}
-                      </p>
-                    </div>
-                    <Badge className="bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 shrink-0 ml-2">
-                      {c.aiScore}%
-                    </Badge>
-                  </Link>
-                ))}
-              </div>
-            </div>
-            <Button asChild variant="outline" size="sm" className="w-full text-xs">
-              <Link href="/candidates/evaluation" className="flex items-center justify-center gap-1.5">
-                <FileText className="h-3.5 w-3.5" /> Run Evaluation
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
       </div>
 
       {/* ── ROW 5: Upcoming interviews (Carousel) ── */}

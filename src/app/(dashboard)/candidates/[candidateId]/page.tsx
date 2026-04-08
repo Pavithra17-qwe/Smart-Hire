@@ -148,17 +148,29 @@ const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
           ))}
         </div>
       </div>
-      {candidate.matchSummary?.includes('Job Description') || candidate.matchSummary?.includes('JD') ? (
-        <div style={{ marginTop: '12px', fontSize: '11px', color: '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <span style={{ background: '#EDE9FE', color: '#5B21B6', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>JD-based</span>
-          AI compared resume against Job Description
-        </div>
-      ) : candidate.matchSummary ? (
-        <div style={{ marginTop: '12px', fontSize: '11px', color: '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <span style={{ background: '#FEF3C7', color: '#92400E', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>Profile-based</span>
-          Scored on candidate profile fields (no JD available)
-        </div>
-      ) : null}
+      {candidate.matchSummary && (
+  <div
+    style={{
+      marginTop: '12px',
+      padding: '8px 10px',
+      borderRadius: '6px',
+      background: '#EEF2FF', // light highlight
+      border: '1px solid #C7D2FE'
+    }}
+  >
+    <p
+      style={{
+        fontSize: '12px',
+        fontWeight: '700', // ✅ bold
+        color: '#3730A3'   // ✅ highlighted text color
+      }}
+    >
+      {candidate.matchSummary?.includes('Job Description') || candidate.matchSummary?.includes('JD')
+        ? 'AI compared resume against Job Description'
+        : 'Scored based on candidate profile (No JD available)'}
+    </p>
+  </div>
+)}
     </div>
   );
 };
