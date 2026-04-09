@@ -1198,15 +1198,16 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
         null;
 
       // Panel member email — needed for their self-confirm
-      const panelMemberEmail = actorEmail; // panel member IS the current actor
+      const panelMemberEmail = actorEmail;
 
-      console.log('[Email]    resumeReviewedByEmail:', fresh.resumeReviewedByEmail || '⚠️  not set (using fallback)');
-      console.log('[Email]    reviewerEmail resolved to:', reviewerEmail || '⚠️  MISSING');
-      console.log('[Email]    panelMemberEmail:', panelMemberEmail);
-
-      enqueue(uploaderEmail,    'panel', 'panel_feedback_submitted'); // uploader (agency or HR)
-      enqueue(reviewerEmail,    'panel', 'panel_feedback_submitted'); // HR who accepted resume
-      enqueue(panelMemberEmail, 'panel', 'panel_feedback_submitted'); // panel member self-confirm
+      const emailType =
+        action === 'panel-select'
+          ? 'candidate_selected'
+          : 'candidate_rejected';
+    
+      enqueue(uploaderEmail,    'panel', emailType);
+      enqueue(reviewerEmail,    'panel', emailType);
+      enqueue(panelMemberEmail, 'panel', emailType);
     }
 
     // ── HR ROUND FEEDBACK ──────────────────────────────────────────────────────
