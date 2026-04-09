@@ -176,7 +176,7 @@ export default function JobRequisitions() {
           otherRole:     ROLES_OPTIONS.includes(rol) ? "" : rol,
           status:        req.status     || "Active",
           jdFileName:    req.jdFileName || "",
-          jdFileType:    req.jdFileType || "",
+          jdFileType: req.jdFileType || "manual",
           jdFileData:    req.jdFileData || "",
         });
       }
@@ -398,8 +398,17 @@ export default function JobRequisitions() {
                     // FIX: onClick calls openJDFile directly — no navigation, no refresh needed
                     <button
                       type="button"
-                      onClick={() => openJDFile(req.jdFileData, req.jdFileName)}
-                      title={req.jdFileName || "View JD"}
+                      onClick={() => {
+                        if (!req.jdFileData) return;
+                      
+                        // If it's plain text → show directly
+                        if (!req.jdFileData.startsWith("data:") && !req.jdFileData.startsWith("https")) {
+                          alert(req.jdFileData); // simple fix
+                        } else {
+                          openJDFile(req.jdFileData, req.jdFileName);
+                        }
+                      }}
+                                            title={req.jdFileName || "View JD"}
                       className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 transition-colors"
                     >
                       <Eye className="h-4 w-4" />
@@ -566,11 +575,12 @@ export default function JobRequisitions() {
 
         const text = await file.text();
 
-        setFormData(p => ({
-          ...p,
-          jdFileName: file.name,
-          jdFileData: text
-        }));
+setFormData(p => ({
+  ...p,
+  jdFileName: file.name,
+  jdFileData: text,
+  jdFileType: "text" // ✅ IMPORTANT
+}));
       }}
     />
   )}

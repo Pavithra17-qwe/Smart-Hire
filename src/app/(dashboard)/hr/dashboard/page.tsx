@@ -295,7 +295,7 @@ export default function HRDashboard() {
     const list: any[] = [];
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split("T")[0];
-    const max = new Date(today); max.setDate(today.getDate() + 3);
+    const max = new Date(today); max.setDate(today.getDate() + 6);
     const maxStr = max.toISOString().split("T")[0];
     filtered.forEach(c => {
       [

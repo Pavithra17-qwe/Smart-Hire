@@ -429,7 +429,7 @@ jdFileType: r.jdFileType || null,
     const list: any[] = [];
     const today = new Date(); today.setHours(0,0,0,0);
     const todayStr = today.toISOString().split("T")[0];
-    const maxDate  = new Date(today); maxDate.setDate(today.getDate()+3);
+    const maxDate  = new Date(today); maxDate.setDate(today.getDate()+6);
     const maxStr   = maxDate.toISOString().split("T")[0];
     filtered.forEach(c => {
       [{key:"l1",label:"L1 Interview",df:"l1ScheduledDate",sf:"l1TimeSlot",st:"l1Status"},

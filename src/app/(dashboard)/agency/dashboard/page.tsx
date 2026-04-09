@@ -10,6 +10,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Carousel, CarouselContent, CarouselItem,
+  CarouselNext, CarouselPrevious,
+} from "@/components/ui/carousel";
+import {
   Select, SelectContent, SelectItem,
   SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -286,7 +290,44 @@ export default function AgencyDashboard() {
       })
       .slice(0, 6),
   [filtered]);
-
+  const upcoming = useMemo(() => {
+    const list: any[] = [];
+  
+    const today = new Date();
+    today.setHours(0,0,0,0);
+  
+    const todayStr = today.toISOString().split("T")[0];
+  
+    const maxDate = new Date(today);
+    maxDate.setDate(today.getDate() + 6); // ✅ 6 days
+  
+    const maxStr = maxDate.toISOString().split("T")[0];
+  
+    filtered.forEach(c => {
+      [
+        { key:"l1", label:"L1 Interview", df:"l1ScheduledDate", sf:"l1TimeSlot", st:"l1Status" },
+        { key:"l2", label:"L2 Interview", df:"l2ScheduledDate", sf:"l2TimeSlot", st:"l2Status" },
+        { key:"hr", label:"HR Round",     df:"hrScheduledDate", sf:"hrTimeSlot", st:"hrStatus" }
+      ].forEach(({ key, label, df, sf, st }) => {
+        const ds = (c as any)[df];
+  
+        if (c[st as keyof Candidate] === "Scheduled" && ds && ds >= todayStr && ds <= maxStr) {
+          list.push({
+            id: `${c.id}-${key}`,
+            candidateName: c.candidateName || "Unknown Candidate",
+            jobRole: c.candidateDesignation || "—",
+            roundLabel: label,
+            date: ds,
+            timeSlot: (c as any)[sf] || "",
+            isToday: ds === todayStr,
+            candidateId: c.id,
+          });
+        }
+      });
+    });
+  
+    return list.sort((a, b) => a.date.localeCompare(b.date));
+  }, [filtered]);
   // ── pass rate ─────────────────────────────────────────────────────────────
   const passRate = useMemo(() => {
     const decided = stats.hired + stats.rejected;
@@ -630,6 +671,7 @@ export default function AgencyDashboard() {
           </CardContent>
         </Card>
 
+
         {/* ── My Requirements (1/3) ────────────────────────────────────────────
             FIX 2: Clicking a requirement → /requirements?projectName=XYZ
                    "View all" → /requirements (all requirements, no filter)      */}
@@ -693,7 +735,97 @@ export default function AgencyDashboard() {
             )}
           </CardContent>
         </Card>
+        <div className="w-full col-span-full">
+  <SectionLabel>Upcoming Interviews (Next 6 Days)</SectionLabel>
 
+  <Card className="shadow-sm border">
+    <CardContent className="pt-5 px-4 pb-5">
+
+      {upcoming.length > 0 ? (
+        <Carousel opts={{ align: "start" }} className="w-full">
+
+          <CarouselContent className="-ml-3 flex">
+            {upcoming.map(item => (
+              <CarouselItem
+                key={item.id}
+                className="pl-3 basis-full sm:basis-1/2 md:basis-1/3 lg:basis-1/4"
+              >
+                <Link href={`/candidates/${item.candidateId}`} className="block h-full">
+
+                  <div className="h-full p-4 rounded-xl border bg-card hover:bg-muted/30 hover:border-primary/40 transition-all group cursor-pointer">
+
+                    {/* Header */}
+                    <div className="flex items-start justify-between mb-2.5">
+                      <span className="text-xs font-bold text-primary bg-primary/8 px-2 py-0.5 rounded-md">
+                        {item.roundLabel}
+                      </span>
+
+                      {item.isToday ? (
+                        <Badge className="bg-emerald-500 text-[9px] h-4 px-1.5">
+                          TODAY
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[9px] h-4 px-1.5">
+                          Upcoming
+                        </Badge>
+                      )}
+                    </div>
+
+                    {/* Date + Time */}
+                    <div className="space-y-1 mb-3">
+                      <div className="text-[11px] text-muted-foreground">
+                        {item.isToday
+                          ? "Today"
+                          : new Date(item.date).toLocaleDateString("en-IN", {
+                              day: "2-digit",
+                              month: "short",
+                              year: "numeric",
+                            })}
+                      </div>
+
+                      {item.timeSlot && (
+                        <div className="text-[11px] text-muted-foreground">
+                          {item.timeSlot}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Candidate */}
+                    <div className="pt-2.5 border-t">
+                      <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">
+                        {item.candidateName}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {item.jobRole}
+                      </p>
+                    </div>
+
+                  </div>
+
+                </Link>
+              </CarouselItem>
+            ))}
+          </CarouselContent>
+
+          {upcoming.length > 4 && (
+            <div className="flex justify-end gap-2 mb-3">
+              <CarouselPrevious className="static translate-y-0" />
+              <CarouselNext className="static translate-y-0" />
+            </div>
+          )}
+
+        </Carousel>
+      ) : (
+        <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed rounded-xl gap-1.5">
+          <p className="text-xs font-semibold text-muted-foreground/50 uppercase tracking-wider">
+            No scheduled interviews in the next 6 days
+          </p>
+        </div>
+      )}
+
+    </CardContent>
+  </Card>
+</div>
       </div>
 
     </div>

@@ -296,7 +296,7 @@ export default function PanelDashboard() {
 
   // ── Interview lists (from filtered set) ───────────────────────────────────
   const { todayInterviews, upcomingInterviews, pendingFeedbackList } = useMemo(() => {
-    const maxDate = new Date(today); maxDate.setDate(today.getDate() + 7);
+    const maxDate = new Date(today); maxDate.setDate(today.getDate() + 6);
     const maxStr  = maxDate.toISOString().split("T")[0];
 
     const todayList: any[] = [], upcomingList: any[] = [], pendingList: any[] = [];
