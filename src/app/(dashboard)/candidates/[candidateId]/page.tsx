@@ -1,5 +1,59 @@
 'use client';
 
+/**
+ * ============================================================
+ * CHANGES MADE — EMAIL NOTIFICATION LOGIC OVERHAUL
+ * ============================================================
+ *
+ * CHANGE 1 — Resume Review (accept): Save resumeReviewedByEmail
+ *   WHY: Panel feedback notifications must go to the *specific* HR
+ *        who accepted the resume, not just any HR or the scheduler.
+ *        Without persisting this, there is no reliable way to find
+ *        the right recipient later in the pipeline.
+ *   WHERE: handleAction → case 'Resume Review' → action === 'accept'
+ *   NEW FIELDS SAVED TO FIRESTORE:
+ *     - resumeReviewedByEmail
+ *     - resumeReviewedByUid
+ *     - resumeReviewedByName
+ *
+ * CHANGE 2 — Email dispatch block fully replaced
+ *   WHY: Old logic used l1InterviewerEmail / l2InterviewerEmail
+ *        (the HR who *scheduled*) for panel feedback notifications,
+ *        which is incorrect. The correct target is the HR who
+ *        *accepted* the resume (resumeReviewedByEmail).
+ *   WHERE: handleAction → EMAIL DISPATCH section
+ *
+ * CHANGE 3 — Deduplication via Map<email, params>
+ *   WHY: Old code had multiple sendEmail calls with ad-hoc
+ *        !== checks. If uploader === HR, duplicate emails fired.
+ *        The new Map-based enqueue() guarantees each address
+ *        receives exactly one email per action.
+ *   WHERE: handleAction → EMAIL DISPATCH section
+ *
+ * CHANGE 4 — actionToEmailType: panel-select / panel-reject now
+ *   map to 'panel_feedback_submitted' (was 'candidate_selected' /
+ *   'candidate_rejected') to match the email template naming spec.
+ *   WHERE: actionToEmailType map
+ *
+ * CHANGE 5 — Panel feedback: notifies BOTH
+ *   (a) resumeReviewedByEmail  — HR who accepted resume
+ *   (b) uploader               — Agency / HR who submitted candidate
+ *   Old code only notified one HR address (the scheduler).
+ *   WHERE: handleAction → EMAIL DISPATCH → panel-select/panel-reject
+ *
+ * CHANGE 6 — HR Round & Offer Stage: HR self-confirmation email
+ *   The HR who performs the action now always receives a copy,
+ *   deduplication prevents double-send when HR === uploader.
+ *   WHERE: handleAction → EMAIL DISPATCH → HR Round / Offer Stage
+ *
+ * CHANGE 7 — HR Round scheduling: panel email block removed
+ *   HR Round has no panel assignment, so the old panel_assigned
+ *   email was wrong for that stage. Now panel_assigned is sent
+ *   only for L1 / L2 schedule actions.
+ *   WHERE: handleAction → EMAIL DISPATCH → action === 'schedule'
+ * ============================================================
+ */
+
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -66,20 +120,20 @@ async function sendEmail(params: any) {
   if (!params.toEmail?.includes('@')) return;
   try {
     await sendInterviewEmail({
-      candidateName:    params.candidateName,
-      candidateEmail:   params.toEmail,
-      jobRole:          params.jobRole,
-      experience:       params.experience || '',
-      location:         params.location   || '',
-      interviewerName:  params.interviewerName,
-      interviewerEmail: params.interviewerEmail || '',
-      interviewDate:    params.interviewDate    || '',
-      interviewTime:    params.interviewTime    || '',
-      schedulingNotes:  params.schedulingNotes  || '',
-      interviewFeedback: params.interviewFeedback || '',
-      stage:            params.stage,
-      senderRole:       params.senderRole,
-      emailType:        params.emailType,
+      candidateName:     params.candidateName,
+      candidateEmail:    params.toEmail,
+      jobRole:           params.jobRole,
+      experience:        params.experience        || '',
+      location:          params.location          || '',
+      interviewerName:   params.interviewerName,
+      interviewerEmail:  params.interviewerEmail  || '',
+      interviewDate:     params.interviewDate      || '',
+      interviewTime:     params.interviewTime      || '',
+      schedulingNotes:   params.schedulingNotes   || '',
+      interviewFeedback: params.interviewFeedback  || '',
+      stage:             params.stage,
+      senderRole:        params.senderRole,
+      emailType:         params.emailType,
     });
   } catch (err) {
     console.error('Email send failed:', err);
@@ -91,13 +145,13 @@ function getScoreDisplay(score: number | undefined | null): {
   color: string; bg: string; border: string; label: string; icon: React.ReactNode; textColor: string;
 } {
   const s = typeof score === 'number' ? score : -1;
-  if (s < 0)   return { color: '#6B7280', bg: '#F3F4F6', border: '#E5E7EB', label: 'Not Evaluated', icon: <Minus className="h-4 w-4" />, textColor: '#374151' };
-  if (s === 0) return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'No Match',       icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B' };
-  if (s <= 30) return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'Very Low Match', icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B' };
-  if (s <= 50) return { color: '#D97706', bg: '#FFFBEB', border: '#FDE68A', label: 'Below Average',  icon: <TrendingDown className="h-4 w-4" />, textColor: '#92400E' };
-  if (s <= 65) return { color: '#F59E0B', bg: '#FEF3C7', border: '#FCD34D', label: 'Moderate Match', icon: <Minus className="h-4 w-4" />,        textColor: '#78350F' };
-  if (s <= 80) return { color: '#16A34A', bg: '#F0FDF4', border: '#86EFAC', label: 'Good Match',     icon: <TrendingUp className="h-4 w-4" />,   textColor: '#14532D' };
-  return              { color: '#059669', bg: '#ECFDF5', border: '#6EE7B7', label: 'Strong Match',   icon: <TrendingUp className="h-4 w-4" />,   textColor: '#064E3B' };
+  if (s < 0)   return { color: '#6B7280', bg: '#F3F4F6', border: '#E5E7EB', label: 'Not Evaluated',  icon: <Minus className="h-4 w-4" />,        textColor: '#374151' };
+  if (s === 0) return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'No Match',        icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B' };
+  if (s <= 30) return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'Very Low Match',  icon: <TrendingDown className="h-4 w-4" />, textColor: '#991B1B' };
+  if (s <= 50) return { color: '#D97706', bg: '#FFFBEB', border: '#FDE68A', label: 'Below Average',   icon: <TrendingDown className="h-4 w-4" />, textColor: '#92400E' };
+  if (s <= 65) return { color: '#F59E0B', bg: '#FEF3C7', border: '#FCD34D', label: 'Moderate Match',  icon: <Minus className="h-4 w-4" />,        textColor: '#78350F' };
+  if (s <= 80) return { color: '#16A34A', bg: '#F0FDF4', border: '#86EFAC', label: 'Good Match',      icon: <TrendingUp className="h-4 w-4" />,   textColor: '#14532D' };
+  return              { color: '#059669', bg: '#ECFDF5', border: '#6EE7B7', label: 'Strong Match',    icon: <TrendingUp className="h-4 w-4" />,   textColor: '#064E3B' };
 }
 
 function buildFallbackSummary(score: number | undefined | null, candidate: Candidate): string {
@@ -113,12 +167,12 @@ function buildFallbackSummary(score: number | undefined | null, candidate: Candi
 
 // ─── AI MATCH CARD ────────────────────────────────────────────────────────────
 const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
-  const rawScore  = candidate.matchScore ?? candidate.aiScore;
-  const score     = typeof rawScore === 'number' ? rawScore : undefined;
-  const display   = getScoreDisplay(score);
+  const rawScore      = candidate.matchScore ?? candidate.aiScore;
+  const score         = typeof rawScore === 'number' ? rawScore : undefined;
+  const display       = getScoreDisplay(score);
   const storedSummary = candidate.matchSummary || "";
-  const summary = storedSummary.trim().length > 30 ? storedSummary : buildFallbackSummary(score, candidate);
-  const scoreLabel = score !== undefined ? `${score}%` : '—';
+  const summary       = storedSummary.trim().length > 30 ? storedSummary : buildFallbackSummary(score, candidate);
+  const scoreLabel    = score !== undefined ? `${score}%` : '—';
 
   return (
     <div style={{ background: 'white', borderRadius: '12px', padding: '20px', border: `1.5px solid ${display.border}` }}>
@@ -183,15 +237,11 @@ const TIME_SLOTS = [
 // ─── UPDATED BY BADGE ─────────────────────────────────────────────────────────
 const UpdatedByBadge: React.FC<{ history: CandidateHistoryItem[]; stage: string; actions?: string[] }> = ({ history, stage, actions }) => {
   const stageEntries = history.filter(h => h.stage === stage);
-  
+
   let last: CandidateHistoryItem | undefined;
   if (actions && actions.length > 0) {
     const strict = stageEntries.filter(h => h.action && actions.includes(h.action));
-    if (strict.length > 0) {
-      last = strict[strict.length - 1];
-    } else {
-      last = stageEntries[stageEntries.length - 1];
-    }
+    last = strict.length > 0 ? strict[strict.length - 1] : stageEntries[stageEntries.length - 1];
   } else {
     last = stageEntries[stageEntries.length - 1];
   }
@@ -199,11 +249,9 @@ const UpdatedByBadge: React.FC<{ history: CandidateHistoryItem[]; stage: string;
   if (!last) return null;
 
   const displayName = last.updatedByName && last.updatedByName !== 'Unknown' && last.updatedByName !== ''
-    ? last.updatedByName
-    : null;
+    ? last.updatedByName : null;
   const displayRole = last.updatedByRole && last.updatedByRole !== 'unknown' && last.updatedByRole !== ''
-    ? last.updatedByRole
-    : null;
+    ? last.updatedByRole : null;
 
   if (!displayName && !displayRole) return null;
 
@@ -320,8 +368,6 @@ const ResumeReviewCard: React.FC<{
 };
 
 // ─── STAGE 2 & 3: L1 / L2 INTERVIEW ─────────────────────────────────────────
-// KEY CHANGE: Panel's select/reject decision directly advances the pipeline.
-// HR only schedules — panel decides outcome autonomously.
 const InterviewStageCard: React.FC<{
   candidate: Candidate; role: UserRole | null; user: any;
   panelUsers: PanelUser[]; stageKey: 'l1' | 'l2'; title: string;
@@ -337,13 +383,13 @@ const InterviewStageCard: React.FC<{
   const [fbErr, setFbErr]       = useState('');
   const today = new Date().toISOString().split('T')[0];
 
-  const statusKey    = stageKey === 'l1' ? 'l1Status'          : 'l2Status';
-  const dateKey      = stageKey === 'l1' ? 'l1ScheduledDate'   : 'l2ScheduledDate';
-  const slotKey      = stageKey === 'l1' ? 'l1TimeSlot'        : 'l2TimeSlot';
-  const notesKey     = stageKey === 'l1' ? 'l1SchedulingNotes' : 'l2SchedulingNotes';
-  const fbKey        = stageKey === 'l1' ? 'l1Feedback'        : 'l2Feedback';
-  const panelUidKey  = stageKey === 'l1' ? 'l1PanelUid'        : 'l2PanelUid';
-  const panelNmKey   = stageKey === 'l1' ? 'l1PanelName'       : 'l2PanelName';
+  const statusKey   = stageKey === 'l1' ? 'l1Status'          : 'l2Status';
+  const dateKey     = stageKey === 'l1' ? 'l1ScheduledDate'   : 'l2ScheduledDate';
+  const slotKey     = stageKey === 'l1' ? 'l1TimeSlot'        : 'l2TimeSlot';
+  const notesKey    = stageKey === 'l1' ? 'l1SchedulingNotes' : 'l2SchedulingNotes';
+  const fbKey       = stageKey === 'l1' ? 'l1Feedback'        : 'l2Feedback';
+  const panelUidKey = stageKey === 'l1' ? 'l1PanelUid'        : 'l2PanelUid';
+  const panelNmKey  = stageKey === 'l1' ? 'l1PanelName'       : 'l2PanelName';
 
   const status        = (candidate as any)[statusKey]  || 'Locked';
   const savedDate     = (candidate as any)[dateKey];
@@ -359,7 +405,6 @@ const InterviewStageCard: React.FC<{
   const isAssignedPanel = isPanel && user?.uid === assignedPanel;
 
   const canHRSchedule    = isHR && status === 'Pending';
-  // Panel can submit feedback only when scheduled and no final decision yet
   const canPanelFeedback = isAssignedPanel && status === 'Scheduled';
 
   const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && savedDate;
@@ -377,7 +422,6 @@ const InterviewStageCard: React.FC<{
     });
   };
 
-  // Panel directly selects or rejects — no HR confirmation needed
   const handlePanelDecision = (action: 'panel-select' | 'panel-reject') => {
     if (!feedback.trim()) { setFbErr('Feedback is required.'); return; }
     setFbErr('');
@@ -389,11 +433,8 @@ const InterviewStageCard: React.FC<{
   return (
     <StageShell title={title} status={status} isLocked={isLocked}>
 
-      {/* ── Unified Schedule + Feedback Card ── */}
       {showScheduleInfo && (
         <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '12px', overflow: 'hidden', background: 'white' }}>
-
-          {/* Schedule Info */}
           <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px', background: 'white' }}>
             <p style={{ fontSize: '13px', fontWeight: '700', color: '#374151', margin: 0 }}>📅 Schedule Information</p>
             <div>
@@ -417,7 +458,6 @@ const InterviewStageCard: React.FC<{
             <UpdatedByBadge history={history} stage={title} actions={['schedule']} />
           </div>
 
-          {/* Interview Feedback (only when panel has decided) */}
           {showFeedback && (
             <>
               <div style={{ borderTop: '1px solid #E5E7EB', background: '#F9FAFB', padding: '7px 16px' }}>
@@ -433,7 +473,6 @@ const InterviewStageCard: React.FC<{
                 <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>
                   {savedFeedback}
                 </p>
-                {/* Show panel member who gave the final decision */}
                 <UpdatedByBadge history={history} stage={title} actions={['panel-select', 'panel-reject']} />
               </div>
             </>
@@ -441,7 +480,6 @@ const InterviewStageCard: React.FC<{
         </div>
       )}
 
-      {/* HR: Schedule form */}
       {canHRSchedule && (
         <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Schedule {title}</p>
@@ -482,7 +520,6 @@ const InterviewStageCard: React.FC<{
         </div>
       )}
 
-      {/* Panel: Submit feedback with direct select/reject decision */}
       {canPanelFeedback && (
         <div style={{ background: '#F0FDF4', borderRadius: '10px', padding: '14px', border: '1px solid #86EFAC' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', color: '#065F46', marginBottom: '4px' }}>Submit Interview Feedback</p>
@@ -506,17 +543,12 @@ const InterviewStageCard: React.FC<{
         </div>
       )}
 
-      {/* HR waiting for panel decision */}
       {isHR && status === 'Scheduled' && (
-        <ReadOnlyNote msg={`Waiting for the assigned panel member to submit their feedback and decision.`} />
+        <ReadOnlyNote msg="Waiting for the assigned panel member to submit their feedback and decision." />
       )}
-
-      {/* Panel not assigned */}
       {isPanel && !isAssignedPanel && !isLocked && (
         <ReadOnlyNote msg="You are not assigned to this interview. View only." />
       )}
-
-      {/* Admin / Agency view */}
       {(role === 'admin' || role === 'agency') && !isLocked && (
         <ReadOnlyNote msg={`Only HR and assigned panel can manage ${title}.`} />
       )}
@@ -789,10 +821,30 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     switch (stage) {
       case 'Resume Review':
         if (action === 'accept') {
-          updateData = { resumeReviewStatus: 'Accepted', resumeFeedback: payload.feedback, l1Status: 'Pending' };
+          updateData = {
+            resumeReviewStatus: 'Accepted',
+            resumeFeedback:      payload.feedback,
+            l1Status:           'Pending',
+            // ── CHANGE 1 ──────────────────────────────────────────────────
+            // Save the exact HR who accepted the resume so panel-feedback
+            // notifications later in the pipeline reach the right person,
+            // NOT whoever happened to schedule L1 or L2.
+            resumeReviewedByEmail: user.email || '',
+            resumeReviewedByUid:   user.uid,
+            resumeReviewedByName:  loggedInUserName || user.displayName || '',
+            // ─────────────────────────────────────────────────────────────
+          };
           historyData.status = 'Accepted';
         } else {
-          updateData = { resumeReviewStatus: 'Rejected', resumeFeedback: payload.feedback, finalStatus: 'Rejected', l1Status: 'Locked', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
+          updateData = {
+            resumeReviewStatus: 'Rejected',
+            resumeFeedback:      payload.feedback,
+            finalStatus:        'Rejected',
+            l1Status:           'Locked',
+            l2Status:           'Locked',
+            hrStatus:           'Locked',
+            offerStatus:        'Locked',
+          };
           historyData.status = 'Rejected';
         }
         break;
@@ -800,28 +852,28 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       case 'L1 Interview':
         if (action === 'schedule') {
           updateData = {
-            l1Status: 'Scheduled',
-            l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes,
-            l1PanelUid: payload.panelUid, l1PanelName: payload.panelName, l1PanelEmail: payload.panelEmail,
-            l1InterviewerUid: user.uid, l1InterviewerName: user.displayName || user.email, l1InterviewerEmail: user.email || '',
+            l1Status:           'Scheduled',
+            l1ScheduledDate:    payload.scheduledDate,
+            l1TimeSlot:         payload.timeSlot,
+            l1SchedulingNotes:  payload.schedulingNotes,
+            l1PanelUid:         payload.panelUid,
+            l1PanelName:        payload.panelName,
+            l1PanelEmail:       payload.panelEmail,
+            l1InterviewerUid:   user.uid,
+            l1InterviewerName:  user.displayName || user.email,
+            l1InterviewerEmail: user.email || '',
           };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select') {
-          // Panel directly advances to L2 — no HR step needed
-          updateData = {
-            l1Status: 'Selected',
-            l1Feedback: payload.feedback,
-            l2Status: 'Pending',
-          };
+          updateData = { l1Status: 'Selected', l1Feedback: payload.feedback, l2Status: 'Pending' };
           historyData.status = 'Selected';
         } else if (action === 'panel-reject') {
-          // Panel directly rejects — pipeline closed
           updateData = {
-            l1Status: 'Rejected',
-            l1Feedback: payload.feedback,
+            l1Status:    'Rejected',
+            l1Feedback:   payload.feedback,
             finalStatus: 'Rejected',
-            l2Status: 'Locked',
-            hrStatus: 'Locked',
+            l2Status:    'Locked',
+            hrStatus:    'Locked',
             offerStatus: 'Locked',
           };
           historyData.status = 'Rejected';
@@ -831,27 +883,27 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       case 'L2 Interview':
         if (action === 'schedule') {
           updateData = {
-            l2Status: 'Scheduled',
-            l2ScheduledDate: payload.scheduledDate, l2TimeSlot: payload.timeSlot, l2SchedulingNotes: payload.schedulingNotes,
-            l2PanelUid: payload.panelUid, l2PanelName: payload.panelName, l2PanelEmail: payload.panelEmail,
-            l2InterviewerUid: user.uid, l2InterviewerName: user.displayName || user.email, l2InterviewerEmail: user.email || '',
+            l2Status:           'Scheduled',
+            l2ScheduledDate:    payload.scheduledDate,
+            l2TimeSlot:         payload.timeSlot,
+            l2SchedulingNotes:  payload.schedulingNotes,
+            l2PanelUid:         payload.panelUid,
+            l2PanelName:        payload.panelName,
+            l2PanelEmail:       payload.panelEmail,
+            l2InterviewerUid:   user.uid,
+            l2InterviewerName:  user.displayName || user.email,
+            l2InterviewerEmail: user.email || '',
           };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select') {
-          // Panel directly advances to HR Round — no HR step needed
-          updateData = {
-            l2Status: 'Selected',
-            l2Feedback: payload.feedback,
-            hrStatus: 'Pending',
-          };
+          updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending' };
           historyData.status = 'Selected';
         } else if (action === 'panel-reject') {
-          // Panel directly rejects — pipeline closed
           updateData = {
-            l2Status: 'Rejected',
-            l2Feedback: payload.feedback,
+            l2Status:    'Rejected',
+            l2Feedback:   payload.feedback,
             finalStatus: 'Rejected',
-            hrStatus: 'Locked',
+            hrStatus:    'Locked',
             offerStatus: 'Locked',
           };
           historyData.status = 'Rejected';
@@ -860,7 +912,12 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
 
       case 'HR Round':
         if (action === 'schedule') {
-          updateData = { hrStatus: 'Scheduled', hrScheduledDate: payload.scheduledDate, hrTimeSlot: payload.timeSlot, hrSchedulingNotes: payload.schedulingNotes };
+          updateData = {
+            hrStatus:           'Scheduled',
+            hrScheduledDate:    payload.scheduledDate,
+            hrTimeSlot:         payload.timeSlot,
+            hrSchedulingNotes:  payload.schedulingNotes,
+          };
           historyData.status = 'Scheduled';
         } else if (action === 'select') {
           updateData = { hrStatus: 'Selected', hrFeedback: payload.feedback, offerStatus: 'Pending' };
@@ -899,10 +956,14 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       return;
     }
 
-    // ── EMAIL DISPATCH ─────────────────────────────────────────────────────
+    // ── EMAIL DISPATCH ──────────────────────────────────────────────────────
+    // CHANGE 2, 3, 4, 5, 6, 7 — fully replaced email dispatch logic.
+    // See file-level comment block at top for details on each change.
+    // ───────────────────────────────────────────────────────────────────────
     if (!candidate.createdBy) return;
-    const uploader         = await getUploaderInfo(candidate.createdBy);
-    const interviewerName  = loggedInUserName || user.displayName || (role === 'hr' ? 'HR Team' : 'Panel Team');
+
+    const uploader        = await getUploaderInfo(candidate.createdBy);
+    const interviewerName = loggedInUserName || user.displayName || (role === 'hr' ? 'HR Team' : 'Panel Team');
 
     const baseParams = {
       candidateName:     candidate.candidateName        || 'Candidate',
@@ -918,37 +979,93 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       interviewTime:     payload.timeSlot         || '',
     };
 
+    // CHANGE 4 — panel-select / panel-reject now map to 'panel_feedback_submitted'
+    // (previously they mapped to 'candidate_selected' / 'candidate_rejected'
+    //  which are reserved for HR-level decisions, not panel decisions)
     const actionToEmailType: Record<string, string> = {
       'accept':        'resume_accepted',
       'reject':        'candidate_rejected',
       'schedule':      'interview_scheduled',
-      'panel-select':  'candidate_selected',
-      'panel-reject':  'candidate_rejected',
+      'panel-select':  'panel_feedback_submitted',   // ← CHANGED
+      'panel-reject':  'panel_feedback_submitted',   // ← CHANGED
       'select':        'candidate_selected',
       'release-offer': 'offer_released',
       'offer-accept':  'offer_accepted',
       'offer-reject':  'offer_rejected',
     };
-    const emailType  = actionToEmailType[action] || 'status_update';
-    const senderRole = ['HR Round', 'Offer Stage', 'Resume Review'].includes(stage) ? 'hr' : role || 'hr';
 
-    if (uploader.email?.includes('@')) {
-      await sendEmail({ ...baseParams, toEmail: uploader.email, senderRole, emailType });
+    const emailType = actionToEmailType[action] || 'status_update';
+
+    // CHANGE 3 — Map-based deduplication: each recipient email receives exactly
+    // one sendEmail call per action, even if the same address appears in multiple
+    // roles (e.g. HR who uploaded and HR who reviewed are the same person).
+    const emailQueue = new Map<string, typeof baseParams & { toEmail: string; senderRole: string; emailType: string }>();
+
+    const enqueue = (toEmail: string, overrides: { senderRole: string; emailType: string }) => {
+      if (!toEmail?.includes('@')) return;
+      if (emailQueue.has(toEmail)) return; // deduplicate — first write wins
+      emailQueue.set(toEmail, { ...baseParams, toEmail, ...overrides });
+    };
+
+    // ── Resume Review: accept or reject ──────────────────────────────────────
+    // Notify uploader (Agency or HR who submitted the candidate).
+    if (stage === 'Resume Review' && (action === 'accept' || action === 'reject')) {
+      enqueue(uploader.email!, { senderRole: 'hr', emailType });
     }
-    if (role === 'hr' && user.email?.includes('@') && user.email !== uploader.email) {
-      await sendEmail({ ...baseParams, toEmail: user.email, senderRole: 'hr', emailType });
-    }
-    if (action === 'schedule' && payload.panelEmail?.includes('@')) {
-      await sendEmail({ ...baseParams, toEmail: payload.panelEmail, senderRole: 'hr', emailType: 'panel_assigned' });
-    }
-    // Notify HR when panel makes a final decision (select or reject)
-    if (action === 'panel-select' || action === 'panel-reject') {
-      const hrEmailKey = stage === 'L1 Interview' ? 'l1InterviewerEmail' : 'l2InterviewerEmail';
-      const hrEmail    = (candidate as any)[hrEmailKey];
-      if (hrEmail?.includes('@') && hrEmail !== uploader.email) {
-        await sendEmail({ ...baseParams, toEmail: hrEmail, senderRole: 'panel', emailType: 'hr_panel_feedback_notification' });
+
+    // ── Interview Scheduling: L1, L2, HR Round ────────────────────────────────
+    // CHANGE 7 — panel_assigned email is sent ONLY for L1/L2, not HR Round
+    //            (HR Round has no panel assignment).
+    if (action === 'schedule') {
+      // → Uploader informed that interview is scheduled
+      enqueue(uploader.email!, { senderRole: 'hr', emailType: 'interview_scheduled' });
+
+      // CHANGE 6 — HR (scheduler) always receives a self-confirmation copy.
+      // Deduplication prevents double-send when HR === uploader.
+      enqueue(user.email!, { senderRole: 'hr', emailType: 'interview_scheduled' });
+
+      // → Assigned Panel Member gets a panel_assigned notice (L1 / L2 only)
+      if ((stage === 'L1 Interview' || stage === 'L2 Interview') && payload.panelEmail) {
+        enqueue(payload.panelEmail, { senderRole: 'hr', emailType: 'panel_assigned' });
       }
     }
+
+    // ── Panel Feedback: L1 or L2 select / reject ──────────────────────────────
+    // CHANGE 5 — Notifies (a) the HR who accepted the resume and (b) the uploader.
+    // Old code incorrectly used l1InterviewerEmail / l2InterviewerEmail (scheduler).
+    if (
+      (stage === 'L1 Interview' || stage === 'L2 Interview') &&
+      (action === 'panel-select' || action === 'panel-reject')
+    ) {
+      // (a) HR who accepted resume — saved in CHANGE 1 above
+      const resumeReviewerEmail: string | undefined = (candidate as any).resumeReviewedByEmail;
+      if (resumeReviewerEmail) {
+        enqueue(resumeReviewerEmail, { senderRole: 'panel', emailType: 'panel_feedback_submitted' });
+      }
+
+      // (b) Uploader (Agency or HR who submitted the candidate)
+      enqueue(uploader.email!, { senderRole: 'panel', emailType: 'panel_feedback_submitted' });
+    }
+
+    // ── HR Round: select or reject ────────────────────────────────────────────
+    if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
+      enqueue(uploader.email!, { senderRole: 'hr', emailType });
+      // CHANGE 6 — HR self-confirmation; deduplicated if HR === uploader
+      enqueue(user.email!, { senderRole: 'hr', emailType });
+    }
+
+    // ── Offer Stage: any action ───────────────────────────────────────────────
+    if (stage === 'Offer Stage') {
+      enqueue(uploader.email!, { senderRole: 'hr', emailType });
+      // CHANGE 6 — HR self-confirmation; deduplicated if HR === uploader
+      enqueue(user.email!, { senderRole: 'hr', emailType });
+    }
+
+    // ── Flush — send all queued emails ────────────────────────────────────────
+    for (const params of emailQueue.values()) {
+      await sendEmail(params);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
   };
 
   if (loading) return (
