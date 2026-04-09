@@ -210,6 +210,9 @@ export default function CandidateListPage() {
         {dateSort === 'desc' && '↓'}
     </div>
 </TableHead>
+<TableHead className="w-[120px]">AI Score</TableHead>
+
+
                                 <TableHead>Final Status</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -274,6 +277,12 @@ export default function CandidateListPage() {
                                         <TableCell className="text-sm text-muted-foreground align-top">
                                             {formatFirestoreTimestamp(candidate.createdDate)}
                                         </TableCell>
+
+                                        <TableCell className="text-sm font-semibold align-top">
+  {typeof candidate.aiScore === "number"
+    ? `${candidate.aiScore}%`
+    : "N/A"}
+</TableCell>
 
                                         {/* Final Status — use full candidate object, not candidate.FinalStatus */}
                                         <TableCell className="align-top">
