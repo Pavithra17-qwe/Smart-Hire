@@ -17,7 +17,14 @@ import { Candidate } from '@/types/candidate';
 import { normalizeStatus } from '@/lib/normalizeStatus';
 import { sendInterviewEmail } from '@/ai/flows/send-interview-email-flow';
 
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
+type CandidateHistoryItem = {
+  stage: string;
+  updatedByName: string;
+  updatedByRole: string;
+};
+
 type Status =
   | 'Pending' | 'Accepted' | 'Rejected' | 'Scheduled'
   | 'Selected' | 'Offer Sent' | 'Joined' | 'In Progress'
@@ -218,9 +225,11 @@ const StageShell: React.FC<{ title: string; status: string; isLocked: boolean; c
 
 // ─── STAGE 1: RESUME REVIEW ── HR only ───────────────────────────────────────
 const ResumeReviewCard: React.FC<{
-  candidate: Candidate; role: UserRole | null;
+  candidate: Candidate;
+  role: UserRole | null;
+  history: CandidateHistoryItem[];   // ✅ ADD THIS
   onAction: (action: string, payload: any) => void;
-}> = ({ candidate, role, onAction }) => {
+}> = ({ candidate, role, history, onAction }) => {
   const [feedback, setFeedback] = useState('');
   const [err, setErr]           = useState('');
   const status = candidate.resumeReviewStatus || 'Pending';
@@ -240,6 +249,16 @@ const ResumeReviewCard: React.FC<{
           <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#374151' }}>
             {candidate.resumeFeedback || 'No feedback provided.'}
           </p>
+             {/* ✅ NEW: Updated By */}
+    {history
+  .filter((h: CandidateHistoryItem) => h.stage === 'Resume Review')
+  .slice(-1)
+  .map((h: CandidateHistoryItem) => (
+        <p style={{ fontSize: '12px', color: '#6B7280', marginTop: '6px' }}>
+          Updated by: <b>{h.updatedByName}</b> ({h.updatedByRole})
+        </p>
+      ))
+    }
         </div>
       )}
       {role === 'hr' && status === 'Pending' && (
@@ -268,9 +287,9 @@ const ResumeReviewCard: React.FC<{
 // HR schedules + assigns panel → Panel submits feedback → HR makes final call
 const InterviewStageCard: React.FC<{
   candidate: Candidate; role: UserRole | null; user: any;
-  panelUsers: PanelUser[]; stageKey: 'l1' | 'l2'; title: string;
+  panelUsers: PanelUser[]; stageKey: 'l1' | 'l2'; title: string;  history: CandidateHistoryItem[]; 
   onAction: (action: string, payload: any) => void;
-}> = ({ candidate, role, user, panelUsers, stageKey, title, onAction }) => {
+}> = ({ candidate, role, user, panelUsers, stageKey, title, history, onAction }) => {
   const [date, setDate]         = useState('');
   const [slot, setSlot]         = useState('');
   const [notes, setNotes]       = useState('');
@@ -343,9 +362,19 @@ const InterviewStageCard: React.FC<{
       {['Scheduled','Selected','Rejected'].includes(status) && panelName && (
         <div style={iBox}><p style={lbl}>👤 Assigned Panel</p><p style={{ ...saved, color: '#1D4ED8', fontWeight: '600' }}>{panelName}</p></div>
       )}
-
+{/* ✅ Updated By */}
+{history
+  ?.filter(h => h.stage === title)
+  .slice(-1)
+  .map((h, i) => (
+    <p key={i} style={{ fontSize: '12px', color: '#6B7280', marginTop: '6px' }}>
+      Updated by: <b>{h.updatedByName}</b> ({h.updatedByRole})
+    </p>
+))}
       {/* Final feedback (after HR decision) */}
+
       {['Selected','Rejected'].includes(status) && savedFeedback && (
+        
         <div style={{ ...iBox, borderColor: status === 'Rejected' ? '#FCA5A5' : '#6EE7B7' }}>
           <p style={lbl}>💬 Interview Feedback</p>
           <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46' }}>{savedFeedback}</p>
@@ -457,9 +486,11 @@ const InterviewStageCard: React.FC<{
 
 // ─── STAGE 4: HR ROUND ── HR only ────────────────────────────────────────────
 const HRRoundCard: React.FC<{
-  candidate: Candidate; role: UserRole | null;
+  candidate: Candidate;
+  role: UserRole | null;
+  history: CandidateHistoryItem[];   // ✅ ADD
   onAction: (action: string, payload: any) => void;
-}> = ({ candidate, role, onAction }) => {
+}> = ({ candidate, role, history,onAction }) => {
   const [date, setDate]         = useState('');
   const [slot, setSlot]         = useState('');
   const [notes, setNotes]       = useState('');
@@ -547,9 +578,11 @@ const HRRoundCard: React.FC<{
 
 // ─── STAGE 5: OFFER STAGE ── HR only ─────────────────────────────────────────
 const OfferStageCard: React.FC<{
-  candidate: Candidate; role: UserRole | null;
+  candidate: Candidate;
+  role: UserRole | null;
+  history: CandidateHistoryItem[];   // ✅ ADD
   onAction: (action: string, payload: any) => void;
-}> = ({ candidate, role, onAction }) => {
+}> = ({ candidate, role, history, onAction }) => {
   const [offerFeedback, setOfferFeedback] = useState('');
   const [offerError, setOfferError]       = useState('');
   const status = candidate.offerStatus || 'Locked';
@@ -608,7 +641,27 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
   const [panelUsers, setPanelUsers] = useState<PanelUser[]>([]);
   const router                      = useRouter();
   const { role, user }              = useAuth();
-
+  const [history, setHistory] = useState<CandidateHistoryItem[]>([]);
+    useEffect(() => {
+    if (!candidateId) return;
+  
+    const q = query(
+      collection(db, 'candidate_history'),
+      where('candidateId', '==', candidateId)
+    );
+  
+    getDocs(q).then((snap) => {
+      const data: CandidateHistoryItem[] = snap.docs.map(doc => {
+        const d = doc.data();
+        return {
+          stage: d.stage || '',
+          updatedByName: d.updatedByName || '',
+          updatedByRole: d.updatedByRole || '',
+        };
+      });
+            setHistory(data);
+    });
+  }, [candidateId]);
   useEffect(() => {
     if (!candidateId) return;
     const unsub = onSnapshot(doc(db, 'candidates', candidateId), (snap) => {
@@ -634,6 +687,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     if (!candidate || !user) return;
 
     let updateData: Partial<any> = {};
+    const loggedInUserName = await getLoggedInUserName(user.uid);
     const historyData: any = {
       candidateId, stage, action,
       status:          '',
@@ -643,8 +697,11 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       timeSlot:        payload.timeSlot        || null,
       panelUid:        payload.panelUid        || null,
       panelName:       payload.panelName       || null,
-      updatedBy:       user.uid,
-      updatedAt:       Timestamp.now(),
+      updatedBy: user.uid,
+      updatedByName: loggedInUserName || user.displayName || user.email || 'Unknown', // ✅ FIX
+      updatedByRole: role || 'unknown',
+
+  updatedAt: Timestamp.now(),
     };
 
     switch (stage) {
@@ -742,7 +799,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     // Rule: Never email candidate. Email uploader + HR + panel as appropriate.
     if (!candidate.createdBy) return;
     const uploader         = await getUploaderInfo(candidate.createdBy);
-    const loggedInUserName = await getLoggedInUserName(user.uid);
     const interviewerName  = loggedInUserName || user.displayName || (role === 'hr' ? 'HR Team' : 'Panel Team');
 
     const baseParams = {
@@ -894,26 +950,32 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-              <ResumeReviewCard
-                candidate={candidate} role={role as UserRole}
-                onAction={(a, p) => handleAction('Resume Review', a, p)}
-              />
+            <ResumeReviewCard
+  candidate={candidate}
+  role={role as UserRole}
+  history={history}   // ✅ ADD THIS
+  onAction={(a, p) => handleAction('Resume Review', a, p)}
+/>
               <InterviewStageCard
                 candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
                 stageKey="l1" title="L1 Interview"
+                history={history}
                 onAction={(a, p) => handleAction('L1 Interview', a, p)}
               />
               <InterviewStageCard
                 candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
                 stageKey="l2" title="L2 Interview"
+                history={history}
                 onAction={(a, p) => handleAction('L2 Interview', a, p)}
               />
               <HRRoundCard
                 candidate={candidate} role={role as UserRole}
+                history={history}
                 onAction={(a, p) => handleAction('HR Round', a, p)}
               />
               <OfferStageCard
                 candidate={candidate} role={role as UserRole}
+                history={history}
                 onAction={(a, p) => handleAction('Offer Stage', a, p)}
               />
 
