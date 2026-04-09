@@ -23,6 +23,7 @@ type CandidateHistoryItem = {
   stage: string;
   updatedByName: string;
   updatedByRole: string;
+  action?: string;
 };
 
 type Status =
@@ -110,7 +111,7 @@ function buildFallbackSummary(score: number | undefined | null, candidate: Candi
   return `Score: ${s}% — Strong match.\n\nThe candidate closely aligns with the role requirements and demonstrates the key skills and experience needed. Highly recommended for the next stage.`;
 }
 
-// ─── AI MATCH CARD ─── UNCHANGED ─────────────────────────────────────────────
+// ─── AI MATCH CARD ────────────────────────────────────────────────────────────
 const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
   const rawScore  = candidate.matchScore ?? candidate.aiScore;
   const score     = typeof rawScore === 'number' ? rawScore : undefined;
@@ -156,33 +157,19 @@ const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
         </div>
       </div>
       {candidate.matchSummary && (
-  <div
-    style={{
-      marginTop: '12px',
-      padding: '8px 10px',
-      borderRadius: '6px',
-      background: '#EEF2FF', // light highlight
-      border: '1px solid #C7D2FE'
-    }}
-  >
-    <p
-      style={{
-        fontSize: '12px',
-        fontWeight: '700', // ✅ bold
-        color: '#3730A3'   // ✅ highlighted text color
-      }}
-    >
-      {candidate.matchSummary?.includes('Job Description') || candidate.matchSummary?.includes('JD')
-        ? 'AI compared resume against Job Description'
-        : 'Scored based on candidate profile (No JD available)'}
-    </p>
-  </div>
-)}
+        <div style={{ marginTop: '12px', padding: '8px 10px', borderRadius: '6px', background: '#EEF2FF', border: '1px solid #C7D2FE' }}>
+          <p style={{ fontSize: '12px', fontWeight: '700', color: '#3730A3' }}>
+            {candidate.matchSummary?.includes('Job Description') || candidate.matchSummary?.includes('JD')
+              ? 'AI compared resume against Job Description'
+              : 'Scored based on candidate profile (No JD available)'}
+          </p>
+        </div>
+      )}
     </div>
   );
 };
 
-// ─── INTERVIEW WORKFLOW HELPERS ───────────────────────────────────────────────
+// ─── SHARED STYLES ────────────────────────────────────────────────────────────
 const iBox: React.CSSProperties  = { background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', border: '1px solid #E5E7EB' };
 const lbl: React.CSSProperties   = { fontSize: '12px', fontWeight: '600', color: '#6B7280', marginBottom: '4px' };
 const saved: React.CSSProperties = { fontSize: '13px', lineHeight: '1.6', wordBreak: 'break-word', whiteSpace: 'pre-wrap' };
@@ -193,14 +180,77 @@ const TIME_SLOTS = [
   '01:00pm - 02:00pm', '02:00pm - 03:00pm', '03:00pm - 04:00pm', '04:00pm - 05:00pm',
 ];
 
-// Read-only notice for non-acting roles
+// ─── UPDATED BY BADGE ─────────────────────────────────────────────────────────
+// action[] = list of actions to match. If provided, finds last entry matching any of those actions.
+// If no action filter, finds last entry for the stage.
+// Falls back gracefully when action field is missing on old records.
+const UpdatedByBadge: React.FC<{ history: CandidateHistoryItem[]; stage: string; actions?: string[] }> = ({ history, stage, actions }) => {
+  const stageEntries = history.filter(h => h.stage === stage);
+  
+  let last: CandidateHistoryItem | undefined;
+  if (actions && actions.length > 0) {
+    // Try strict match first (action field present and matches)
+    const strict = stageEntries.filter(h => h.action && actions.includes(h.action));
+    if (strict.length > 0) {
+      last = strict[strict.length - 1];
+    } else {
+      // Fallback: action field missing on old records — use last entry for this stage
+      last = stageEntries[stageEntries.length - 1];
+    }
+  } else {
+    last = stageEntries[stageEntries.length - 1];
+  }
+
+  if (!last) return null;
+
+  // Don't show if name is truly unknown/empty AND role is unknown — means data wasn't saved
+  const displayName = last.updatedByName && last.updatedByName !== 'Unknown' && last.updatedByName !== ''
+    ? last.updatedByName
+    : null;
+  const displayRole = last.updatedByRole && last.updatedByRole !== 'unknown' && last.updatedByRole !== ''
+    ? last.updatedByRole
+    : null;
+
+  if (!displayName && !displayRole) return null;
+
+  const roleColor: Record<string, { bg: string; text: string; border: string }> = {
+    hr:     { bg: '#EFF6FF', text: '#1D4ED8', border: '#BFDBFE' },
+    panel:  { bg: '#F0FDF4', text: '#065F46', border: '#86EFAC' },
+    admin:  { bg: '#FEF3C7', text: '#92400E', border: '#FCD34D' },
+    agency: { bg: '#F5F3FF', text: '#5B21B6', border: '#DDD6FE' },
+  };
+  const c = roleColor[displayRole?.toLowerCase() ?? ''] || { bg: '#F3F4F6', text: '#374151', border: '#E5E7EB' };
+
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: '6px',
+      padding: '5px 10px', borderRadius: '6px',
+      background: c.bg, border: `1px solid ${c.border}`,
+      fontSize: '12px', color: c.text, alignSelf: 'flex-start',
+    }}>
+      <span style={{ fontWeight: '500', opacity: 0.8 }}>✏️ Updated by</span>
+      <span style={{ fontWeight: '700' }}>{displayName ?? '—'}</span>
+      {displayRole && (
+        <span style={{
+          background: c.border, color: c.text,
+          padding: '1px 8px', borderRadius: '999px',
+          fontSize: '11px', fontWeight: '700', textTransform: 'capitalize',
+        }}>
+          {displayRole}
+        </span>
+      )}
+    </div>
+  );
+};
+
+// ─── READ-ONLY NOTE ───────────────────────────────────────────────────────────
 const ReadOnlyNote: React.FC<{ msg: string }> = ({ msg }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#9CA3AF', background: '#F9FAFB', borderRadius: '8px', padding: '8px 12px', border: '1px solid #E5E7EB' }}>
     <Eye className="h-4 w-4" style={{ flexShrink: 0 }} /> {msg}
   </div>
 );
 
-// Card shell — same visual style as original StageCard
+// ─── STAGE SHELL ──────────────────────────────────────────────────────────────
 const StageShell: React.FC<{ title: string; status: string; isLocked: boolean; children: React.ReactNode }> = ({ title, status, isLocked, children }) => {
   const normalized = normalizeStatus(status as any);
   const isActive   = !isLocked && ['Pending', 'Scheduled', 'Released'].includes(normalized.name);
@@ -223,11 +273,12 @@ const StageShell: React.FC<{ title: string; status: string; isLocked: boolean; c
   );
 };
 
+
 // ─── STAGE 1: RESUME REVIEW ── HR only ───────────────────────────────────────
 const ResumeReviewCard: React.FC<{
   candidate: Candidate;
   role: UserRole | null;
-  history: CandidateHistoryItem[];   // ✅ ADD THIS
+  history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, history, onAction }) => {
   const [feedback, setFeedback] = useState('');
@@ -244,22 +295,16 @@ const ResumeReviewCard: React.FC<{
   return (
     <StageShell title="Resume Review" status={status} isLocked={false}>
       {isDone && (
-        <div style={iBox}>
-          <p style={lbl}>Feedback</p>
-          <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#374151' }}>
-            {candidate.resumeFeedback || 'No feedback provided.'}
-          </p>
-             {/* ✅ NEW: Updated By */}
-    {history
-  .filter((h: CandidateHistoryItem) => h.stage === 'Resume Review')
-  .slice(-1)
-  .map((h: CandidateHistoryItem) => (
-        <p style={{ fontSize: '12px', color: '#6B7280', marginTop: '6px' }}>
-          Updated by: <b>{h.updatedByName}</b> ({h.updatedByRole})
-        </p>
-      ))
-    }
-        </div>
+        <>
+          {/* Section 1: Review info + Updated By */}
+          <div style={{ ...iBox, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <p style={lbl}>📋 Review Details</p>
+            <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#374151' }}>
+              {candidate.resumeFeedback || 'No feedback provided.'}
+            </p>
+            <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
+          </div>
+        </>
       )}
       {role === 'hr' && status === 'Pending' && (
         <>
@@ -284,10 +329,10 @@ const ResumeReviewCard: React.FC<{
 };
 
 // ─── STAGE 2 & 3: L1 / L2 INTERVIEW ─────────────────────────────────────────
-// HR schedules + assigns panel → Panel submits feedback → HR makes final call
 const InterviewStageCard: React.FC<{
   candidate: Candidate; role: UserRole | null; user: any;
-  panelUsers: PanelUser[]; stageKey: 'l1' | 'l2'; title: string;  history: CandidateHistoryItem[]; 
+  panelUsers: PanelUser[]; stageKey: 'l1' | 'l2'; title: string;
+  history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, user, panelUsers, stageKey, title, history, onAction }) => {
   const [date, setDate]         = useState('');
@@ -326,6 +371,9 @@ const InterviewStageCard: React.FC<{
   const canPanelFeedback = isAssignedPanel && status === 'Scheduled' && !panelFeedback;
   const canHRDecide      = isHR && status === 'Scheduled' && !!panelFeedback;
 
+  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && savedDate;
+  const showFeedback     = ['Selected', 'Rejected'].includes(status) && savedFeedback;
+
   const handleSchedule = () => {
     if (!panelUid)      { setSchedErr('Please select a panel member.'); return; }
     if (!date || !slot) { setSchedErr('Please select date and time.'); return; }
@@ -347,37 +395,60 @@ const InterviewStageCard: React.FC<{
   return (
     <StageShell title={title} status={status} isLocked={isLocked}>
 
-      {/* Saved schedule info */}
-      {['Scheduled','Selected','Rejected'].includes(status) && savedDate && (
-        <div style={iBox}>
-          <p style={lbl}>📅 Scheduled</p>
-          <p style={{ ...saved, fontWeight: '600', color: '#374151' }}>
-            {new Date(savedDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {savedSlot}
-          </p>
-        </div>
-      )}
-      {['Scheduled','Selected','Rejected'].includes(status) && savedNotes && (
-        <div style={iBox}><p style={lbl}>📝 Scheduling Notes</p><p style={{ ...saved, color: '#374151' }}>{savedNotes}</p></div>
-      )}
-      {['Scheduled','Selected','Rejected'].includes(status) && panelName && (
-        <div style={iBox}><p style={lbl}>👤 Assigned Panel</p><p style={{ ...saved, color: '#1D4ED8', fontWeight: '600' }}>{panelName}</p></div>
-      )}
-{/* ✅ Updated By */}
-{history
-  ?.filter(h => h.stage === title)
-  .slice(-1)
-  .map((h, i) => (
-    <p key={i} style={{ fontSize: '12px', color: '#6B7280', marginTop: '6px' }}>
-      Updated by: <b>{h.updatedByName}</b> ({h.updatedByRole})
-    </p>
-))}
-      {/* Final feedback (after HR decision) */}
+      {/* ── UNIFIED CARD: Schedule Info + Interview Feedback ── */}
+      {showScheduleInfo && (
+        <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '12px', overflow: 'hidden', background: 'white' }}>
 
-      {['Selected','Rejected'].includes(status) && savedFeedback && (
-        
-        <div style={{ ...iBox, borderColor: status === 'Rejected' ? '#FCA5A5' : '#6EE7B7' }}>
-          <p style={lbl}>💬 Interview Feedback</p>
-          <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46' }}>{savedFeedback}</p>
+          {/* TOP: Schedule Info */}
+          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px', background: 'white' }}>
+            <p style={{ fontSize: '13px', fontWeight: '700', color: '#374151', margin: 0 }}>📅 Schedule Information</p>
+
+            <div>
+              <p style={lbl}>Date & Time</p>
+              <p style={{ ...saved, fontWeight: '600', color: '#374151', margin: 0 }}>
+                {new Date(savedDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {savedSlot}
+              </p>
+            </div>
+
+            {savedNotes && (
+              <div>
+                <p style={lbl}>📝 Scheduling Notes</p>
+                <p style={{ ...saved, color: '#374151', margin: 0 }}>{savedNotes}</p>
+              </div>
+            )}
+
+            {panelName && (
+              <div>
+                <p style={lbl}>👤 Assigned Panel</p>
+                <p style={{ ...saved, color: '#1D4ED8', fontWeight: '600', margin: 0 }}>{panelName}</p>
+              </div>
+            )}
+
+            <UpdatedByBadge history={history} stage={title} actions={['schedule']} />
+          </div>
+
+          {/* BOTTOM: Interview Feedback (only when decided) */}
+          {showFeedback && (
+            <>
+              {/* Divider bar */}
+              <div style={{ borderTop: '1px solid #E5E7EB', background: '#F9FAFB', padding: '7px 16px' }}>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                  💬 Interview Feedback
+                </span>
+              </div>
+
+              <div style={{
+                padding: '14px 16px',
+                background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9',
+                display: 'flex', flexDirection: 'column', gap: '10px',
+              }}>
+                <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>
+                  {savedFeedback}
+                </p>
+                <UpdatedByBadge history={history} stage={title} actions={['select', 'reject', 'panel-select', 'panel-reject']} />
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -386,6 +457,10 @@ const InterviewStageCard: React.FC<{
         <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: '8px', padding: '10px 12px' }}>
           <p style={{ ...lbl, color: '#92400E' }}>📋 Panel Feedback — Awaiting Your Decision</p>
           <p style={{ ...saved, color: '#78350F' }}>{panelFeedback}</p>
+          {/* Updated By for panel feedback submission */}
+          <div style={{ marginTop: '8px' }}>
+            <UpdatedByBadge history={history} stage={title} actions={['panel-select', 'panel-reject']} />
+          </div>
         </div>
       )}
 
@@ -400,9 +475,11 @@ const InterviewStageCard: React.FC<{
             style={{ width: '100%', borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px 12px', fontSize: '13px', marginBottom: '12px', background: 'white' }}
           >
             <option value="">— Select Panel Member —</option>
-            {panelUsers.map(p =><option key={p.uid} value={p.uid}>
-  {p.name ? `${p.name} (${p.email})` : p.email}
-</option>)}
+            {panelUsers.map(p => (
+              <option key={p.uid} value={p.uid}>
+                {p.name ? `${p.name} (${p.email})` : p.email}
+              </option>
+            ))}
           </select>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
             <div style={{ position: 'relative', minWidth: '150px' }}>
@@ -484,13 +561,13 @@ const InterviewStageCard: React.FC<{
   );
 };
 
-// ─── STAGE 4: HR ROUND ── HR only ────────────────────────────────────────────
+// ─── STAGE 4: HR ROUND ────────────────────────────────────────────────────────
 const HRRoundCard: React.FC<{
   candidate: Candidate;
   role: UserRole | null;
-  history: CandidateHistoryItem[];   // ✅ ADD
+  history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
-}> = ({ candidate, role, history,onAction }) => {
+}> = ({ candidate, role, history, onAction }) => {
   const [date, setDate]         = useState('');
   const [slot, setSlot]         = useState('');
   const [notes, setNotes]       = useState('');
@@ -500,6 +577,9 @@ const HRRoundCard: React.FC<{
   const today  = new Date().toISOString().split('T')[0];
   const status = candidate.hrStatus || 'Locked';
   const isHR   = role === 'hr';
+
+  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && candidate.hrScheduledDate;
+  const showFeedback     = ['Selected', 'Rejected'].includes(status) && candidate.hrFeedback;
 
   const handleSchedule = () => {
     if (!date || !slot)  { setSchedErr('Please select date and time.'); return; }
@@ -516,23 +596,58 @@ const HRRoundCard: React.FC<{
 
   return (
     <StageShell title="HR Round" status={status} isLocked={status === 'Locked'}>
-      {['Scheduled','Selected','Rejected'].includes(status) && candidate.hrScheduledDate && (
-        <div style={iBox}>
-          <p style={lbl}>📅 Scheduled</p>
-          <p style={{ ...saved, fontWeight: '600', color: '#374151' }}>
-            {new Date(candidate.hrScheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {candidate.hrTimeSlot}
-          </p>
+
+      {/* ── UNIFIED CARD: Schedule Info + HR Feedback ── */}
+      {showScheduleInfo && (
+        <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '12px', overflow: 'hidden', background: 'white' }}>
+
+          {/* TOP: Schedule Info */}
+          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px', background: 'white' }}>
+            <p style={{ fontSize: '13px', fontWeight: '700', color: '#374151', margin: 0 }}>📅 Schedule Information</p>
+
+            <div>
+              <p style={lbl}>Date & Time</p>
+              <p style={{ ...saved, fontWeight: '600', color: '#374151', margin: 0 }}>
+                {new Date(candidate.hrScheduledDate!).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {candidate.hrTimeSlot}
+              </p>
+            </div>
+
+            {candidate.hrSchedulingNotes && (
+              <div>
+                <p style={lbl}>📝 Scheduling Notes</p>
+                <p style={{ ...saved, color: '#374151', margin: 0 }}>{candidate.hrSchedulingNotes}</p>
+              </div>
+            )}
+
+            <UpdatedByBadge history={history} stage="HR Round" actions={['schedule']} />
+          </div>
+
+          {/* BOTTOM: HR Feedback (only when decided) */}
+          {showFeedback && (
+            <>
+              {/* Divider bar */}
+              <div style={{ borderTop: '1px solid #E5E7EB', background: '#F9FAFB', padding: '7px 16px' }}>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                  💬 Interview Feedback
+                </span>
+              </div>
+
+              <div style={{
+                padding: '14px 16px',
+                background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9',
+                display: 'flex', flexDirection: 'column', gap: '10px',
+              }}>
+                <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>
+                  {candidate.hrFeedback}
+                </p>
+                <UpdatedByBadge history={history} stage="HR Round" actions={['select', 'reject']} />
+              </div>
+            </>
+          )}
         </div>
       )}
-      {['Scheduled','Selected','Rejected'].includes(status) && candidate.hrSchedulingNotes && (
-        <div style={iBox}><p style={lbl}>📝 Scheduling Notes</p><p style={{ ...saved, color: '#374151' }}>{candidate.hrSchedulingNotes}</p></div>
-      )}
-      {['Selected','Rejected'].includes(status) && candidate.hrFeedback && (
-        <div style={{ ...iBox, borderColor: status === 'Rejected' ? '#FCA5A5' : '#6EE7B7' }}>
-          <p style={lbl}>💬 HR Feedback</p>
-          <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46' }}>{candidate.hrFeedback}</p>
-        </div>
-      )}
+
+      {/* HR: Schedule form */}
       {isHR && status === 'Pending' && (
         <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Schedule HR Round</p>
@@ -556,6 +671,8 @@ const HRRoundCard: React.FC<{
           </div>
         </div>
       )}
+
+      {/* HR: Feedback + decision form after scheduling */}
       {isHR && status === 'Scheduled' && (
         <>
           <p style={{ ...lbl, marginBottom: '2px' }}>Interview Feedback <span style={{ color: '#DC2626' }}>*</span></p>
@@ -569,6 +686,7 @@ const HRRoundCard: React.FC<{
           </div>
         </>
       )}
+
       {!isHR && status !== 'Locked' && (
         <ReadOnlyNote msg="Only HR can manage the HR Round." />
       )}
@@ -576,11 +694,11 @@ const HRRoundCard: React.FC<{
   );
 };
 
-// ─── STAGE 5: OFFER STAGE ── HR only ─────────────────────────────────────────
+// ─── STAGE 5: OFFER STAGE ─────────────────────────────────────────────────────
 const OfferStageCard: React.FC<{
   candidate: Candidate;
   role: UserRole | null;
-  history: CandidateHistoryItem[];   // ✅ ADD
+  history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, history, onAction }) => {
   const [offerFeedback, setOfferFeedback] = useState('');
@@ -596,25 +714,46 @@ const OfferStageCard: React.FC<{
 
   return (
     <StageShell title="Offer Stage" status={status} isLocked={status === 'Locked'}>
-      {status === 'Released' && !isHR && (
-        <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600' }}>📨 Offer has been released. Awaiting candidate response.</p>
+
+      {/* Offer Released */}
+      {status === 'Released' && (
+        <div style={{ background: '#EFF6FF', borderRadius: '8px', padding: '10px 14px', border: '1px solid #BFDBFE', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600', margin: 0 }}>📨 Offer has been released. Awaiting candidate response.</p>
+          {/* Updated By for release action */}
+          <UpdatedByBadge history={history} stage="Offer Stage" actions={['release-offer']} />
+        </div>
       )}
+
+      {/* Offer Accepted / Rejected */}
       {(status === 'Accepted' || status === 'Rejected') && candidate.offerFeedback && (
-        <div style={{ ...iBox, borderColor: status === 'Accepted' ? '#6EE7B7' : '#FCA5A5' }}>
-          <p style={lbl}>Response Notes</p>
-          <p style={{ ...saved, color: status === 'Accepted' ? '#065F46' : '#DC2626' }}>
-            {status === 'Accepted' ? '🎉 ' : ''}{candidate.offerFeedback}
+        <div style={{ background: status === 'Accepted' ? '#F0FDF9' : '#FFF5F5', borderRadius: '10px', padding: '12px 14px', border: `1px solid ${status === 'Accepted' ? '#6EE7B7' : '#FCA5A5'}`, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <p style={{ ...lbl, color: status === 'Accepted' ? '#065F46' : '#991B1B', fontSize: '13px', fontWeight: '700', margin: 0 }}>
+            {status === 'Accepted' ? '🎉 Offer Accepted' : '❌ Offer Rejected'}
           </p>
+          <div style={iBox}>
+            <p style={lbl}>Response Notes</p>
+            <p style={{ ...saved, color: status === 'Accepted' ? '#065F46' : '#DC2626' }}>
+              {candidate.offerFeedback}
+            </p>
+          </div>
+          {/* Updated By for accept/reject */}
+          <UpdatedByBadge history={history} stage="Offer Stage" actions={['offer-accept', 'offer-reject']} />
         </div>
       )}
+
+      {/* HR: Release offer button */}
       {isHR && status === 'Pending' && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <Button onClick={() => onAction('release-offer', {})} style={{ background: '#7C3AED', color: 'white' }}>📨 Release Offer</Button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <p style={{ fontSize: '13px', color: '#6B7280' }}>Candidate has cleared all rounds. Release the offer when ready.</p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button onClick={() => onAction('release-offer', {})} style={{ background: '#7C3AED', color: 'white' }}>📨 Release Offer</Button>
+          </div>
         </div>
       )}
+
+      {/* HR: Mark candidate response */}
       {isHR && status === 'Released' && (
         <>
-          <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600' }}>📨 Offer has been released</p>
           <p style={{ ...lbl, marginBottom: '2px' }}>Response Notes <span style={{ color: '#DC2626' }}>*</span></p>
           <Textarea placeholder="Enter candidate's response or notes (mandatory)…" value={offerFeedback}
             onChange={e => { setOfferFeedback(e.target.value); if (e.target.value.trim()) setOfferError(''); }}
@@ -626,6 +765,7 @@ const OfferStageCard: React.FC<{
           </div>
         </>
       )}
+
       {!isHR && status !== 'Locked' && status !== 'Released' && (
         <ReadOnlyNote msg="Only HR can manage the Offer Stage." />
       )}
@@ -641,27 +781,25 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
   const [panelUsers, setPanelUsers] = useState<PanelUser[]>([]);
   const router                      = useRouter();
   const { role, user }              = useAuth();
-  const [history, setHistory] = useState<CandidateHistoryItem[]>([]);
-    useEffect(() => {
+  const [history, setHistory]       = useState<CandidateHistoryItem[]>([]);
+
+  useEffect(() => {
     if (!candidateId) return;
-  
-    const q = query(
-      collection(db, 'candidate_history'),
-      where('candidateId', '==', candidateId)
-    );
-  
+    const q = query(collection(db, 'candidate_history'), where('candidateId', '==', candidateId));
     getDocs(q).then((snap) => {
       const data: CandidateHistoryItem[] = snap.docs.map(doc => {
         const d = doc.data();
         return {
-          stage: d.stage || '',
+          stage:         d.stage         || '',
           updatedByName: d.updatedByName || '',
           updatedByRole: d.updatedByRole || '',
+          action:        d.action        || '',
         };
       });
-            setHistory(data);
+      setHistory(data);
     });
   }, [candidateId]);
+
   useEffect(() => {
     if (!candidateId) return;
     const unsub = onSnapshot(doc(db, 'candidates', candidateId), (snap) => {
@@ -671,7 +809,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     return () => unsub();
   }, [candidateId]);
 
-  // HR needs panel list for L1/L2 scheduling dropdowns
   useEffect(() => {
     if (role !== 'hr') return;
     getDocs(query(collection(db, 'users'), where('role', '==', 'panel'))).then(snap => {
@@ -697,11 +834,10 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       timeSlot:        payload.timeSlot        || null,
       panelUid:        payload.panelUid        || null,
       panelName:       payload.panelName       || null,
-      updatedBy: user.uid,
-      updatedByName: loggedInUserName || user.displayName || user.email || 'Unknown', // ✅ FIX
-      updatedByRole: role || 'unknown',
-
-  updatedAt: Timestamp.now(),
+      updatedBy:       user.uid,
+      updatedByName:   loggedInUserName || user.displayName || user.email || 'Unknown',
+      updatedByRole:   role || 'unknown',
+      updatedAt:       Timestamp.now(),
     };
 
     switch (stage) {
@@ -717,7 +853,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
 
       case 'L1 Interview':
         if (action === 'schedule') {
-          // HR schedules and assigns panel
           updateData = {
             l1Status: 'Scheduled',
             l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes,
@@ -726,11 +861,9 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
           };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select' || action === 'panel-reject') {
-          // Panel submits feedback; HR decides next
           updateData = { l1PanelFeedback: payload.feedback };
           historyData.status = 'Panel Feedback Submitted';
         } else if (action === 'select') {
-          // HR moves to L2
           updateData = { l1Status: 'Selected', l1Feedback: (candidate as any).l1PanelFeedback || '', l2Status: 'Pending' };
           historyData.status = 'Selected';
         } else if (action === 'reject') {
@@ -790,13 +923,19 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     try {
       await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
       await addDoc(collection(db, 'candidate_history'), historyData);
+      // Refresh local history immediately for instant UI update
+      setHistory(prev => [...prev, {
+        stage,
+        action,
+        updatedByName: historyData.updatedByName,
+        updatedByRole: historyData.updatedByRole,
+      }]);
     } catch (err) {
       console.error('Firestore update failed:', err);
       return;
     }
 
     // ── EMAIL DISPATCH ─────────────────────────────────────────────────────
-    // Rule: Never email candidate. Email uploader + HR + panel as appropriate.
     if (!candidate.createdBy) return;
     const uploader         = await getUploaderInfo(candidate.createdBy);
     const interviewerName  = loggedInUserName || user.displayName || (role === 'hr' ? 'HR Team' : 'Panel Team');
@@ -827,32 +966,23 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       'offer-reject':  'offer_rejected',
     };
     const emailType  = actionToEmailType[action] || 'status_update';
-    const senderRole = ['HR Round','Offer Stage','Resume Review'].includes(stage) ? 'hr' : role || 'hr';
+    const senderRole = ['HR Round', 'Offer Stage', 'Resume Review'].includes(stage) ? 'hr' : role || 'hr';
 
-    // 1. Always notify the uploader (HR or Agency who uploaded the candidate)
     if (uploader.email?.includes('@')) {
       await sendEmail({ ...baseParams, toEmail: uploader.email, senderRole, emailType });
     }
-
-    // 2. If HR took the action AND is not the uploader, also CC the HR who acted
     if (role === 'hr' && user.email?.includes('@') && user.email !== uploader.email) {
       await sendEmail({ ...baseParams, toEmail: user.email, senderRole: 'hr', emailType });
     }
-
-    // 3. On L1/L2 schedule: notify the newly assigned panel member
     if (action === 'schedule' && payload.panelEmail?.includes('@')) {
       await sendEmail({ ...baseParams, toEmail: payload.panelEmail, senderRole: 'hr', emailType: 'panel_assigned' });
     }
-
-    // 4. On panel feedback: notify HR (the one who scheduled) so they can decide
     if (action === 'panel-select' || action === 'panel-reject') {
       const hrEmailKey = stage === 'L1 Interview' ? 'l1InterviewerEmail' : 'l2InterviewerEmail';
       const hrEmail    = (candidate as any)[hrEmailKey];
       if (hrEmail?.includes('@') && hrEmail !== uploader.email) {
         await sendEmail({ ...baseParams, toEmail: hrEmail, senderRole: 'panel', emailType: 'hr_panel_feedback_notification' });
       }
-      // Also notify uploader if they differ from HR
-      // (already covered in step 1 above)
     }
   };
 
@@ -867,7 +997,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     </div>
   );
 
-  // Agency: only their own candidates
   if (role === 'agency' && candidate.createdBy !== user?.uid) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>
@@ -876,7 +1005,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     );
   }
 
-  const getStatus = (s: Status | undefined): Status => s || 'Pending';
   const finalStatus = candidate.finalStatus || 'In Progress';
   const finalBadgeStyle: React.CSSProperties = {
     background: finalStatus === 'Completed' ? '#D1FAE5' : finalStatus === 'Rejected' ? '#FEE2E2' : '#EDE9FE',
@@ -892,7 +1020,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
         </Button>
       </div>
 
-      {/* Admin read-only banner */}
       {role === 'admin' && (
         <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: '10px', padding: '10px 16px', marginBottom: '16px', fontSize: '13px', color: '#92400E', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Eye className="h-4 w-4" /> <strong>Admin View:</strong> You can view all candidate details but cannot take any actions.
@@ -901,10 +1028,8 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
 
       <div style={{ display: 'grid', gridTemplateColumns: '30% 70%', gap: '24px' }}>
 
-        {/* ── LEFT COLUMN ── unchanged layout */}
+        {/* ── LEFT COLUMN ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-          {/* Profile card */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center' }}>
             <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: '#EDE9FE', margin: '0 auto 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', fontWeight: '700', color: '#5B21B6' }}>
               {(candidate.candidateName || '?')[0].toUpperCase()}
@@ -914,10 +1039,8 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <span style={finalBadgeStyle}>{finalStatus}</span>
           </div>
 
-          {/* AI Match Card — UNCHANGED */}
           <AIMatchCard candidate={candidate} />
 
-          {/* Resume viewer — UNCHANGED */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center' }}>
             {candidate.resumeFile?.data ? (
               <Button variant="outline" onClick={() => {
@@ -943,19 +1066,17 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
 
         {/* ── RIGHT COLUMN ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-          {/* Interview Workflow — MODIFIED */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
             <h2 style={{ fontWeight: 'bold', marginBottom: '6px' }}>Interview Workflow</h2>
             <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-            <ResumeReviewCard
-  candidate={candidate}
-  role={role as UserRole}
-  history={history}   // ✅ ADD THIS
-  onAction={(a, p) => handleAction('Resume Review', a, p)}
-/>
+              <ResumeReviewCard
+                candidate={candidate}
+                role={role as UserRole}
+                history={history}
+                onAction={(a, p) => handleAction('Resume Review', a, p)}
+              />
               <InterviewStageCard
                 candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
                 stageKey="l1" title="L1 Interview"
@@ -982,7 +1103,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             </div>
           </div>
 
-          {/* Professional Background — UNCHANGED */}
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
             <h2 style={{ fontWeight: 'bold', marginBottom: '16px' }}>Professional Background</h2>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
