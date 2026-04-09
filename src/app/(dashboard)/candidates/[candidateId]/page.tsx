@@ -369,7 +369,6 @@ const InterviewStageCard: React.FC<{
 
   const canHRSchedule    = isHR && status === 'Pending';
   const canPanelFeedback = isAssignedPanel && status === 'Scheduled' && !panelFeedback;
-  const canHRDecide      = isHR && status === 'Scheduled' && !!panelFeedback;
 
   const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && savedDate;
   const showFeedback     = ['Selected', 'Rejected'].includes(status) && savedFeedback;
@@ -452,14 +451,15 @@ const InterviewStageCard: React.FC<{
         </div>
       )}
 
-      {/* Panel feedback visible to HR while awaiting decision */}
+      {/* Panel feedback visible to HR — with decision buttons inline */}
       {isHR && panelFeedback && status === 'Scheduled' && (
         <div style={{ background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: '8px', padding: '10px 12px' }}>
-          <p style={{ ...lbl, color: '#92400E' }}>📋 Panel Feedback — Awaiting Your Decision</p>
-          <p style={{ ...saved, color: '#78350F' }}>{panelFeedback}</p>
-          {/* Updated By for panel feedback submission */}
-          <div style={{ marginTop: '8px' }}>
-            <UpdatedByBadge history={history} stage={title} actions={['panel-select', 'panel-reject']} />
+          <p style={{ ...lbl, color: '#92400E' }}>📋 Panel Feedback</p>
+          <p style={{ ...saved, color: '#78350F', marginBottom: '10px' }}>{panelFeedback}</p>
+          <UpdatedByBadge history={history} stage={title} actions={['panel-select', 'panel-reject']} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
+            <Button variant="destructive" onClick={() => onAction('reject', {})}>✕ Reject</Button>
+            <Button variant="default"     onClick={() => onAction('select', {})}>✓ Move to {stageKey === 'l1' ? 'L2' : 'HR Round'}</Button>
           </div>
         </div>
       )}
@@ -523,17 +523,6 @@ const InterviewStageCard: React.FC<{
         </div>
       )}
 
-      {/* HR: Final decision after panel submits feedback */}
-      {canHRDecide && (
-        <div style={{ background: '#EFF6FF', borderRadius: '10px', padding: '14px', border: '1px solid #BFDBFE' }}>
-          <p style={{ fontWeight: 'bold', fontSize: '13px', color: '#1D4ED8', marginBottom: '4px' }}>HR Decision</p>
-          <p style={{ fontSize: '12px', color: '#3B82F6', marginBottom: '10px' }}>Panel has submitted feedback above. Make your final decision.</p>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-            <Button variant="destructive" onClick={() => onAction('reject', {})}>✕ Reject</Button>
-            <Button variant="default"     onClick={() => onAction('select', {})}>✓ Move to {stageKey === 'l1' ? 'L2' : 'HR Round'}</Button>
-          </div>
-        </div>
-      )}
 
       {/* HR waiting for panel feedback */}
       {isHR && status === 'Scheduled' && !panelFeedback && (
