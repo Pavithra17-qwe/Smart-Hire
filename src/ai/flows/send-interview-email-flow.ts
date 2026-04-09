@@ -33,12 +33,16 @@ const SendInterviewEmailInputSchema = z.object({
   senderRole: z.enum(['panel', 'hr', 'system']).optional(),
 
   emailType: z.enum([
+    'resume_accepted',
+  'resume_rejected',
     'interview_scheduled',
     'candidate_selected',
     'candidate_rejected',
     'offer_released',
     'offer_accepted',
     'offer_rejected',
+    'panel_assigned',
+  'panel_feedback_submitted',
   ]).optional(),
 });
 
@@ -107,6 +111,39 @@ Handled by :
     : '';
 
   switch (emailType) {
+    case 'resume_accepted':
+  return `Hi,
+
+The candidate has been successfully shortlisted after resume review.
+
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience  : ${experience || 'N/A'}
+Location    : ${location || 'N/A'}
+
+${feedbackSection}${handledBy}
+
+The candidate will proceed to the next stage.
+
+Best regards,
+The SmartHire Team`;
+
+case 'resume_rejected':
+  return `Hi,
+
+The candidate has been rejected during the resume review stage.
+
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Experience  : ${experience || 'N/A'}
+Location    : ${location || 'N/A'}
+
+${feedbackSection}${handledBy}
+
+Thank you for your effort.
+
+Best regards,
+The SmartHire Team`;
 
     case 'interview_scheduled':
       return `Hi,

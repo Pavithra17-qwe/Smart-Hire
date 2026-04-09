@@ -2,55 +2,90 @@
 
 /**
  * ============================================================
- * CHANGES MADE — EMAIL NOTIFICATION LOGIC OVERHAUL
+ * EMAIL BUG FIXES — WHAT WAS BROKEN AND WHY
  * ============================================================
  *
- * CHANGE 1 — Resume Review (accept): Save resumeReviewedByEmail
- *   WHY: Panel feedback notifications must go to the *specific* HR
- *        who accepted the resume, not just any HR or the scheduler.
- *        Without persisting this, there is no reliable way to find
- *        the right recipient later in the pipeline.
- *   WHERE: handleAction → case 'Resume Review' → action === 'accept'
- *   NEW FIELDS SAVED TO FIRESTORE:
- *     - resumeReviewedByEmail
- *     - resumeReviewedByUid
- *     - resumeReviewedByName
+ * BUG 1 — Resume Review: Uploader never got mail
+ *   ROOT CAUSE: getUploaderInfo() only read `data.email` from
+ *   the Firestore users collection. If that field was missing,
+ *   uploaderEmail = null and enqueue() silently skipped it.
+ *   FIX: Added fallback to candidate.createdByEmail (stored at
+ *   upload time). Also added explicit console.error so you can
+ *   see in the browser console exactly which UID has no email.
  *
- * CHANGE 2 — Email dispatch block fully replaced
- *   WHY: Old logic used l1InterviewerEmail / l2InterviewerEmail
- *        (the HR who *scheduled*) for panel feedback notifications,
- *        which is incorrect. The correct target is the HR who
- *        *accepted* the resume (resumeReviewedByEmail).
- *   WHERE: handleAction → EMAIL DISPATCH section
+ * BUG 2 — Panel not receiving mail when HR schedules L1/L2
+ *   ROOT CAUSE A: panelUsers was fetched with:
+ *     email: data.email || ''
+ *   If the panel user doc stores email as a different field
+ *   (e.g. data.emailAddress), this returns '' and enqueue()
+ *   skips it. FIX: panelUsers fetch now tries multiple field
+ *   names: email, emailAddress, userEmail.
  *
- * CHANGE 3 — Deduplication via Map<email, params>
- *   WHY: Old code had multiple sendEmail calls with ad-hoc
- *        !== checks. If uploader === HR, duplicate emails fired.
- *        The new Map-based enqueue() guarantees each address
- *        receives exactly one email per action.
- *   WHERE: handleAction → EMAIL DISPATCH section
+ *   ROOT CAUSE B: The panel_assigned email was sent to
+ *   payload.panelEmail which could be '' if panelUsers had
+ *   no email. The new panelUsers fetch fixes the source data.
  *
- * CHANGE 4 — actionToEmailType: panel-select / panel-reject now
- *   map to 'panel_feedback_submitted' (was 'candidate_selected' /
- *   'candidate_rejected') to match the email template naming spec.
- *   WHERE: actionToEmailType map
+ * BUG 3 — Panel feedback submitted: nobody received mail
+ *   ROOT CAUSE A (CRITICAL): resumeReviewedByEmail was only
+ *   saved to Firestore when using the NEW version of this file.
+ *   Any candidate accepted with OLD code has no
+ *   resumeReviewedByEmail field. Those cases fell through
+ *   silently with no email sent to HR.
+ *   FIX: Added 3-level fallback chain:
+ *     1. freshCandidate.resumeReviewedByEmail  (new field)
+ *     2. freshCandidate.l1InterviewerEmail /
+ *        freshCandidate.l2InterviewerEmail     (HR who scheduled)
+ *     3. Skip with warning — never crash
  *
- * CHANGE 5 — Panel feedback: notifies BOTH
- *   (a) resumeReviewedByEmail  — HR who accepted resume
- *   (b) uploader               — Agency / HR who submitted candidate
- *   Old code only notified one HR address (the scheduler).
- *   WHERE: handleAction → EMAIL DISPATCH → panel-select/panel-reject
+ *   ROOT CAUSE B: getFreshCandidate was only called for panel
+ *   feedback actions. This is correct — but the stale `candidate`
+ *   React state was being used as fallback, which doesn't have
+ *   fields written in the SAME action. The fresh read is now
+ *   the only source for panel-feedback email resolution.
  *
- * CHANGE 6 — HR Round & Offer Stage: HR self-confirmation email
- *   The HR who performs the action now always receives a copy,
- *   deduplication prevents double-send when HR === uploader.
- *   WHERE: handleAction → EMAIL DISPATCH → HR Round / Offer Stage
+ *   ROOT CAUSE C: uploaderEmail resolution happened BEFORE the
+ *   fresh candidate read, so if createdBy lookup failed and
+ *   candidate.createdByEmail was needed it was missed.
+ *   FIX: uploaderEmail fallback now also checks freshCandidate.
  *
- * CHANGE 7 — HR Round scheduling: panel email block removed
- *   HR Round has no panel assignment, so the old panel_assigned
- *   email was wrong for that stage. Now panel_assigned is sent
- *   only for L1 / L2 schedule actions.
- *   WHERE: handleAction → EMAIL DISPATCH → action === 'schedule'
+ * BUG 4 — HR self-confirm not sent when HR = uploader
+ *   This was working via dedup Map (correct), but actorEmail
+ *   was sometimes '' because user.email was null/undefined on
+ *   the auth object. FIX: actorEmail now falls back to
+ *   user.providerData[0]?.email as last resort.
+ *
+ * ============================================================
+ * EMAIL FLOW SPEC (final)
+ * ============================================================
+ *
+ * RESUME REVIEW accept/reject:
+ *   → uploader (agency/HR who created candidate)
+ *   → HR who reviewed (self-confirm, deduped if same person)
+ *
+ * L1 / L2 SCHEDULE:
+ *   → uploader
+ *   → HR who scheduled (self-confirm, deduped)
+ *   → assigned panel member (emailType: panel_assigned)
+ *
+ * L1 / L2 PANEL FEEDBACK (panel-select / panel-reject):
+ *   → uploader
+ *   → HR who accepted the resume (resumeReviewedByEmail)
+ *   → panel member who submitted feedback (self-confirm)
+ *   Panel member gets confirmation of their OWN submission.
+ *
+ * HR ROUND SCHEDULE:
+ *   → uploader
+ *   → HR who scheduled (self-confirm, deduped)
+ *
+ * HR ROUND FEEDBACK (select / reject):
+ *   → uploader
+ *   → HR who gave feedback (self-confirm, deduped)
+ *
+ * OFFER STAGE (any action):
+ *   → uploader
+ *   → HR who acted (self-confirm, deduped)
+ *
+ * DEDUP: Map<email.toLowerCase(), params> — one email per address per action
  * ============================================================
  */
 
@@ -73,6 +108,18 @@ import { sendInterviewEmail } from '@/ai/flows/send-interview-email-flow';
 
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
+type EmailType =
+  | 'resume_accepted'
+  | 'resume_rejected'
+  | 'interview_scheduled'
+  | 'candidate_selected'
+  | 'candidate_rejected'
+  | 'offer_released'
+  | 'offer_accepted'
+  | 'offer_rejected'
+  | 'panel_assigned'
+  | 'panel_feedback_submitted';
+  
 type CandidateHistoryItem = {
   stage: string;
   updatedByName: string;
@@ -94,49 +141,103 @@ interface PanelUser {
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-async function getUploaderInfo(createdBy: string) {
-  try {
-    const snap = await getDoc(doc(db, 'users', createdBy));
-    if (snap.exists()) {
-      const d = snap.data();
-      return { email: d.email || null, name: d.displayName || d.name || null };
-    }
-  } catch {}
-  return { email: null, name: null };
-}
 
-async function getLoggedInUserName(uid: string): Promise<string | null> {
+/**
+ * FIX BUG 1 + BUG 4
+ * Reads the user doc from Firestore and returns email + name.
+ * Tries multiple possible email field names so it works even
+ * if different parts of your codebase stored the field differently.
+ */
+async function getUserInfo(uid: string): Promise<{ email: string | null; name: string | null }> {
+  if (!uid) return { email: null, name: null };
   try {
     const snap = await getDoc(doc(db, 'users', uid));
     if (snap.exists()) {
       const d = snap.data();
-      return d.displayName || d.name || d.fullName || null;
+      // Try every possible field name your app might use
+      const email = d.email || d.emailAddress || d.userEmail || d.mail || null;
+      const name  = d.displayName || d.name || d.fullName || null;
+      if (!email) {
+        console.error(
+          `[getUserInfo] ❌ User UID "${uid}" has NO email field in Firestore.`,
+          '\nDocument data:', d,
+          '\nFIX: Open Firebase console → users collection → this document → add an "email" field.'
+        );
+      }
+      return { email, name };
+    } else {
+      console.error(`[getUserInfo] ❌ No user document found for UID "${uid}" in Firestore users collection.`);
     }
-  } catch {}
+  } catch (err) {
+    console.error('[getUserInfo] Firestore read error:', err);
+  }
+  return { email: null, name: null };
+}
+
+/**
+ * FIX BUG 3 (ROOT CAUSE B)
+ * Always reads a fresh copy of the candidate from Firestore.
+ * The React state `candidate` is stale after updateDoc — it will
+ * NOT contain fields written in the current action until the
+ * onSnapshot listener fires (async, after email dispatch).
+ */
+async function getFreshCandidate(candidateId: string): Promise<Record<string, any> | null> {
+  if (!candidateId) return null;
+  try {
+    const snap = await getDoc(doc(db, 'candidates', candidateId));
+    if (snap.exists()) return { id: snap.id, ...snap.data() };
+    console.error(`[getFreshCandidate] ❌ No candidate found for id "${candidateId}"`);
+  } catch (err) {
+    console.error('[getFreshCandidate] Firestore read error:', err);
+  }
   return null;
 }
 
-async function sendEmail(params: any) {
-  if (!params.toEmail?.includes('@')) return;
+/**
+ * Sends a single email. Validates address before calling the flow.
+ */
+async function sendEmail(params: {
+  toEmail: string;
+  candidateName: string;
+  jobRole: string;
+  interviewerName: string;
+  interviewerEmail: string;
+  experience: string;
+  location: string;
+  stage: string;
+  schedulingNotes: string;
+  interviewFeedback: string;
+  interviewDate: string;
+  interviewTime: string;
+  senderRole: string;
+  emailType: string;
+}) {
+  const email = params.toEmail?.trim();
+  if (!email || !email.includes('@')) {
+    console.warn('[sendEmail] ⚠️  Skipping — invalid toEmail:', params.toEmail);
+    return;
+  }
+  console.log('[sendEmail] → Sending to:', email, '| type:', params.emailType, '| stage:', params.stage);
   try {
     await sendInterviewEmail({
       candidateName:     params.candidateName,
-      candidateEmail:    params.toEmail,
+      candidateEmail:    email,
       jobRole:           params.jobRole,
-      experience:        params.experience        || '',
-      location:          params.location          || '',
+      experience:        params.experience,
+      location:          params.location,
       interviewerName:   params.interviewerName,
-      interviewerEmail:  params.interviewerEmail  || '',
-      interviewDate:     params.interviewDate      || '',
-      interviewTime:     params.interviewTime      || '',
-      schedulingNotes:   params.schedulingNotes   || '',
-      interviewFeedback: params.interviewFeedback  || '',
+      interviewerEmail:  params.interviewerEmail,
+      interviewDate:     params.interviewDate,
+      interviewTime:     params.interviewTime,
+      schedulingNotes:   params.schedulingNotes,
+      interviewFeedback: params.interviewFeedback,
       stage:             params.stage,
-      senderRole:        params.senderRole,
-      emailType:         params.emailType,
+      senderRole: params.senderRole as 'panel' | 'hr' | 'system',
+      emailType: params.emailType as EmailType,
     });
+    console.log('[sendEmail] ✅ Sent to:', email);
   } catch (err) {
-    console.error('Email send failed:', err);
+    console.error('[sendEmail] ❌ Failed for', email, err);
   }
 }
 
@@ -158,11 +259,11 @@ function buildFallbackSummary(score: number | undefined | null, candidate: Candi
   const s = typeof score === 'number' ? score : -1;
   if (s < 0)   return "This candidate has not been evaluated yet. Go to Candidate Evaluation and re-submit to generate an AI match score.";
   if (s === 0) return "Score: 0% — The resume could not be matched against the Job Description. Possible reasons:\n\n• The resume file may be unreadable or encrypted.\n• The resume content does not relate to the job requirements.\n• The JD file was not available at the time of submission.\n\nPlease verify the uploaded resume and re-evaluate if needed.";
-  if (s <= 30) return `Score: ${s}% — Very low match.\n\nThe candidate's profile has significant gaps compared to the job requirements. Key qualifications, required skills, or experience level may be missing or insufficient. It is not recommended to proceed without a more detailed review.`;
-  if (s <= 50) return `Score: ${s}% — Below average match.\n\nThe candidate meets only a few of the required qualifications. There are notable gaps in skills or experience. A manual review is recommended before proceeding to the interview stage.`;
-  if (s <= 65) return `Score: ${s}% — Moderate match.\n\nThe candidate meets some key criteria but does not fully align with all job requirements. There are areas of partial fit alongside a few gaps. Further evaluation through screening is recommended.`;
-  if (s <= 80) return `Score: ${s}% — Good match.\n\nThe candidate meets most of the required qualifications with only minor gaps. They are a strong candidate and are recommended for the interview process.`;
-  return `Score: ${s}% — Strong match.\n\nThe candidate closely aligns with the role requirements and demonstrates the key skills and experience needed. Highly recommended for the next stage.`;
+  if (s <= 30) return `Score: ${s}% — Very low match.\n\nThe candidate's profile has significant gaps compared to the job requirements.`;
+  if (s <= 50) return `Score: ${s}% — Below average match.\n\nThe candidate meets only a few of the required qualifications.`;
+  if (s <= 65) return `Score: ${s}% — Moderate match.\n\nThe candidate meets some key criteria but does not fully align with all job requirements.`;
+  if (s <= 80) return `Score: ${s}% — Good match.\n\nThe candidate meets most of the required qualifications with only minor gaps.`;
+  return `Score: ${s}% — Strong match.\n\nThe candidate closely aligns with the role requirements. Highly recommended for the next stage.`;
 }
 
 // ─── AI MATCH CARD ────────────────────────────────────────────────────────────
@@ -237,7 +338,6 @@ const TIME_SLOTS = [
 // ─── UPDATED BY BADGE ─────────────────────────────────────────────────────────
 const UpdatedByBadge: React.FC<{ history: CandidateHistoryItem[]; stage: string; actions?: string[] }> = ({ history, stage, actions }) => {
   const stageEntries = history.filter(h => h.stage === stage);
-
   let last: CandidateHistoryItem | undefined;
   if (actions && actions.length > 0) {
     const strict = stageEntries.filter(h => h.action && actions.includes(h.action));
@@ -245,16 +345,10 @@ const UpdatedByBadge: React.FC<{ history: CandidateHistoryItem[]; stage: string;
   } else {
     last = stageEntries[stageEntries.length - 1];
   }
-
   if (!last) return null;
-
-  const displayName = last.updatedByName && last.updatedByName !== 'Unknown' && last.updatedByName !== ''
-    ? last.updatedByName : null;
-  const displayRole = last.updatedByRole && last.updatedByRole !== 'unknown' && last.updatedByRole !== ''
-    ? last.updatedByRole : null;
-
+  const displayName = (last.updatedByName && last.updatedByName !== 'Unknown') ? last.updatedByName : null;
+  const displayRole = (last.updatedByRole && last.updatedByRole !== 'unknown') ? last.updatedByRole : null;
   if (!displayName && !displayRole) return null;
-
   const roleColor: Record<string, { bg: string; text: string; border: string }> = {
     hr:     { bg: '#EFF6FF', text: '#1D4ED8', border: '#BFDBFE' },
     panel:  { bg: '#F0FDF4', text: '#065F46', border: '#86EFAC' },
@@ -262,22 +356,12 @@ const UpdatedByBadge: React.FC<{ history: CandidateHistoryItem[]; stage: string;
     agency: { bg: '#F5F3FF', text: '#5B21B6', border: '#DDD6FE' },
   };
   const c = roleColor[displayRole?.toLowerCase() ?? ''] || { bg: '#F3F4F6', text: '#374151', border: '#E5E7EB' };
-
   return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center', gap: '6px',
-      padding: '5px 10px', borderRadius: '6px',
-      background: c.bg, border: `1px solid ${c.border}`,
-      fontSize: '12px', color: c.text, alignSelf: 'flex-start',
-    }}>
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '5px 10px', borderRadius: '6px', background: c.bg, border: `1px solid ${c.border}`, fontSize: '12px', color: c.text, alignSelf: 'flex-start' }}>
       <span style={{ fontWeight: '500', opacity: 0.8 }}>✏️ Updated by</span>
       <span style={{ fontWeight: '700' }}>{displayName ?? '—'}</span>
       {displayRole && (
-        <span style={{
-          background: c.border, color: c.text,
-          padding: '1px 8px', borderRadius: '999px',
-          fontSize: '11px', fontWeight: '700', textTransform: 'capitalize',
-        }}>
+        <span style={{ background: c.border, color: c.text, padding: '1px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: '700', textTransform: 'capitalize' }}>
           {displayRole}
         </span>
       )}
@@ -315,11 +399,9 @@ const StageShell: React.FC<{ title: string; status: string; isLocked: boolean; c
   );
 };
 
-
-// ─── STAGE 1: RESUME REVIEW ── HR only ───────────────────────────────────────
+// ─── STAGE 1: RESUME REVIEW ───────────────────────────────────────────────────
 const ResumeReviewCard: React.FC<{
-  candidate: Candidate;
-  role: UserRole | null;
+  candidate: Candidate; role: UserRole | null;
   history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, history, onAction }) => {
@@ -416,9 +498,22 @@ const InterviewStageCard: React.FC<{
     if (!notes.trim())  { setSchedErr('Scheduling notes are required.'); return; }
     setSchedErr('');
     const panel = panelUsers.find(p => p.uid === panelUid);
+    const panelEmail = panel?.email || '';
+    // Debug check — shows in browser console if panel email is missing
+    if (!panelEmail || !panelEmail.includes('@')) {
+      console.error(
+        '[Schedule] ❌ Panel member has no valid email!',
+        '\nUID:', panelUid, '\nPanel object:', panel,
+        '\nFIX: Check that panelUsers is fetched correctly and that panel user documents have an email field.'
+      );
+    }
     onAction('schedule', {
-      scheduledDate: date, timeSlot: slot, schedulingNotes: notes.trim(),
-      panelUid, panelName: panel?.name || panel?.email || 'Panel', panelEmail: panel?.email || '',
+      scheduledDate:  date,
+      timeSlot:       slot,
+      schedulingNotes: notes.trim(),
+      panelUid,
+      panelName:  panel?.name || panel?.email || 'Panel',
+      panelEmail: panelEmail,
     });
   };
 
@@ -435,7 +530,7 @@ const InterviewStageCard: React.FC<{
 
       {showScheduleInfo && (
         <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '12px', overflow: 'hidden', background: 'white' }}>
-          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px', background: 'white' }}>
+          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <p style={{ fontSize: '13px', fontWeight: '700', color: '#374151', margin: 0 }}>📅 Schedule Information</p>
             <div>
               <p style={lbl}>Date & Time</p>
@@ -457,7 +552,6 @@ const InterviewStageCard: React.FC<{
             )}
             <UpdatedByBadge history={history} stage={title} actions={['schedule']} />
           </div>
-
           {showFeedback && (
             <>
               <div style={{ borderTop: '1px solid #E5E7EB', background: '#F9FAFB', padding: '7px 16px' }}>
@@ -465,14 +559,8 @@ const InterviewStageCard: React.FC<{
                   💬 Interview Feedback
                 </span>
               </div>
-              <div style={{
-                padding: '14px 16px',
-                background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9',
-                display: 'flex', flexDirection: 'column', gap: '10px',
-              }}>
-                <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>
-                  {savedFeedback}
-                </p>
+              <div style={{ padding: '14px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>{savedFeedback}</p>
                 <UpdatedByBadge history={history} stage={title} actions={['panel-select', 'panel-reject']} />
               </div>
             </>
@@ -492,7 +580,7 @@ const InterviewStageCard: React.FC<{
             <option value="">— Select Panel Member —</option>
             {panelUsers.map(p => (
               <option key={p.uid} value={p.uid}>
-                {p.name ? `${p.name} (${p.email})` : p.email}
+                {p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}
               </option>
             ))}
           </select>
@@ -532,11 +620,7 @@ const InterviewStageCard: React.FC<{
           {fbErr && <p style={errS}><AlertCircle className="h-3 w-3" />{fbErr}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
             <Button variant="destructive" onClick={() => handlePanelDecision('panel-reject')}>✕ Reject</Button>
-            <Button
-              variant="default"
-              onClick={() => handlePanelDecision('panel-select')}
-              style={{ background: '#059669', color: 'white' }}
-            >
+            <Button variant="default" onClick={() => handlePanelDecision('panel-select')} style={{ background: '#059669', color: 'white' }}>
               ✓ Move to {nextStageLabel}
             </Button>
           </div>
@@ -558,8 +642,7 @@ const InterviewStageCard: React.FC<{
 
 // ─── STAGE 4: HR ROUND ────────────────────────────────────────────────────────
 const HRRoundCard: React.FC<{
-  candidate: Candidate;
-  role: UserRole | null;
+  candidate: Candidate; role: UserRole | null;
   history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, history, onAction }) => {
@@ -577,8 +660,8 @@ const HRRoundCard: React.FC<{
   const showFeedback     = ['Selected', 'Rejected'].includes(status) && candidate.hrFeedback;
 
   const handleSchedule = () => {
-    if (!date || !slot)  { setSchedErr('Please select date and time.'); return; }
-    if (!notes.trim())   { setSchedErr('Scheduling notes are required.'); return; }
+    if (!date || !slot) { setSchedErr('Please select date and time.'); return; }
+    if (!notes.trim())  { setSchedErr('Scheduling notes are required.'); return; }
     setSchedErr('');
     onAction('schedule', { scheduledDate: date, timeSlot: slot, schedulingNotes: notes.trim() });
   };
@@ -591,10 +674,9 @@ const HRRoundCard: React.FC<{
 
   return (
     <StageShell title="HR Round" status={status} isLocked={status === 'Locked'}>
-
       {showScheduleInfo && (
         <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '12px', overflow: 'hidden', background: 'white' }}>
-          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px', background: 'white' }}>
+          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <p style={{ fontSize: '13px', fontWeight: '700', color: '#374151', margin: 0 }}>📅 Schedule Information</p>
             <div>
               <p style={lbl}>Date & Time</p>
@@ -610,22 +692,13 @@ const HRRoundCard: React.FC<{
             )}
             <UpdatedByBadge history={history} stage="HR Round" actions={['schedule']} />
           </div>
-
           {showFeedback && (
             <>
               <div style={{ borderTop: '1px solid #E5E7EB', background: '#F9FAFB', padding: '7px 16px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-                  💬 Interview Feedback
-                </span>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>💬 Interview Feedback</span>
               </div>
-              <div style={{
-                padding: '14px 16px',
-                background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9',
-                display: 'flex', flexDirection: 'column', gap: '10px',
-              }}>
-                <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>
-                  {candidate.hrFeedback}
-                </p>
+              <div style={{ padding: '14px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>{candidate.hrFeedback}</p>
                 <UpdatedByBadge history={history} stage="HR Round" actions={['select', 'reject']} />
               </div>
             </>
@@ -680,8 +753,7 @@ const HRRoundCard: React.FC<{
 
 // ─── STAGE 5: OFFER STAGE ─────────────────────────────────────────────────────
 const OfferStageCard: React.FC<{
-  candidate: Candidate;
-  role: UserRole | null;
+  candidate: Candidate; role: UserRole | null;
   history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, history, onAction }) => {
@@ -698,14 +770,12 @@ const OfferStageCard: React.FC<{
 
   return (
     <StageShell title="Offer Stage" status={status} isLocked={status === 'Locked'}>
-
       {status === 'Released' && (
         <div style={{ background: '#EFF6FF', borderRadius: '8px', padding: '10px 14px', border: '1px solid #BFDBFE', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600', margin: 0 }}>📨 Offer has been released. Awaiting candidate response.</p>
           <UpdatedByBadge history={history} stage="Offer Stage" actions={['release-offer']} />
         </div>
       )}
-
       {(status === 'Accepted' || status === 'Rejected') && candidate.offerFeedback && (
         <div style={{ background: status === 'Accepted' ? '#F0FDF9' : '#FFF5F5', borderRadius: '10px', padding: '12px 14px', border: `1px solid ${status === 'Accepted' ? '#6EE7B7' : '#FCA5A5'}`, display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <p style={{ ...lbl, color: status === 'Accepted' ? '#065F46' : '#991B1B', fontSize: '13px', fontWeight: '700', margin: 0 }}>
@@ -713,14 +783,11 @@ const OfferStageCard: React.FC<{
           </p>
           <div style={iBox}>
             <p style={lbl}>Response Notes</p>
-            <p style={{ ...saved, color: status === 'Accepted' ? '#065F46' : '#DC2626' }}>
-              {candidate.offerFeedback}
-            </p>
+            <p style={{ ...saved, color: status === 'Accepted' ? '#065F46' : '#DC2626' }}>{candidate.offerFeedback}</p>
           </div>
           <UpdatedByBadge history={history} stage="Offer Stage" actions={['offer-accept', 'offer-reject']} />
         </div>
       )}
-
       {isHR && status === 'Pending' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <p style={{ fontSize: '13px', color: '#6B7280' }}>Candidate has cleared all rounds. Release the offer when ready.</p>
@@ -729,7 +796,6 @@ const OfferStageCard: React.FC<{
           </div>
         </div>
       )}
-
       {isHR && status === 'Released' && (
         <>
           <p style={{ ...lbl, marginBottom: '2px' }}>Response Notes <span style={{ color: '#DC2626' }}>*</span></p>
@@ -743,7 +809,6 @@ const OfferStageCard: React.FC<{
           </div>
         </>
       )}
-
       {!isHR && status !== 'Locked' && status !== 'Released' && (
         <ReadOnlyNote msg="Only HR can manage the Offer Stage." />
       )}
@@ -765,13 +830,13 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     if (!candidateId) return;
     const q = query(collection(db, 'candidate_history'), where('candidateId', '==', candidateId));
     getDocs(q).then((snap) => {
-      const data: CandidateHistoryItem[] = snap.docs.map(doc => {
-        const d = doc.data();
+      const data: CandidateHistoryItem[] = snap.docs.map(d => {
+        const doc = d.data();
         return {
-          stage:         d.stage         || '',
-          updatedByName: d.updatedByName || '',
-          updatedByRole: d.updatedByRole || '',
-          action:        d.action        || '',
+          stage:         doc.stage         || '',
+          updatedByName: doc.updatedByName || '',
+          updatedByRole: doc.updatedByRole || '',
+          action:        doc.action        || '',
         };
       });
       setHistory(data);
@@ -787,13 +852,48 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     return () => unsub();
   }, [candidateId]);
 
+  /**
+   * FIX BUG 2 — Panel users fetched with multi-field email fallback.
+   *
+   * OLD CODE:  email: data.email || ''
+   * NEW CODE:  tries email, emailAddress, userEmail, mail
+   *
+   * This is the MOST COMMON reason panel members don't receive mail.
+   * If your panel users have email stored under a different Firestore
+   * field name, it was silently returning '' and being skipped.
+   *
+   * CHECK: Open Firebase console → users collection → any panel user document.
+   * The field that holds the email must match one of the names below.
+   * If it uses a different name, add it to the fallback chain here.
+   */
   useEffect(() => {
     if (role !== 'hr') return;
     getDocs(query(collection(db, 'users'), where('role', '==', 'panel'))).then(snap => {
-      setPanelUsers(snap.docs.map(d => {
+      const users: PanelUser[] = snap.docs.map(d => {
         const data = d.data();
-        return { uid: d.id, name: data.displayName || data.name || '', email: data.email || '' };
-      }));
+        // Try every possible email field name
+        const email =
+          data.email       ||
+          data.emailAddress ||
+          data.userEmail    ||
+          data.mail         ||
+          '';
+        const name =
+          data.displayName ||
+          data.name        ||
+          data.fullName    ||
+          '';
+        if (!email) {
+          console.error(
+            `[PanelUsers] ❌ Panel user UID "${d.id}" has no email field.`,
+            '\nDocument data:', data,
+            '\nFIX: Add an "email" field to this user document in Firebase.'
+          );
+        }
+        return { uid: d.id, name, email };
+      });
+      console.log('[PanelUsers] Loaded:', users.map(u => ({ uid: u.uid, email: u.email || '⚠️ MISSING' })));
+      setPanelUsers(users);
     });
   }, [role]);
 
@@ -801,10 +901,19 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
   const handleAction = async (stage: string, action: string, payload: any) => {
     if (!candidate || !user) return;
 
-    let updateData: Partial<any> = {};
-    const loggedInUserName = await getLoggedInUserName(user.uid);
+    // FIX BUG 4 — actorEmail: try every possible source on the auth user object
+    const actorEmail =
+      user.email                         ||
+      user.providerData?.[0]?.email      ||   // Google / social login fallback
+      '';
+
+    const loggedInUserName = await getUserInfo(user.uid);
+    const actorName = loggedInUserName.name || user.displayName || actorEmail || 'Unknown';
+
     const historyData: any = {
-      candidateId, stage, action,
+      candidateId,
+      stage,
+      action,
       status:          '',
       feedback:        payload.feedback        || '',
       schedulingNotes: payload.schedulingNotes || '',
@@ -813,32 +922,32 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       panelUid:        payload.panelUid        || null,
       panelName:       payload.panelName       || null,
       updatedBy:       user.uid,
-      updatedByName:   loggedInUserName || user.displayName || user.email || 'Unknown',
+      updatedByName:   actorName,
       updatedByRole:   role || 'unknown',
       updatedAt:       Timestamp.now(),
     };
 
+    let updateData: Partial<any> = {};
+
     switch (stage) {
+
       case 'Resume Review':
         if (action === 'accept') {
           updateData = {
-            resumeReviewStatus: 'Accepted',
-            resumeFeedback:      payload.feedback,
-            l1Status:           'Pending',
-            // ── CHANGE 1 ──────────────────────────────────────────────────
-            // Save the exact HR who accepted the resume so panel-feedback
-            // notifications later in the pipeline reach the right person,
-            // NOT whoever happened to schedule L1 or L2.
-            resumeReviewedByEmail: user.email || '',
+            resumeReviewStatus:    'Accepted',
+            resumeFeedback:        payload.feedback,
+            l1Status:              'Pending',
+            // These three fields are the KEY to panel-feedback email routing.
+            // They record EXACTLY which HR accepted the resume.
+            resumeReviewedByEmail: actorEmail,
             resumeReviewedByUid:   user.uid,
-            resumeReviewedByName:  loggedInUserName || user.displayName || '',
-            // ─────────────────────────────────────────────────────────────
+            resumeReviewedByName:  actorName,
           };
           historyData.status = 'Accepted';
         } else {
           updateData = {
             resumeReviewStatus: 'Rejected',
-            resumeFeedback:      payload.feedback,
+            resumeFeedback:     payload.feedback,
             finalStatus:        'Rejected',
             l1Status:           'Locked',
             l2Status:           'Locked',
@@ -860,22 +969,15 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             l1PanelName:        payload.panelName,
             l1PanelEmail:       payload.panelEmail,
             l1InterviewerUid:   user.uid,
-            l1InterviewerName:  user.displayName || user.email,
-            l1InterviewerEmail: user.email || '',
+            l1InterviewerName:  actorName,
+            l1InterviewerEmail: actorEmail,
           };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select') {
           updateData = { l1Status: 'Selected', l1Feedback: payload.feedback, l2Status: 'Pending' };
           historyData.status = 'Selected';
         } else if (action === 'panel-reject') {
-          updateData = {
-            l1Status:    'Rejected',
-            l1Feedback:   payload.feedback,
-            finalStatus: 'Rejected',
-            l2Status:    'Locked',
-            hrStatus:    'Locked',
-            offerStatus: 'Locked',
-          };
+          updateData = { l1Status: 'Rejected', l1Feedback: payload.feedback, finalStatus: 'Rejected', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
         }
         break;
@@ -891,21 +993,15 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             l2PanelName:        payload.panelName,
             l2PanelEmail:       payload.panelEmail,
             l2InterviewerUid:   user.uid,
-            l2InterviewerName:  user.displayName || user.email,
-            l2InterviewerEmail: user.email || '',
+            l2InterviewerName:  actorName,
+            l2InterviewerEmail: actorEmail,
           };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select') {
           updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending' };
           historyData.status = 'Selected';
         } else if (action === 'panel-reject') {
-          updateData = {
-            l2Status:    'Rejected',
-            l2Feedback:   payload.feedback,
-            finalStatus: 'Rejected',
-            hrStatus:    'Locked',
-            offerStatus: 'Locked',
-          };
+          updateData = { l2Status: 'Rejected', l2Feedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
         }
         break;
@@ -917,6 +1013,8 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             hrScheduledDate:    payload.scheduledDate,
             hrTimeSlot:         payload.timeSlot,
             hrSchedulingNotes:  payload.schedulingNotes,
+            hrInterviewerEmail: actorEmail,
+            hrInterviewerUid:   user.uid,
           };
           historyData.status = 'Scheduled';
         } else if (action === 'select') {
@@ -942,6 +1040,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
         break;
     }
 
+    // ── WRITE TO FIRESTORE ────────────────────────────────────────────────────
     try {
       await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
       await addDoc(collection(db, 'candidate_history'), historyData);
@@ -953,121 +1052,192 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       }]);
     } catch (err) {
       console.error('Firestore update failed:', err);
+      return; // Don't send emails if Firestore write failed
+    }
+
+    // ── EMAIL DISPATCH ────────────────────────────────────────────────────────
+    /**
+     * STEP 1 — Read fresh candidate from Firestore for ALL actions.
+     *
+     * WHY: The React state `candidate` is a snapshot from the last
+     * onSnapshot event. After updateDoc() above, the new fields
+     * (resumeReviewedByEmail, l1PanelEmail, etc.) are in Firestore
+     * but NOT yet in the React state. onSnapshot fires asynchronously
+     * after this function returns. So we ALWAYS read fresh.
+     *
+     * This is the most reliable approach and also handles legacy
+     * candidates that were created before these fields existed.
+     */
+    const fresh = await getFreshCandidate(candidate.id);
+    if (!fresh) {
+      console.error('[Email] ❌ Could not read fresh candidate — emails skipped for action:', action);
       return;
     }
 
-    // ── EMAIL DISPATCH ──────────────────────────────────────────────────────
-    // CHANGE 2, 3, 4, 5, 6, 7 — fully replaced email dispatch logic.
-    // See file-level comment block at top for details on each change.
-    // ───────────────────────────────────────────────────────────────────────
-    if (!candidate.createdBy) return;
+    /**
+     * STEP 2 — Resolve uploader email with 3-level fallback.
+     *
+     * Level 1: Read from Firestore users collection by UID
+     * Level 2: Read createdByEmail stored directly on the candidate doc
+     *          (some upload flows store this at submission time)
+     * Level 3: null — will be skipped by enqueue()
+     */
+    let uploaderEmail: string | null = null;
+    let uploaderName:  string | null = null;
 
-    const uploader        = await getUploaderInfo(candidate.createdBy);
-    const interviewerName = loggedInUserName || user.displayName || (role === 'hr' ? 'HR Team' : 'Panel Team');
+    if (fresh.createdBy) {
+      const uploaderInfo = await getUserInfo(fresh.createdBy);
+      uploaderEmail = uploaderInfo.email;
+      uploaderName  = uploaderInfo.name;
+    }
+    // Fallback: check if email was stored on the candidate doc itself
+    if (!uploaderEmail && fresh.createdByEmail) {
+      uploaderEmail = fresh.createdByEmail;
+      console.log('[Email] Using createdByEmail fallback:', uploaderEmail);
+    }
 
+    if (!uploaderEmail) {
+      console.error(
+        '[Email] ❌ UPLOADER EMAIL NOT FOUND.',
+        '\ncandidate.createdBy UID:', fresh.createdBy,
+        '\nFIX OPTION A: Open Firebase console → users collection → UID above → add "email" field.',
+        '\nFIX OPTION B: In your candidate upload code, also save createdByEmail: user.email on the candidate document.'
+      );
+    }
+
+    // STEP 3 — Build base params shared across all emails
     const baseParams = {
-      candidateName:     candidate.candidateName        || 'Candidate',
-      jobRole:           candidate.candidateDesignation || 'Not specified',
-      interviewerName,
-      interviewerEmail:  user.email ?? '',
-      experience:        String(candidate.experience || ''),
-      location:          String(candidate.location   || ''),
+      candidateName:     fresh.candidateName        || 'Candidate',
+      jobRole:           fresh.candidateDesignation || 'Not specified',
+      interviewerName:   actorName,
+      interviewerEmail:  actorEmail,
+      experience:        String(fresh.experience || ''),
+      location:          String(fresh.location   || ''),
       stage,
-      schedulingNotes:   payload.schedulingNotes  || '',
-      interviewFeedback: payload.feedback         || '',
-      interviewDate:     payload.scheduledDate    || '',
-      interviewTime:     payload.timeSlot         || '',
+      schedulingNotes:   payload.schedulingNotes || '',
+      interviewFeedback: payload.feedback        || '',
+      interviewDate:     payload.scheduledDate   || '',
+      interviewTime:     payload.timeSlot        || '',
     };
 
-    // CHANGE 4 — panel-select / panel-reject now map to 'panel_feedback_submitted'
-    // (previously they mapped to 'candidate_selected' / 'candidate_rejected'
-    //  which are reserved for HR-level decisions, not panel decisions)
-    const actionToEmailType: Record<string, string> = {
-      'accept':        'resume_accepted',
-      'reject':        'candidate_rejected',
-      'schedule':      'interview_scheduled',
-      'panel-select':  'panel_feedback_submitted',   // ← CHANGED
-      'panel-reject':  'panel_feedback_submitted',   // ← CHANGED
-      'select':        'candidate_selected',
-      'release-offer': 'offer_released',
-      'offer-accept':  'offer_accepted',
-      'offer-reject':  'offer_rejected',
-    };
+    // STEP 4 — Email queue: Map<email.toLowerCase(), params>
+    // Guarantees exactly ONE email per unique address per action.
+    const queue = new Map<string, typeof baseParams & { toEmail: string; senderRole: string; emailType: string }>();
 
-    const emailType = actionToEmailType[action] || 'status_update';
-
-    // CHANGE 3 — Map-based deduplication: each recipient email receives exactly
-    // one sendEmail call per action, even if the same address appears in multiple
-    // roles (e.g. HR who uploaded and HR who reviewed are the same person).
-    const emailQueue = new Map<string, typeof baseParams & { toEmail: string; senderRole: string; emailType: string }>();
-
-    const enqueue = (toEmail: string, overrides: { senderRole: string; emailType: string }) => {
-      if (!toEmail?.includes('@')) return;
-      if (emailQueue.has(toEmail)) return; // deduplicate — first write wins
-      emailQueue.set(toEmail, { ...baseParams, toEmail, ...overrides });
-    };
-
-    // ── Resume Review: accept or reject ──────────────────────────────────────
-    // Notify uploader (Agency or HR who submitted the candidate).
-    if (stage === 'Resume Review' && (action === 'accept' || action === 'reject')) {
-      enqueue(uploader.email!, { senderRole: 'hr', emailType });
-    }
-
-    // ── Interview Scheduling: L1, L2, HR Round ────────────────────────────────
-    // CHANGE 7 — panel_assigned email is sent ONLY for L1/L2, not HR Round
-    //            (HR Round has no panel assignment).
-    if (action === 'schedule') {
-      // → Uploader informed that interview is scheduled
-      enqueue(uploader.email!, { senderRole: 'hr', emailType: 'interview_scheduled' });
-
-      // CHANGE 6 — HR (scheduler) always receives a self-confirmation copy.
-      // Deduplication prevents double-send when HR === uploader.
-      enqueue(user.email!, { senderRole: 'hr', emailType: 'interview_scheduled' });
-
-      // → Assigned Panel Member gets a panel_assigned notice (L1 / L2 only)
-      if ((stage === 'L1 Interview' || stage === 'L2 Interview') && payload.panelEmail) {
-        enqueue(payload.panelEmail, { senderRole: 'hr', emailType: 'panel_assigned' });
+    const enqueue = (toEmail: string | null | undefined, senderRole: string, emailType: string) => {
+      const raw = toEmail?.trim();
+      if (!raw || !raw.includes('@')) {
+        if (raw) console.warn('[Email] enqueue skipped — bad address:', raw, '| stage:', stage, '| action:', action);
+        return;
       }
+      const key = raw.toLowerCase();
+      if (queue.has(key)) {
+        console.log('[Email] Deduped:', raw);
+        return;
+      }
+      queue.set(key, { ...baseParams, toEmail: raw, senderRole, emailType });
+    };
+
+    console.log('[Email] ── Building queue for stage:', stage, '| action:', action);
+    console.log('[Email]    uploaderEmail:', uploaderEmail || '⚠️  MISSING');
+    console.log('[Email]    actorEmail:', actorEmail || '⚠️  MISSING');
+
+    // ── RESUME REVIEW: accept / reject ────────────────────────────────────────
+    if (stage === 'Resume Review') {
+      const emailType = action === 'accept' ? 'resume_accepted' : 'candidate_rejected';
+      enqueue(uploaderEmail, 'hr', emailType); // uploader (agency or HR)
+      enqueue(actorEmail,    'hr', emailType); // HR who reviewed (deduped if HR = uploader)
     }
 
-    // ── Panel Feedback: L1 or L2 select / reject ──────────────────────────────
-    // CHANGE 5 — Notifies (a) the HR who accepted the resume and (b) the uploader.
-    // Old code incorrectly used l1InterviewerEmail / l2InterviewerEmail (scheduler).
-    if (
+    // ── L1 SCHEDULE ────────────────────────────────────────────────────────────
+    else if (action === 'schedule' && stage === 'L1 Interview') {
+      // FIX BUG 2 — panel email now comes from the fresh candidate doc
+      // (we just wrote l1PanelEmail to Firestore above, so fresh has it)
+      const panelEmail = fresh.l1PanelEmail || payload.panelEmail || '';
+      console.log('[Email]    l1PanelEmail:', panelEmail || '⚠️  MISSING');
+      enqueue(uploaderEmail, 'hr', 'interview_scheduled'); // uploader
+      enqueue(actorEmail,    'hr', 'interview_scheduled'); // HR who scheduled (deduped if HR = uploader)
+      enqueue(panelEmail,    'hr', 'panel_assigned');      // assigned panel member
+    }
+
+    // ── L2 SCHEDULE ────────────────────────────────────────────────────────────
+    else if (action === 'schedule' && stage === 'L2 Interview') {
+      const panelEmail = fresh.l2PanelEmail || payload.panelEmail || '';
+      console.log('[Email]    l2PanelEmail:', panelEmail || '⚠️  MISSING');
+      enqueue(uploaderEmail, 'hr', 'interview_scheduled');
+      enqueue(actorEmail,    'hr', 'interview_scheduled');
+      enqueue(panelEmail,    'hr', 'panel_assigned');
+    }
+
+    // ── HR ROUND SCHEDULE ──────────────────────────────────────────────────────
+    else if (action === 'schedule' && stage === 'HR Round') {
+      enqueue(uploaderEmail, 'hr', 'interview_scheduled');
+      enqueue(actorEmail,    'hr', 'interview_scheduled');
+      // No panel for HR Round
+    }
+
+    // ── L1 / L2 PANEL FEEDBACK ────────────────────────────────────────────────
+    else if (
       (stage === 'L1 Interview' || stage === 'L2 Interview') &&
       (action === 'panel-select' || action === 'panel-reject')
     ) {
-      // (a) HR who accepted resume — saved in CHANGE 1 above
-      const resumeReviewerEmail: string | undefined = (candidate as any).resumeReviewedByEmail;
-      if (resumeReviewerEmail) {
-        enqueue(resumeReviewerEmail, { senderRole: 'panel', emailType: 'panel_feedback_submitted' });
-      }
+      /**
+       * FIX BUG 3 — resolving HR email with 3-level fallback:
+       *
+       * Level 1: resumeReviewedByEmail — saved when HR accepted resume (BEST)
+       * Level 2: l1InterviewerEmail / l2InterviewerEmail — HR who scheduled
+       *          (not ideal but better than nothing for legacy candidates)
+       * Level 3: skip — log warning
+       *
+       * We use `fresh` here because `candidate` (React state) is stale
+       * and does not yet reflect the updateDoc we just ran.
+       */
+      const reviewerEmail =
+        fresh.resumeReviewedByEmail ||
+        (stage === 'L1 Interview' ? fresh.l1InterviewerEmail : fresh.l2InterviewerEmail) ||
+        null;
 
-      // (b) Uploader (Agency or HR who submitted the candidate)
-      enqueue(uploader.email!, { senderRole: 'panel', emailType: 'panel_feedback_submitted' });
+      // Panel member email — needed for their self-confirm
+      const panelMemberEmail = actorEmail; // panel member IS the current actor
+
+      console.log('[Email]    resumeReviewedByEmail:', fresh.resumeReviewedByEmail || '⚠️  not set (using fallback)');
+      console.log('[Email]    reviewerEmail resolved to:', reviewerEmail || '⚠️  MISSING');
+      console.log('[Email]    panelMemberEmail:', panelMemberEmail);
+
+      enqueue(uploaderEmail,    'panel', 'panel_feedback_submitted'); // uploader (agency or HR)
+      enqueue(reviewerEmail,    'panel', 'panel_feedback_submitted'); // HR who accepted resume
+      enqueue(panelMemberEmail, 'panel', 'panel_feedback_submitted'); // panel member self-confirm
     }
 
-    // ── HR Round: select or reject ────────────────────────────────────────────
-    if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
-      enqueue(uploader.email!, { senderRole: 'hr', emailType });
-      // CHANGE 6 — HR self-confirmation; deduplicated if HR === uploader
-      enqueue(user.email!, { senderRole: 'hr', emailType });
+    // ── HR ROUND FEEDBACK ──────────────────────────────────────────────────────
+    else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
+      const emailType = action === 'select' ? 'candidate_selected' : 'candidate_rejected';
+      enqueue(uploaderEmail, 'hr', emailType);
+      enqueue(actorEmail,    'hr', emailType);
     }
 
-    // ── Offer Stage: any action ───────────────────────────────────────────────
-    if (stage === 'Offer Stage') {
-      enqueue(uploader.email!, { senderRole: 'hr', emailType });
-      // CHANGE 6 — HR self-confirmation; deduplicated if HR === uploader
-      enqueue(user.email!, { senderRole: 'hr', emailType });
+    // ── OFFER STAGE ────────────────────────────────────────────────────────────
+    else if (stage === 'Offer Stage') {
+      const emailType =
+        action === 'release-offer' ? 'offer_released'  :
+        action === 'offer-accept'  ? 'offer_accepted'  :
+                                     'offer_rejected';
+      enqueue(uploaderEmail, 'hr', emailType);
+      enqueue(actorEmail,    'hr', emailType);
     }
 
-    // ── Flush — send all queued emails ────────────────────────────────────────
-    for (const params of emailQueue.values()) {
-      await sendEmail(params);
+    // ── FLUSH ──────────────────────────────────────────────────────────────────
+    const recipients = [...queue.keys()];
+    console.log(`[Email] ── Sending to ${recipients.length} recipient(s):`, recipients);
+
+    for (const emailParams of queue.values()) {
+      await sendEmail(emailParams);
     }
-    // ─────────────────────────────────────────────────────────────────────────
+
+    console.log('[Email] ── Dispatch complete. Stage:', stage, '| Action:', action);
   };
 
+  // ─── LOADING / NOT FOUND / ACCESS CHECK ──────────────────────────────────
   if (loading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>
       Loading Candidate…
@@ -1078,7 +1248,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       Candidate not found.
     </div>
   );
-
   if (role === 'agency' && candidate.createdBy !== user?.uid) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>
@@ -1152,36 +1321,28 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <h2 style={{ fontWeight: 'bold', marginBottom: '6px' }}>Interview Workflow</h2>
             <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-
               <ResumeReviewCard
-                candidate={candidate}
-                role={role as UserRole}
-                history={history}
+                candidate={candidate} role={role as UserRole} history={history}
                 onAction={(a, p) => handleAction('Resume Review', a, p)}
               />
               <InterviewStageCard
                 candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
-                stageKey="l1" title="L1 Interview"
-                history={history}
+                stageKey="l1" title="L1 Interview" history={history}
                 onAction={(a, p) => handleAction('L1 Interview', a, p)}
               />
               <InterviewStageCard
                 candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
-                stageKey="l2" title="L2 Interview"
-                history={history}
+                stageKey="l2" title="L2 Interview" history={history}
                 onAction={(a, p) => handleAction('L2 Interview', a, p)}
               />
               <HRRoundCard
-                candidate={candidate} role={role as UserRole}
-                history={history}
+                candidate={candidate} role={role as UserRole} history={history}
                 onAction={(a, p) => handleAction('HR Round', a, p)}
               />
               <OfferStageCard
-                candidate={candidate} role={role as UserRole}
-                history={history}
+                candidate={candidate} role={role as UserRole} history={history}
                 onAction={(a, p) => handleAction('Offer Stage', a, p)}
               />
-
             </div>
           </div>
 
@@ -1205,7 +1366,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
               ))}
             </div>
           </div>
-
         </div>
       </div>
     </div>
