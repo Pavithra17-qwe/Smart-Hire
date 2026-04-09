@@ -1,88 +1,70 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { deleteDoc, query, orderBy } from 'firebase/firestore';
-import {
-  collection, onSnapshot, addDoc, serverTimestamp, doc, updateDoc,
-} from 'firebase/firestore';
+import { query, orderBy, where } from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/hooks/useAuth';
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
-interface Requirement {
+interface JobRequisition {
   id: string;
   projectName: string;
-  jobRole: string;
-  location: string;
-  experience: string;
-  noticePeriod: string;
-  status: 'Active' | 'Closed';
-  createdAt?: any;
+  locations: string[];
+  roles: string[];
+  status: string;
+  createdDate?: any;
+  createdByName?: string;
+  createdByRole?: string;
   jdFileData?: string;
   jdFileName?: string;
   jdFileType?: string;
-  createdBy?: string;
-  createdByRole?: string;
-  agencyName?: string;
-  agencyId?: string;
+  assignedAgencies?: string[];
 }
-
-type FormData = {
-  projectName: string;
-  jobRole: string;
-  location: string;
-  experience: string;
-  noticePeriod: string;
-  status: 'Active' | 'Closed';
-};
-
-const EMPTY_FORM: FormData = {
-  projectName: '', jobRole: '', location: '',
-  experience: '', noticePeriod: '', status: 'Active',
-};
-
-const NOTICE_PERIOD_OPTIONS = ['Immediate', '0-15 days', '15-30 days', '30-60 days', '60+ days'];
-const EXPERIENCE_OPTIONS = ['0-1 years', '1-2 years', '2-3 years', '3-5 years', '5-8 years', '8+ years', 'Others'];
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
 function fmtDate(ts: any): string {
-  if (!ts) return '-';
+  if (!ts) return '—';
   try {
     const d = ts.seconds ? new Date(ts.seconds * 1000) : new Date(ts);
-    return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
-  } catch { return '-'; }
-}
-
-function toBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error('File read failed'));
-    reader.readAsDataURL(file);
-  });
+    return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+  } catch { return '—'; }
 }
 
 function openJDFile(jdFileData: string, jdFileName?: string) {
   if (!jdFileData) return;
+
+  // Plain text JD (manually entered)
+  if (!jdFileData.startsWith('data:') && !jdFileData.startsWith('https://')) {
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write(
+        `<pre style="font-family:sans-serif;padding:24px;white-space:pre-wrap;max-width:800px;margin:auto;">${jdFileData}</pre>`
+      );
+      win.document.title = jdFileName || 'Job Description';
+    }
+    return;
+  }
+
   if (jdFileData.startsWith('https://')) {
     window.open(jdFileData, '_blank', 'noopener,noreferrer');
     return;
   }
+
   try {
     const [meta, base64] = jdFileData.split(',');
+    if (!base64) throw new Error('Invalid base64');
     const mimeMatch = meta.match(/:(.*?);/);
     const mime = mimeMatch ? mimeMatch[1] : 'application/pdf';
-    const byteChars = atob(base64);
-    const bytes = new Uint8Array(byteChars.length);
-    for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
-    const blob = new Blob([bytes], { type: mime });
-    const url  = URL.createObjectURL(blob);
-    const win = window.open(url, '_blank', 'noopener,noreferrer');
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const blob  = new Blob([bytes], { type: mime });
+    const url   = URL.createObjectURL(blob);
+    const win   = window.open(url, '_blank', 'noopener,noreferrer');
     if (!win) {
-      const a = document.createElement('a');
-      a.href = url; a.target = '_blank';
-      a.download = jdFileName || 'JD.pdf';
+      const a = Object.assign(document.createElement('a'), {
+        href: url, target: '_blank', download: jdFileName || 'JD.pdf',
+      });
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
     }
     setTimeout(() => URL.revokeObjectURL(url), 15000);
@@ -92,12 +74,13 @@ function openJDFile(jdFileData: string, jdFileName?: string) {
   }
 }
 
+/* ─── Sub-components ──────────────────────────────────────────────────────── */
 function StatusBadge({ status }: { status: string }) {
   const active = status === 'Active';
   return (
     <span style={{
-      display: 'inline-flex', alignItems: 'center', padding: '3px 14px',
-      borderRadius: 9999, fontSize: 13, fontWeight: 500,
+      display: 'inline-flex', alignItems: 'center', padding: '3px 12px',
+      borderRadius: 9999, fontSize: 12, fontWeight: 600,
       background: active ? '#dcfce7' : '#fee2e2',
       color: active ? '#15803d' : '#b91c1c',
       border: `1px solid ${active ? '#bbf7d0' : '#fecaca'}`,
@@ -107,303 +90,11 @@ function StatusBadge({ status }: { status: string }) {
 
 function EyeIcon() {
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none"
+    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" fill="none"
       stroke="#6366f1" strokeWidth="2" viewBox="0 0 24 24">
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/>
-      <circle cx="12" cy="12" r="3"/>
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
-  );
-}
-
-/* ─── Field Input ─────────────────────────────────────────────────────────── */
-function FieldInput({ label, value, onChange, placeholder, required }: {
-  label: string; value: string; onChange: (v: string) => void;
-  placeholder?: string; required?: boolean;
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <span style={labelText}>
-        {label}{required && <span style={{ color: '#ef4444', marginLeft: 2 }}>*</span>}
-      </span>
-      <input value={value} onChange={e => onChange(e.target.value)}
-        placeholder={placeholder} style={inputStyle} />
-    </div>
-  );
-}
-
-/* ─── Modal ───────────────────────────────────────────────────────────────── */
-function RequirementModal({ open, onClose, editData, onSuccess, user }: {
-  open: boolean; onClose: () => void; editData?: Requirement | null;
-  onSuccess: () => void; user: any;
-}) {
-  const [form, setForm]                     = useState<FormData>(EMPTY_FORM);
-  const [customExperience, setCustomExp]    = useState('');
-  const [jdFile, setJdFile]                 = useState<File | null>(null);
-  const [jdPreview, setJdPreview]           = useState<string>('');
-  const [submitting, setSubmitting]         = useState(false);
-  const [dragOver, setDragOver]             = useState(false);
-  const [error, setError]                   = useState('');
-  const fileRef                             = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    if (editData) {
-      setForm({
-        projectName:  editData.projectName  || '',
-        jobRole:      editData.jobRole      || '',
-        location:     editData.location     || '',
-        experience:   editData.experience   || '',
-        noticePeriod: editData.noticePeriod || '',
-        status:       editData.status       || 'Active',
-      });
-      setJdPreview(editData.jdFileData || '');
-    } else {
-      setForm(EMPTY_FORM);
-      setJdPreview('');
-    }
-    setJdFile(null); setError(''); setCustomExp('');
-  }, [open, editData]);
-
-  if (!open) return null;
-
-  const set = (k: keyof FormData, v: string) => setForm(p => ({ ...p, [k]: v }));
-
-  const handleFile = async (file: File | null) => {
-    if (!file) return;
-    const allowedTypes = [
-      "application/pdf",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ];
-    if (!allowedTypes.includes(file.type)) { setError("Only PDF, DOC, DOCX files are accepted."); return; }
-    setError(''); setJdFile(file);
-    const b64 = await toBase64(file);
-    setJdPreview(b64);
-  };
-
-  const handleSubmit = async () => {
-    const expValue = form.experience === 'Others' ? customExperience.trim() : form.experience;
-    if (!form.jobRole.trim() || !form.location.trim() || !expValue || !form.noticePeriod || !form.status) {
-      setError('Please fill all required fields.'); return;
-    }
-    setError(''); setSubmitting(true);
-    try {
-      const { getDocs, query: fsQuery, where } = await import('firebase/firestore');
-      if (!editData) {
-        const dupSnap = await getDocs(fsQuery(collection(db, 'requirements'),
-          where('jobRole', '==', form.jobRole.trim()),
-          where('location', '==', form.location.trim()),
-          where('experience', '==', expValue),
-          where('noticePeriod', '==', form.noticePeriod),
-          where('status', '==', form.status)
-        ));
-        if (!dupSnap.empty) {
-          setError('A requirement with the same details already exists.');
-          setSubmitting(false); return;
-        }
-      }
-      let jdFileData = editData?.jdFileData || '';
-      let jdFileName = editData?.jdFileName || '';
-      let jdFileType = editData?.jdFileType || '';
-      if (jdFile) { jdFileData = await toBase64(jdFile); jdFileName = jdFile.name; jdFileType = jdFile.type; }
-
-      const payload: Record<string, any> = {
-        projectName: form.projectName.trim(), jobRole: form.jobRole.trim(),
-        location: form.location.trim(), experience: expValue,
-        noticePeriod: form.noticePeriod, status: form.status,
-        jdFileData, jdFileName, jdFileType,
-      };
-
-      if (editData) {
-        await updateDoc(doc(db, 'requirements', editData.id), payload);
-        const { getDocs: gd, query: q, where: w } = await import('firebase/firestore');
-        const snap = await gd(q(collection(db, 'job_requisitions'), w('requirementId', '==', editData.id)));
-        snap.forEach(async jrDoc => {
-          await updateDoc(doc(db, 'job_requisitions', jrDoc.id), {
-            roles: [payload.jobRole], locations: [payload.location],
-            status: payload.status, jdFileName, jdFileType, jdFileData,
-          });
-        });
-      } else {
-        const reqRef = await addDoc(collection(db, 'requirements'), {
-          ...payload, createdAt: serverTimestamp(), createdByRole: 'agency',
-          createdBy: user?.uid || '', createdByName: user?.displayName || user?.email || 'Agency',
-        });
-        await addDoc(collection(db, 'job_requisitions'), {
-          projectName: payload.projectName || '—', roles: [payload.jobRole],
-          locations: [payload.location], status: payload.status || 'Active',
-          jdFileName, jdFileType, jdFileData, createdBy: user?.uid || '',
-          createdByRole: 'agency', createdByName: user?.displayName || user?.email || 'Agency',
-          createdDate: serverTimestamp(), requirementId: reqRef.id,
-        });
-      }
-      onClose(); setTimeout(() => onSuccess(), 200);
-    } catch (err: any) {
-      setError('Failed to save: ' + (err?.message || 'Unknown error'));
-    } finally { setSubmitting(false); }
-  };
-
-  const isValid = !!(form.jobRole.trim() && form.location.trim() && form.experience && form.noticePeriod && form.status);
-
-  return (
-    <div onClick={e => e.target === e.currentTarget && !submitting && onClose()} style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-      zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-    }}>
-      <div style={{
-        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 660,
-        padding: '32px 36px', boxShadow: '0 24px 64px rgba(0,0,0,0.2)',
-        position: 'relative', maxHeight: '90vh', overflowY: 'auto',
-      }}>
-        {!submitting && (
-          <button onClick={onClose} style={{
-            position: 'absolute', top: 16, right: 20, background: 'none',
-            border: 'none', fontSize: 24, cursor: 'pointer', color: '#9ca3af', lineHeight: 1,
-          }}>×</button>
-        )}
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#111827', margin: '0 0 24px' }}>
-          {editData ? 'Edit Requirement' : 'New Requirement'}
-        </h2>
-        {error && (
-          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8,
-            padding: '10px 14px', marginBottom: 16, color: '#dc2626', fontSize: 13 }}>{error}</div>
-        )}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px 24px' }}>
-          <FieldInput label="PROJECT NAME" value={form.projectName} onChange={v => set('projectName', v)} placeholder="e.g., Deloitte" />
-          <FieldInput label="JOB ROLE" value={form.jobRole} onChange={v => set('jobRole', v)} placeholder="e.g., QA, Dev" required />
-          <FieldInput label="LOCATION" value={form.location} onChange={v => set('location', v)} placeholder="e.g., Chennai" required />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={labelText}>EXPERIENCE <span style={{ color: '#ef4444' }}>*</span></span>
-            <select value={form.experience} onChange={e => set('experience', e.target.value)} style={inputStyle}>
-              <option value="">Select...</option>
-              {EXPERIENCE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-            </select>
-            {form.experience === 'Others' && (
-              <input placeholder="Enter experience" value={customExperience}
-                onChange={e => setCustomExp(e.target.value)} style={inputStyle} />
-            )}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={labelText}>NOTICE PERIOD <span style={{ color: '#ef4444' }}>*</span></span>
-            <select value={form.noticePeriod} onChange={e => set('noticePeriod', e.target.value)} style={inputStyle}>
-              <option value="">Select...</option>
-              {NOTICE_PERIOD_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={labelText}>STATUS <span style={{ color: '#ef4444' }}>*</span></span>
-            <select value={form.status} onChange={e => set('status', e.target.value as any)} style={inputStyle}>
-              <option value="Active">Active</option>
-              <option value="Closed">Closed</option>
-            </select>
-          </div>
-        </div>
-        <div style={{ marginTop: 20 }}>
-          <span style={labelText}>JOB DESCRIPTION (PDF / DOC / DOCX)</span>
-          <div
-            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={e => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); }}
-            onClick={() => fileRef.current?.click()}
-            style={{
-              marginTop: 6, border: `2px dashed ${dragOver ? '#6366f1' : '#c7d2fe'}`,
-              borderRadius: 12, padding: '28px 16px', textAlign: 'center',
-              cursor: 'pointer', background: dragOver ? '#eef2ff' : '#f5f7ff', transition: 'all 0.2s',
-            }}
-          >
-            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" style={{ margin: '0 auto 10px', display: 'block' }}>
-              <path d="M12 16V8M12 8l-3 3M12 8l3 3" stroke="#6366f1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" stroke="#6366f1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            {jdFile ? (
-              <p style={{ color: '#4f46e5', fontSize: 14, fontWeight: 500, margin: 0 }}>📄 {jdFile.name}</p>
-            ) : editData?.jdFileName ? (
-              <p style={{ color: '#4f46e5', fontSize: 14, margin: 0 }}>
-                Current: {editData.jdFileName} · <span style={{ textDecoration: 'underline' }}>Replace</span>
-              </p>
-            ) : (
-              <p style={{ color: '#6b7280', fontSize: 14, margin: 0 }}>
-                Drag & drop or <span style={{ color: '#4f46e5', fontWeight: 600, textDecoration: 'underline' }}>click to upload</span>
-                <br /><span style={{ fontSize: 12, color: '#9ca3af' }}>PDF, DOC, DOCX supported</span>
-              </p>
-            )}
-            <input ref={fileRef} type="file" accept=".pdf,.doc,.docx" hidden
-              onChange={e => handleFile(e.target.files?.[0] || null)} />
-          </div>
-          {jdPreview && (
-            <button type="button"
-              onClick={e => { e.stopPropagation(); openJDFile(jdPreview, jdFile?.name || editData?.jdFileName); }}
-              style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6,
-                background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8,
-                padding: '6px 12px', fontSize: 12, color: '#15803d', cursor: 'pointer', fontWeight: 500 }}>
-              <EyeIcon /> Preview uploaded file
-            </button>
-          )}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 28 }}>
-          <button onClick={onClose} disabled={submitting} style={cancelBtn}>Cancel</button>
-          <button onClick={handleSubmit} disabled={submitting || !isValid}
-            style={{ ...primaryBtn, opacity: submitting || !isValid ? 0.65 : 1, minWidth: 160, justifyContent: 'center' }}>
-            {submitting ? (
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.4)',
-                  borderTopColor: '#fff', borderRadius: '50%',
-                  animation: 'spin 0.7s linear infinite', display: 'inline-block', flexShrink: 0 }} />
-                Saving…
-              </span>
-            ) : editData ? 'Update Requirement' : 'Create Requirement'}
-          </button>
-        </div>
-      </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
-}
-
-/* ─── Actions Menu ────────────────────────────────────────────────────────── */
-function ActionsMenu({ req, onEdit }: { req: Requirement; onEdit: (r: Requirement) => void }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-  const handleDelete = async () => {
-    if (!confirm('Delete this requirement?')) return;
-    await deleteDoc(doc(db, 'requirements', req.id));
-    setOpen(false);
-  };
-  return (
-    <div ref={menuRef} style={{ position: 'relative', display: 'inline-block' }}>
-      <button onClick={() => setOpen(o => !o)} style={{
-        background: 'none', border: 'none', cursor: 'pointer',
-        fontSize: 20, color: '#9ca3af', padding: '4px 8px', borderRadius: 6, lineHeight: 1,
-      }}>⋮</button>
-      {open && (
-        <div style={{ position: 'absolute', right: 0, top: '100%', background: '#fff',
-          border: '1px solid #e5e7eb', borderRadius: 10,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 30, minWidth: 150, overflow: 'hidden' }}>
-          <MenuBtn label="Edit" onClick={() => { onEdit(req); setOpen(false); }} />
-          <MenuBtn label="Delete" onClick={handleDelete} danger />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MenuBtn({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
-  const [hov, setHov] = useState(false);
-  return (
-    <button onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{ display: 'flex', alignItems: 'center', width: '100%', padding: '10px 16px',
-        background: hov ? (danger ? '#fef2f2' : '#f9fafb') : 'none',
-        border: 'none', cursor: 'pointer', fontSize: 13,
-        color: danger ? '#dc2626' : '#374151', fontWeight: 500 }}>
-      {label}
-    </button>
   );
 }
 
@@ -418,154 +109,184 @@ function FilterSelect({ label, value, onChange, options }: {
   );
 }
 
-function TableRowItem({ req, isLast, onEdit }: {
-  req: Requirement; isLast: boolean; onEdit: (r: Requirement) => void;
-}) {
+function TableRow({ req, isLast }: { req: JobRequisition; isLast: boolean }) {
   const [hov, setHov] = useState(false);
-  const hasJD = !!(req.jdFileData && req.jdFileData.length > 50);
+  const hasJD = !!(req.jdFileData && req.jdFileData.length > 5);
+
   return (
-    <tr onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{ borderBottom: isLast ? 'none' : '1px solid #f3f4f6',
-        background: hov ? '#fafbff' : '#fff', transition: 'background 0.15s' }}>
-      <td style={tdStyle}><span style={{ fontWeight: 500, color: '#111827' }}>{req.projectName || 'N/A'}</span></td>
-      <td style={tdStyle}>{req.jobRole || '-'}</td>
-      <td style={tdStyle}>{req.experience || '-'}</td>
-      <td style={tdStyle}>{req.noticePeriod || '-'}</td>
+    <tr
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        borderBottom: isLast ? 'none' : '1px solid #f3f4f6',
+        background: hov ? '#fafbff' : '#fff',
+        transition: 'background 0.15s',
+      }}
+    >
+      <td style={tdStyle}>
+        <span style={{ fontWeight: 600, color: '#111827' }}>{req.projectName || '—'}</span>
+      </td>
+      <td style={tdStyle}>{req.locations?.join(', ') || '—'}</td>
+      <td style={tdStyle}>{req.roles?.join(', ') || '—'}</td>
       <td style={tdStyle}><StatusBadge status={req.status || 'Active'} /></td>
-      <td style={tdStyle}>{fmtDate(req.createdAt)}</td>
       <td style={tdStyle}>
         {hasJD ? (
-          <button onClick={() => openJDFile(req.jdFileData!, req.jdFileName)}
+          <button
+            onClick={() => openJDFile(req.jdFileData!, req.jdFileName)}
             title={req.jdFileName || 'View JD'}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4,
-              display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 4,
+              display: 'flex', alignItems: 'center', gap: 6,
+              color: '#6366f1', fontSize: 13, fontWeight: 500,
+            }}
+          >
             <EyeIcon />
+            <span style={{
+              maxWidth: 90, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {req.jdFileName || 'View'}
+            </span>
           </button>
-        ) : <span style={{ color: '#9ca3af', fontSize: 12 }}>N/A</span>}
+        ) : (
+          <span style={{ color: '#d1d5db', fontSize: 12 }}>No file</span>
+        )}
       </td>
-      <td style={tdStyle}><ActionsMenu req={req} onEdit={onEdit} /></td>
+      <td style={tdStyle}>{fmtDate(req.createdDate)}</td>
+      <td style={tdStyle}>{req.createdByName || req.createdByRole || '—'}</td>
     </tr>
   );
 }
 
 /* ─── Main Page ───────────────────────────────────────────────────────────── */
 export default function RequirementsPage() {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
+  const searchParams   = useSearchParams();
 
-  // ── FIX: Read ?projectName from URL (set by agency dashboard card clicks) ──
-  const searchParams = useSearchParams();
-
-  const [requirements,  setRequirements]  = useState<Requirement[]>([]);
+  const [requisitions,  setRequisitions]  = useState<JobRequisition[]>([]);
   const [loading,       setLoading]       = useState(true);
-  const [modalOpen,     setModalOpen]     = useState(false);
-  const [editTarget,    setEditTarget]    = useState<Requirement | null>(null);
-  const [showSuccess,   setShowSuccess]   = useState(false);
+  const [projectFilter, setProjectFilter] = useState('');
   const [statusFilter,  setStatusFilter]  = useState('');
   const [roleFilter,    setRoleFilter]    = useState('');
-  const [expFilter,     setExpFilter]     = useState('');
-  const [noticeFilter,  setNoticeFilter]  = useState('');
-  // ── NEW: projectName filter from URL ───────────────────────────────────────
-  const [projectFilter, setProjectFilter] = useState('');
   const [page,          setPage]          = useState(0);
   const [rowsPerPage,   setRowsPerPage]   = useState(10);
 
-  // Read ?projectName query param on mount — pre-filters the table
+  // Pre-fill project filter from URL ?projectName=...
   useEffect(() => {
-    const pn = searchParams.get("projectName");
+    const pn = searchParams.get('projectName');
     if (pn) setProjectFilter(decodeURIComponent(pn));
   }, [searchParams]);
 
+  // ── Firestore listener ────────────────────────────────────────────────────
+  // Agency  → only projects where assignedAgencies contains their UID
+  // Admin/HR → all projects
   useEffect(() => {
+    if (!user || !role) return;
+    setLoading(true);
+
+    const q = role === 'agency'
+      ? query(
+          collection(db, 'job_requisitions'),
+          where('assignedAgencies', 'array-contains', user.uid),
+          orderBy('createdDate', 'desc')
+        )
+      : query(collection(db, 'job_requisitions'), orderBy('createdDate', 'desc'));
+
     const unsub = onSnapshot(
-      query(collection(db, 'requirements'), orderBy('createdAt', 'desc')),
+      q,
       snap => {
-        setRequirements(snap.docs.map(d => {
-          const data = d.data();
-          return {
-            id: d.id,
-            projectName:   data.projectName  || '',
-            jobRole:       data.jobRole      || '',
-            location:      data.location     || '',
-            experience:    data.experience   || '',
-            noticePeriod:  data.noticePeriod || '',
-            status:        data.status       || 'Active',
-            createdAt:     data.createdAt    || null,
-            jdFileData:    data.jdFileData   || '',
-            jdFileName:    data.jdFileName   || '',
-            jdFileType:    data.jdFileType   || '',
-            createdBy:     data.createdBy    || '',
-            createdByRole: data.createdByRole || '',
-          };
-        }));
+        setRequisitions(snap.docs.map(d => ({ id: d.id, ...d.data() } as JobRequisition)));
         setLoading(false);
       },
-      err => { console.error('Firestore error:', err); setLoading(false); }
+      err => { console.error('requirements listener:', err); setLoading(false); }
     );
     return () => unsub();
-  }, []);
+  }, [user, role]);
 
-  // ── FIX: clearFilters now also clears projectFilter ───────────────────────
-  const hasFilter = !!(statusFilter || roleFilter || expFilter || noticeFilter || projectFilter);
-  const clearFilters = () => {
-    setStatusFilter(''); setRoleFilter(''); setExpFilter('');
-    setNoticeFilter(''); setProjectFilter(''); setPage(0);
-  };
+  // ── Filter options derived from fetched data ──────────────────────────────
+  const projectOptions = [...new Set(requisitions.map(r => r.projectName).filter(Boolean))];
+  const roleOptions    = [...new Set(requisitions.flatMap(r => r.roles ?? []).filter(Boolean))];
 
-  const openNew  = () => { setEditTarget(null); setModalOpen(true); };
-  const openEdit = (r: Requirement) => { setEditTarget(r); setModalOpen(true); };
-  const closeModal = () => { setModalOpen(false); setEditTarget(null); };
+  const hasFilter = !!(projectFilter || statusFilter || roleFilter);
+  const clearFilters = () => { setProjectFilter(''); setStatusFilter(''); setRoleFilter(''); setPage(0); };
 
-  const uniqueRoles = [...new Set(requirements.map(r => r.jobRole).filter(Boolean))];
-  const uniqueExp   = [...new Set(requirements.map(r => r.experience).filter(Boolean))];
-
-  // ── FIX: filtered now includes projectFilter ──────────────────────────────
-  const filtered = requirements.filter(r =>
-    (!statusFilter  || r.status       === statusFilter) &&
-    (!roleFilter    || r.jobRole      === roleFilter) &&
-    (!expFilter     || r.experience   === expFilter) &&
-    (!noticeFilter  || r.noticePeriod === noticeFilter) &&
-    // projectFilter: case-insensitive partial match on projectName
-    (!projectFilter || (r.projectName || '').toLowerCase() === projectFilter.toLowerCase())  );
+  const filtered = requisitions.filter(r =>
+    (!projectFilter || r.projectName        === projectFilter) &&
+    (!statusFilter  || r.status             === statusFilter) &&
+    (!roleFilter    || r.roles?.includes(roleFilter))
+  );
 
   const total     = filtered.length;
   const paginated = filtered.slice(page * rowsPerPage, (page + 1) * rowsPerPage);
 
   return (
-    <div style={{ padding: '32px 40px', fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', background: '#f8f9fc' }}>
+    <div style={{
+      padding: '32px 40px', fontFamily: 'Inter, system-ui, sans-serif',
+      minHeight: '100vh', background: '#f8f9fc',
+    }}>
 
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
-        <div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, color: '#111827', margin: 0 }}>Requirements</h1>
-          <p style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>View and manage your job requirements.</p>
-        </div>
-        <button onClick={openNew} style={primaryBtn}>
-          <span style={{ fontSize: 18, marginRight: 6 }}>+</span> New Requirement
-        </button>
+      {/* ── Header ────────────────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, color: '#111827', margin: 0 }}>Requirements</h1>
+        <p style={{ color: '#6b7280', fontSize: 14, marginTop: 4 }}>
+          {role === 'agency'
+            ? 'Projects assigned to you by Admin / HR — read only.'
+            : 'All client project requirements.'}
+        </p>
       </div>
 
-      {/* ── FIX: Project filter banner — shown when navigated from dashboard ── */}
+      {/* ── Agency info banner ────────────────────────────────────────────── */}
+      {role === 'agency' && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          padding: '9px 16px', background: '#EEF2FF',
+          border: '1px solid #C7D2FE', borderRadius: 10,
+          marginBottom: 20, fontSize: 13, color: '#4338CA',
+        }}>
+          <span>📋</span>
+          <span>
+            You have <strong>{requisitions.length}</strong> assigned
+            project{requisitions.length !== 1 ? 's' : ''}.
+            Projects are managed by Admin / HR.
+          </span>
+        </div>
+      )}
+
+      {/* ── URL project filter banner ─────────────────────────────────────── */}
       {projectFilter && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px',
           background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 10,
           marginBottom: 16, fontSize: 13, color: '#4338CA',
         }}>
-          <span>🔍 Showing requirements for project: <strong>{projectFilter}</strong></span>
-          <button onClick={() => setProjectFilter('')}
-            style={{ marginLeft: 'auto', background: 'none', border: 'none',
-              cursor: 'pointer', color: '#6366F1', fontWeight: 600, fontSize: 13 }}>
-            ✕ Clear project filter
-          </button>
+          <span>🔍 Showing: <strong>{projectFilter}</strong></span>
+          <button onClick={() => setProjectFilter('')} style={{
+            marginLeft: 'auto', background: 'none', border: 'none',
+            cursor: 'pointer', color: '#6366F1', fontWeight: 600, fontSize: 13,
+          }}>✕ Clear</button>
         </div>
       )}
 
-      {/* Filters */}
+      {/* ── Filters ───────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
-        <FilterSelect label="All Statuses"       value={statusFilter} onChange={v => { setStatusFilter(v); setPage(0); }} options={['Active', 'Closed']} />
-        <FilterSelect label="All Roles"          value={roleFilter}   onChange={v => { setRoleFilter(v);   setPage(0); }} options={uniqueRoles} />
-        <FilterSelect label="All Experience"     value={expFilter}    onChange={v => { setExpFilter(v);    setPage(0); }} options={uniqueExp} />
-        <FilterSelect label="All Notice Periods" value={noticeFilter} onChange={v => { setNoticeFilter(v); setPage(0); }} options={NOTICE_PERIOD_OPTIONS} />
+        <FilterSelect
+          label="All Projects"
+          value={projectFilter}
+          onChange={v => { setProjectFilter(v); setPage(0); }}
+          options={projectOptions}
+        />
+        <FilterSelect
+          label="All Roles"
+          value={roleFilter}
+          onChange={v => { setRoleFilter(v); setPage(0); }}
+          options={roleOptions}
+        />
+        <FilterSelect
+          label="All Statuses"
+          value={statusFilter}
+          onChange={v => { setStatusFilter(v); setPage(0); }}
+          options={['Active', 'Inactive']}
+        />
         {hasFilter && (
           <button onClick={clearFilters} style={{
             background: 'none', border: '1.5px solid #e5e7eb', borderRadius: 8,
@@ -575,110 +296,108 @@ export default function RequirementsPage() {
         )}
       </div>
 
-      {/* Table */}
-      <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', overflow: 'visible', boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+      {/* ── Table ─────────────────────────────────────────────────────────── */}
+      <div style={{
+        background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb',
+        overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+      }}>
         {loading ? (
           <div style={{ padding: 60, textAlign: 'center', color: '#9ca3af' }}>
-            <div style={{ width: 28, height: 28, border: '3px solid #e5e7eb', borderTopColor: '#6366f1',
-              borderRadius: '50%', animation: 'spin 0.7s linear infinite', margin: '0 auto 12px' }} />
+            <div style={{
+              width: 28, height: 28, border: '3px solid #e5e7eb',
+              borderTopColor: '#6366f1', borderRadius: '50%',
+              animation: 'spin 0.7s linear infinite', margin: '0 auto 12px',
+            }} />
             Loading requirements…
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#fafafa', borderBottom: '1px solid #f0f0f0' }}>
-                {['PROJECT NAME','JOB ROLE','EXPERIENCE','NOTICE PERIOD','STATUS','CREATED DATE','JD','ACTIONS'].map(h => (
-                  <th key={h} style={{ padding: '13px 20px', textAlign: 'left',
-                    fontSize: 11, fontWeight: 600, color: '#9ca3af', letterSpacing: '0.06em' }}>{h}</th>
+                {['PROJECT NAME', 'LOCATION', 'ROLE / DESIGNATION', 'STATUS', 'JD', 'CREATED DATE', 'CREATED BY'].map(h => (
+                  <th key={h} style={{
+                    padding: '13px 20px', textAlign: 'left',
+                    fontSize: 11, fontWeight: 600, color: '#9ca3af', letterSpacing: '0.06em',
+                  }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={8}>
-                  <div style={{ padding: '60px 20px', textAlign: 'center' }}>
-                    <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
-                    <p style={{ color: '#6b7280', fontSize: 15, fontWeight: 500, margin: 0 }}>
-                      {hasFilter ? 'No requirements match your filters.' : 'No requirements created yet.'}
-                    </p>
-                    {!hasFilter && <p style={{ color: '#9ca3af', fontSize: 13, marginTop: 6 }}>
-                      Click <strong>+ New Requirement</strong> to get started.
-                    </p>}
-                  </div>
-                </td></tr>
-              ) : paginated.map((req, i) => (
-                <TableRowItem key={req.id} req={req} isLast={i === paginated.length - 1} onEdit={openEdit} />
-              ))}
+                <tr>
+                  <td colSpan={7}>
+                    <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+                      <p style={{ color: '#6b7280', fontSize: 15, fontWeight: 500, margin: 0 }}>
+                        {hasFilter
+                          ? 'No requirements match your filters.'
+                          : role === 'agency'
+                            ? 'No projects have been assigned to you yet.'
+                            : 'No requirements found.'}
+                      </p>
+                      {role === 'agency' && !hasFilter && (
+                        <p style={{ color: '#9ca3af', fontSize: 13, marginTop: 6 }}>
+                          Contact your Admin or HR to get projects assigned to you.
+                        </p>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                paginated.map((req, i) => (
+                  <TableRow
+                    key={req.id}
+                    req={req}
+                    isLast={i === paginated.length - 1}
+                  />
+                ))
+              )}
             </tbody>
           </table>
         )}
 
-        {/* Pagination */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, padding: '14px 20px' }}>
-          <span style={{ fontSize: 13, color: '#6b7280' }}>Rows per page:</span>
-          <select value={rowsPerPage} onChange={e => { setRowsPerPage(Number(e.target.value)); setPage(0); }}
-            style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}>
-            {[5, 10, 20].map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <span style={{ fontSize: 13, color: '#6b7280' }}>
-            {total === 0 ? 0 : page * rowsPerPage + 1}–{Math.min((page+1) * rowsPerPage, total)} of {total}
-          </span>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {[
-              { label: '<<', action: () => setPage(0),                                               disabled: page === 0 },
-              { label: '<',  action: () => setPage(p => Math.max(p-1, 0)),                           disabled: page === 0 },
-              { label: '>',  action: () => setPage(p => (p+1)*rowsPerPage < total ? p+1 : p),        disabled: (page+1)*rowsPerPage >= total },
-              { label: '>>', action: () => setPage(Math.floor((total-1)/rowsPerPage)),                disabled: (page+1)*rowsPerPage >= total },
-            ].map(btn => (
-              <button key={btn.label} onClick={btn.action} disabled={btn.disabled}
-                style={paginationBtn(btn.disabled)}>{btn.label}</button>
-            ))}
+        {/* ── Pagination ────────────────────────────────────────────────── */}
+        {filtered.length > 0 && (
+          <div style={{
+            display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
+            gap: 12, padding: '14px 20px', borderTop: '1px solid #f3f4f6',
+          }}>
+            <span style={{ fontSize: 13, color: '#6b7280' }}>Rows per page:</span>
+            <select
+              value={rowsPerPage}
+              onChange={e => { setRowsPerPage(Number(e.target.value)); setPage(0); }}
+              style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', fontSize: 13 }}
+            >
+              {[5, 10, 20].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <span style={{ fontSize: 13, color: '#6b7280' }}>
+              {page * rowsPerPage + 1}–{Math.min((page + 1) * rowsPerPage, total)} of {total}
+            </span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[
+                { label: '<<', action: () => setPage(0),                                               disabled: page === 0 },
+                { label: '<',  action: () => setPage(p => Math.max(p - 1, 0)),                         disabled: page === 0 },
+                { label: '>',  action: () => setPage(p => (p + 1) * rowsPerPage < total ? p + 1 : p),  disabled: (page + 1) * rowsPerPage >= total },
+                { label: '>>', action: () => setPage(Math.floor((total - 1) / rowsPerPage)),            disabled: (page + 1) * rowsPerPage >= total },
+              ].map(btn => (
+                <button
+                  key={btn.label}
+                  onClick={btn.action}
+                  disabled={btn.disabled}
+                  style={paginationBtn(btn.disabled)}
+                >{btn.label}</button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
-
-      <RequirementModal open={modalOpen} onClose={closeModal} editData={editTarget}
-        onSuccess={() => setShowSuccess(true)} user={user} />
-
-      {showSuccess && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: '#fff', padding: '30px 40px', borderRadius: 12,
-            textAlign: 'center', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
-            <div style={{ background: '#dcfce7', borderRadius: '50%', padding: 12,
-              display: 'inline-flex', marginBottom: 12, fontSize: 22 }}>✔</div>
-            <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Saved!</h3>
-            <p style={{ color: '#6b7280', margin: '8px 0 16px' }}>Requirement saved successfully.</p>
-            <button onClick={() => setShowSuccess(false)} style={{
-              padding: '8px 20px', background: '#4f46e5', color: '#fff',
-              border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>OK</button>
-          </div>
-        </div>
-      )}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
 
-/* ─── Shared Styles ───────────────────────────────────────────────────────── */
-const labelText: React.CSSProperties = {
-  fontSize: 11, fontWeight: 600, color: '#6b7280', letterSpacing: '0.07em', textTransform: 'uppercase',
-};
-const inputStyle: React.CSSProperties = {
-  padding: '10px 14px', border: '1.5px solid #e5e7eb', borderRadius: 10,
-  fontSize: 14, outline: 'none', background: '#f9fafc', color: '#111827',
-  width: '100%', boxSizing: 'border-box',
-};
-const primaryBtn: React.CSSProperties = {
-  background: '#4f46e5', color: '#fff', border: 'none', borderRadius: 10,
-  padding: '10px 22px', fontWeight: 600, fontSize: 14, cursor: 'pointer',
-  display: 'flex', alignItems: 'center', gap: 4, boxShadow: '0 2px 8px rgba(79,70,229,0.3)',
-};
-const cancelBtn: React.CSSProperties = {
-  background: '#fff', color: '#374151', border: '1.5px solid #e5e7eb',
-  borderRadius: 10, padding: '10px 22px', fontWeight: 600, fontSize: 14, cursor: 'pointer',
-};
+/* ─── Styles ──────────────────────────────────────────────────────────────── */
 const filterSelectStyle: React.CSSProperties = {
   padding: '9px 32px 9px 14px', border: '1.5px solid #e5e7eb', borderRadius: 10,
   fontSize: 13, background: '#fff', color: '#374151', cursor: 'pointer',

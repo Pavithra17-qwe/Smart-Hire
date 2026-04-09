@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   collection, addDoc, serverTimestamp, query, doc,
-  updateDoc, deleteDoc, where, orderBy, onSnapshot,getDocs
+  updateDoc, deleteDoc, where, orderBy, onSnapshot, getDocs
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
@@ -13,14 +13,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Plus, Eye, MoreVertical, XCircle, FileText, CheckCircle2, X } from "lucide-react";
+import { Loader2, Plus, Eye, MoreVertical, XCircle } from "lucide-react";
 import { logActivity } from "@/lib/activity-logger";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const LOCATIONS_OPTIONS = ["Chennai", "Bangalore", "Remote"];
 const ROLES_OPTIONS = ["Junior QA", "Senior QA", "DM"];
+
+/* ─── Types ──────────────────────────────────────────────────────────────── */
+interface AgencyUser {
+  uid: string;
+  displayName?: string;
+  email?: string;
+  name?: string;
+  role: string;
+}
 
 interface FormData {
   projectName:   string;
@@ -29,29 +39,26 @@ interface FormData {
   role:          string;
   otherRole:     string;
   status:        string;
-  // JD — we store base64 data-URI in Firestore (consistent with requirements collection)
   jdFileName:    string;
   jdFileType:    string;
-  jdFileData:    string;  // base64 data-URI  OR  https:// Storage URL
+  jdFileData:    string;
+  assignedAgencies: string[]; // array of agency UIDs
 }
 
 const EMPTY_FORM: FormData = {
   projectName: "", location: "", otherLocation: "",
   role: "", otherRole: "", status: "Active",
   jdFileName: "", jdFileType: "", jdFileData: "",
+  assignedAgencies: [],
 };
 
-/* ─── Shared JD opener — works for base64 AND Firebase Storage URLs ───────── */
+/* ─── Shared JD opener ───────────────────────────────────────────────────── */
 function openJDFile(jdFileData: string, jdFileName?: string) {
   if (!jdFileData) return;
-
-  // Firebase Storage https URL — open directly in new tab
   if (jdFileData.startsWith("https://")) {
     window.open(jdFileData, "_blank", "noopener,noreferrer");
     return;
   }
-
-  // Base64 data-URI
   try {
     const [meta, base64] = jdFileData.split(",");
     if (!base64) throw new Error("Invalid base64");
@@ -60,10 +67,8 @@ function openJDFile(jdFileData: string, jdFileName?: string) {
     const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
     const blob  = new Blob([bytes], { type: mime });
     const url   = URL.createObjectURL(blob);
-
     const win = window.open(url, "_blank", "noopener,noreferrer");
     if (!win) {
-      // Popup blocked — fallback download
       const a = Object.assign(document.createElement("a"), {
         href: url, target: "_blank", download: jdFileName || "JD.pdf",
       });
@@ -78,7 +83,6 @@ function openJDFile(jdFileData: string, jdFileName?: string) {
   }
 }
 
-/* ─── Convert File → base64 data-URI ─────────────────────────────────────── */
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -94,8 +98,8 @@ export default function JobRequisitions() {
   const searchParams = useSearchParams();
 
   const [requisitions,       setRequisitions]       = useState<any[]>([]);
+  const [agencyUsers,        setAgencyUsers]        = useState<AgencyUser[]>([]);
   const [isLoading,          setIsLoading]          = useState(false);
-  // FIX: separate state for file processing (reading base64), not "uploading to server"
   const [isProcessingFile,   setIsProcessingFile]   = useState(false);
   const [isModalOpen,        setIsModalOpen]        = useState(false);
   const [editingId,          setEditingId]          = useState<string | null>(null);
@@ -109,6 +113,18 @@ export default function JobRequisitions() {
   const [filters, setFilters] = useState({
     projectName: "", location: "", designation: "", status: "", createdBy: "",
   });
+
+  // ── Fetch agency users for assignment dropdown ────────────────────────────
+  useEffect(() => {
+    if (!user || (role !== "admin" && role !== "hr")) return;
+    // Query users collection for agency role
+    // Adjust the collection/field names to match your user schema
+    const q = query(collection(db, "users"), where("role", "==", "agency"));
+    const unsub = onSnapshot(q, snap => {
+      setAgencyUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() } as AgencyUser)));
+    });
+    return () => unsub();
+  }, [user, role]);
 
   // ── Firestore real-time listener ─────────────────────────────────────────
   useEffect(() => {
@@ -128,9 +144,7 @@ export default function JobRequisitions() {
 
   useEffect(() => {
     const pn = searchParams.get("projectName");
-    if (pn) {
-      setFilters(prev => ({ ...prev, projectName: decodeURIComponent(pn) }));
-    }
+    if (pn) setFilters(prev => ({ ...prev, projectName: decodeURIComponent(pn) }));
   }, [searchParams]);
 
   // ── Filters ───────────────────────────────────────────────────────────────
@@ -144,8 +158,8 @@ export default function JobRequisitions() {
   };
   const hasActiveFilters = useMemo(() => Object.values(filters).some(Boolean), [filters]);
 
-  const projectOptions   = useMemo(() => [...new Set(requisitions.map(r => r.projectName).filter(Boolean))], [requisitions]);
-  const designationOpts  = useMemo(() => [...new Set([...ROLES_OPTIONS, ...requisitions.flatMap(r => r.roles || [])])], [requisitions]);
+  const projectOptions  = useMemo(() => [...new Set(requisitions.map(r => r.projectName).filter(Boolean))], [requisitions]);
+  const designationOpts = useMemo(() => [...new Set([...ROLES_OPTIONS, ...requisitions.flatMap(r => r.roles || [])])], [requisitions]);
 
   const filteredReqs = useMemo(() => requisitions.filter(req =>
     (!filters.projectName  || req.projectName === filters.projectName) &&
@@ -155,8 +169,8 @@ export default function JobRequisitions() {
     (!filters.createdBy    || req.createdByRole === filters.createdBy)
   ), [requisitions, filters]);
 
-  const total      = filteredReqs.length;
-  const paginated  = filteredReqs.slice(page * rowsPerPage, (page + 1) * rowsPerPage);
+  const total     = filteredReqs.length;
+  const paginated = filteredReqs.slice(page * rowsPerPage, (page + 1) * rowsPerPage);
 
   // ── Form helpers ──────────────────────────────────────────────────────────
   const resetForm = () => { setFormData(EMPTY_FORM); setEditingId(null); };
@@ -169,15 +183,16 @@ export default function JobRequisitions() {
         const loc = req.locations?.[0] || "";
         const rol = req.roles?.[0]     || "";
         setFormData({
-          projectName:   req.projectName || "",
-          location:      LOCATIONS_OPTIONS.includes(loc) ? loc : loc ? "Other" : "",
-          otherLocation: LOCATIONS_OPTIONS.includes(loc) ? "" : loc,
-          role:          ROLES_OPTIONS.includes(rol) ? rol : rol ? "Others" : "",
-          otherRole:     ROLES_OPTIONS.includes(rol) ? "" : rol,
-          status:        req.status     || "Active",
-          jdFileName:    req.jdFileName || "",
-          jdFileType: req.jdFileType || "manual",
-          jdFileData:    req.jdFileData || "",
+          projectName:      req.projectName || "",
+          location:         LOCATIONS_OPTIONS.includes(loc) ? loc : loc ? "Other" : "",
+          otherLocation:    LOCATIONS_OPTIONS.includes(loc) ? "" : loc,
+          role:             ROLES_OPTIONS.includes(rol) ? rol : rol ? "Others" : "",
+          otherRole:        ROLES_OPTIONS.includes(rol) ? "" : rol,
+          status:           req.status     || "Active",
+          jdFileName:       req.jdFileName || "",
+          jdFileType:       req.jdFileType || "manual",
+          jdFileData:       req.jdFileData || "",
+          assignedAgencies: req.assignedAgencies || [],
         });
       }
     } else {
@@ -188,13 +203,20 @@ export default function JobRequisitions() {
 
   const handleModalCancel = () => { setIsModalOpen(false); resetForm(); };
 
-  // ── FIX: File handler — reads to base64 locally, NO external upload ──────
-  // This is instant and never "gets stuck loading".
-  // The base64 is stored directly in Firestore (same as requirements collection).
+  // ── Agency toggle helper ──────────────────────────────────────────────────
+  const toggleAgency = (uid: string) => {
+    setFormData(p => ({
+      ...p,
+      assignedAgencies: p.assignedAgencies.includes(uid)
+        ? p.assignedAgencies.filter(id => id !== uid)
+        : [...p.assignedAgencies, uid],
+    }));
+  };
+
+  // ── File handler ──────────────────────────────────────────────────────────
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const allowed = [
       "application/pdf",
       "application/msword",
@@ -204,13 +226,9 @@ export default function JobRequisitions() {
       toast({ variant: "destructive", title: "Invalid file", description: "Only PDF and Word documents are allowed." });
       return;
     }
-
-    // Show filename immediately
     setFormData(p => ({ ...p, jdFileName: file.name, jdFileType: file.type, jdFileData: "" }));
     setIsProcessingFile(true);
-
     try {
-      // FIX: Read file as base64 — this is synchronous and never hangs
       const base64 = await fileToBase64(file);
       setFormData(p => ({ ...p, jdFileData: base64 }));
       toast({ title: "File ready", description: `${file.name} loaded successfully.` });
@@ -219,7 +237,6 @@ export default function JobRequisitions() {
       setFormData(p => ({ ...p, jdFileName: "", jdFileType: "", jdFileData: "" }));
     } finally {
       setIsProcessingFile(false);
-      // Reset input so same file can be re-selected
       e.target.value = "";
     }
   };
@@ -236,30 +253,25 @@ export default function JobRequisitions() {
 
     setIsLoading(true);
     const data: any = {
-      projectName: formData.projectName.trim(),
-      locations:   [finalLocation],
-      roles:       [finalRole],
-      status:      formData.status,
-      // Store base64 directly — consistent with requirements collection, no Storage needed
-      jdFileName:  formData.jdFileName || null,
-      jdFileType:  formData.jdFileType || null,
-      jdFileData:  formData.jdFileData || null,
+      projectName:      formData.projectName.trim(),
+      locations:        [finalLocation],
+      roles:            [finalRole],
+      status:           formData.status,
+      jdFileName:       formData.jdFileName || null,
+      jdFileType:       formData.jdFileType || null,
+      jdFileData:       formData.jdFileData || null,
+      // ── NEW: store assigned agency UIDs ──────────────────────────────────
+      assignedAgencies: formData.assignedAgencies,
     };
 
     try {
       if (!editingId) {
         const dupProjectSnap = await getDocs(
-          query(
-            collection(db, "job_requisitions"),
-            where("projectName", "==", data.projectName)
-          )
+          query(collection(db, "job_requisitions"), where("projectName", "==", data.projectName))
         );
         if (!dupProjectSnap.empty) {
-          toast({
-            variant: "destructive",
-            title: "Duplicate Project",
-            description: `A project named "${data.projectName}" already exists.`,
-          });
+          toast({ variant: "destructive", title: "Duplicate Project",
+            description: `A project named "${data.projectName}" already exists.` });
           setIsLoading(false);
           return;
         }
@@ -274,7 +286,8 @@ export default function JobRequisitions() {
         }
       } else {
         const ref = await addDoc(collection(db, "job_requisitions"), {
-          ...data, createdBy: user!.uid, createdByRole: role!, createdByName: name!, createdDate: serverTimestamp(),
+          ...data, createdBy: user!.uid, createdByRole: role!, createdByName: name!,
+          createdDate: serverTimestamp(),
         });
         toast({ title: "Success", description: "Client Project created successfully." });
         if (user && name && role) {
@@ -307,6 +320,17 @@ export default function JobRequisitions() {
 
   const handleEditAction   = (id: string) => { setOpenDropdownId(null); setTimeout(() => handleModalOpen(id), 50); };
   const handleDeleteAction = (id: string) => { setOpenDropdownId(null); setTimeout(() => { setDeleteTargetId(id); setIsDeleteDialogOpen(true); }, 50); };
+
+  // ── Agency name lookup helper ─────────────────────────────────────────────
+  const getAgencyNames = (uids: string[]) => {
+    if (!uids?.length) return "—";
+    return uids.map(uid => {
+      const a = agencyUsers.find(ag => ag.uid === uid);
+      return a ? (a.name || a.displayName || a.email || uid) : uid;
+    }).join(", ");
+  };
+
+  const isAdminOrHR = role === "admin" || role === "hr";
 
   return (
     <div className="p-6 sm:p-8 space-y-6 bg-background">
@@ -367,18 +391,21 @@ export default function JobRequisitions() {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              {["Project Name","Location","Designation","Status","JD","Created Date","Created By","Actions"].map(h => (
+              {[
+                "Project Name", "Location", "Designation", "Status",
+                "JD", "Assigned Agencies", "Created Date", "Created By", "Actions"
+              ].map(h => (
                 <th key={h} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {isLoading ? (
-              <tr><td colSpan={8} className="text-center py-8">
+              <tr><td colSpan={9} className="text-center py-8">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
               </td></tr>
             ) : paginated.length === 0 ? (
-              <tr><td colSpan={8} className="text-center py-12 text-sm text-muted-foreground">
+              <tr><td colSpan={9} className="text-center py-12 text-sm text-muted-foreground">
                 {hasActiveFilters ? "No projects match your filters." : "No projects yet. Click Create Client Project to get started."}
               </td></tr>
             ) : paginated.map(req => (
@@ -391,24 +418,19 @@ export default function JobRequisitions() {
                     req.status === "Active" ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"
                   }`}>{req.status}</span>
                 </td>
-
-                {/* ── JD column FIX ── */}
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   {req.jdFileData && req.jdFileData.length > 10 ? (
-                    // FIX: onClick calls openJDFile directly — no navigation, no refresh needed
                     <button
                       type="button"
                       onClick={() => {
                         if (!req.jdFileData) return;
-                      
-                        // If it's plain text → show directly
                         if (!req.jdFileData.startsWith("data:") && !req.jdFileData.startsWith("https")) {
-                          alert(req.jdFileData); // simple fix
+                          alert(req.jdFileData);
                         } else {
                           openJDFile(req.jdFileData, req.jdFileName);
                         }
                       }}
-                                            title={req.jdFileName || "View JD"}
+                      title={req.jdFileName || "View JD"}
                       className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 transition-colors"
                     >
                       <Eye className="h-4 w-4" />
@@ -418,6 +440,25 @@ export default function JobRequisitions() {
                     </button>
                   ) : (
                     <span className="text-gray-400 text-xs">No file</span>
+                  )}
+                </td>
+
+                {/* ── NEW: Assigned Agencies column ── */}
+                <td className="px-6 py-4 text-sm text-gray-600 max-w-[200px]">
+                  {req.assignedAgencies?.length ? (
+                    <div className="flex flex-wrap gap-1">
+                      {(req.assignedAgencies as string[]).map((uid: string) => {
+                        const a = agencyUsers.find(ag => ag.uid === uid);
+                        const label = a ? (a.name || a.displayName || a.email || uid) : uid;
+                        return (
+                          <span key={uid} className="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full font-medium">
+                            {label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <span className="text-gray-400 text-xs">None</span>
                   )}
                 </td>
 
@@ -450,17 +491,17 @@ export default function JobRequisitions() {
         <span className="text-sm text-muted-foreground">Rows per page:</span>
         <select value={rowsPerPage} onChange={e => { setRowsPerPage(Number(e.target.value)); setPage(0); }}
           className="border rounded px-2 py-1 text-sm">
-          {[5,10,20].map(n => <option key={n} value={n}>{n}</option>)}
+          {[5, 10, 20].map(n => <option key={n} value={n}>{n}</option>)}
         </select>
         <span className="text-sm text-muted-foreground">
-          {total === 0 ? 0 : page * rowsPerPage + 1}–{Math.min((page+1)*rowsPerPage, total)} of {total}
+          {total === 0 ? 0 : page * rowsPerPage + 1}–{Math.min((page + 1) * rowsPerPage, total)} of {total}
         </span>
         <div className="flex gap-1">
           {[
-            { l:"<<", a:() => setPage(0),                           d: page === 0 },
-            { l:"<",  a:() => setPage(p => Math.max(p-1,0)),        d: page === 0 },
-            { l:">",  a:() => setPage(p => (p+1)*rowsPerPage < total ? p+1 : p), d: (page+1)*rowsPerPage >= total },
-            { l:">>", a:() => setPage(Math.floor((total-1)/rowsPerPage)),          d: (page+1)*rowsPerPage >= total },
+            { l: "<<", a: () => setPage(0),                                                    d: page === 0 },
+            { l: "<",  a: () => setPage(p => Math.max(p - 1, 0)),                              d: page === 0 },
+            { l: ">",  a: () => setPage(p => (p + 1) * rowsPerPage < total ? p + 1 : p),       d: (page + 1) * rowsPerPage >= total },
+            { l: ">>", a: () => setPage(Math.floor((total - 1) / rowsPerPage)),                 d: (page + 1) * rowsPerPage >= total },
           ].map(b => (
             <button key={b.l} onClick={b.a} disabled={b.d}
               className="w-8 h-8 border rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">{b.l}</button>
@@ -476,7 +517,7 @@ export default function JobRequisitions() {
               {editingId ? "Edit Project" : "New Client Project"}
             </DialogTitle>
             <p className="text-sm text-muted-foreground pt-1">
-              Define the role, location, and upload the JD file.
+              Define the role, location, assign agencies, and upload the JD file.
             </p>
           </DialogHeader>
 
@@ -539,65 +580,83 @@ export default function JobRequisitions() {
               </div>
             </div>
 
+            {/* ── NEW: Assign Agencies (Admin/HR only) ─────────────────────────── */}
+            {isAdminOrHR && (
+              <div className="space-y-2">
+                <Label>Assign Agencies</Label>
+                <div className="border rounded-md p-4 space-y-3 max-h-44 overflow-y-auto">
+                  {agencyUsers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No agency users found.</p>
+                  ) : agencyUsers.map(agency => {
+                    const label = agency.name || agency.displayName || agency.email || agency.uid;
+                    const checked = formData.assignedAgencies.includes(agency.uid);
+                    return (
+                      <div key={agency.uid} className="flex items-center space-x-3">
+                        <Checkbox
+                          id={`agency-${agency.uid}`}
+                          checked={checked}
+                          onCheckedChange={() => toggleAgency(agency.uid)}
+                        />
+                        <Label
+                          htmlFor={`agency-${agency.uid}`}
+                          className="font-normal cursor-pointer text-sm"
+                        >
+                          {label}
+                        </Label>
+                      </div>
+                    );
+                  })}
+                </div>
+                {formData.assignedAgencies.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {formData.assignedAgencies.length} agenc{formData.assignedAgencies.length === 1 ? "y" : "ies"} selected
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* JD */}
             <div className="space-y-3">
-  <Label>Job Description (JD)</Label>
+              <Label>Job Description (JD)</Label>
+              <RadioGroup
+                value={formData.jdFileType || "text"}
+                onValueChange={(v) => setFormData(p => ({ ...p, jdFileType: v, jdFileData: "", jdFileName: "" }))}
+                className="flex gap-6"
+              >
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="text" id="jd-text" />
+                  <Label htmlFor="jd-text">Upload Text File</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="manual" id="jd-manual" />
+                  <Label htmlFor="jd-manual">Enter Manually</Label>
+                </div>
+              </RadioGroup>
 
-  {/* Option selection */}
-  <RadioGroup
-    value={formData.jdFileType || "text"}
-    onValueChange={(v) => setFormData(p => ({
-      ...p,
-      jdFileType: v,
-      jdFileData: "",
-      jdFileName: ""
-    }))}
-    className="flex gap-6"
-  >
-    <div className="flex items-center gap-2">
-      <RadioGroupItem value="text" id="jd-text" />
-      <Label htmlFor="jd-text">Upload Text File</Label>
-    </div>
+              {formData.jdFileType === "text" && (
+                <Input
+                  type="file"
+                  accept=".txt"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const text = await file.text();
+                    setFormData(p => ({ ...p, jdFileName: file.name, jdFileData: text, jdFileType: "text" }));
+                  }}
+                />
+              )}
 
-    <div className="flex items-center gap-2">
-      <RadioGroupItem value="manual" id="jd-manual" />
-      <Label htmlFor="jd-manual">Enter Manually</Label>
-    </div>
-  </RadioGroup>
+              {formData.jdFileType === "manual" && (
+                <textarea
+                  className="w-full border rounded-md p-3 text-sm"
+                  rows={6}
+                  placeholder="Enter Job Description here..."
+                  value={formData.jdFileData}
+                  onChange={(e) => setFormData(p => ({ ...p, jdFileData: e.target.value }))}
+                />
+              )}
+            </div>
 
-  {/* TEXT FILE UPLOAD */}
-  {formData.jdFileType === "text" && (
-    <Input
-      type="file"
-      accept=".txt"
-      onChange={async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        const text = await file.text();
-
-setFormData(p => ({
-  ...p,
-  jdFileName: file.name,
-  jdFileData: text,
-  jdFileType: "text" // ✅ IMPORTANT
-}));
-      }}
-    />
-  )}
-
-  {/* MANUAL TEXT INPUT */}
-  {formData.jdFileType === "manual" && (
-    <textarea
-      className="w-full border rounded-md p-3 text-sm"
-      rows={6}
-      placeholder="Enter Job Description here..."
-      value={formData.jdFileData}
-      onChange={(e) =>
-        setFormData(p => ({ ...p, jdFileData: e.target.value }))
-      }
-    />
-  )}
-</div>
             {/* Status */}
             <div className="space-y-2">
               <Label>Status</Label>
