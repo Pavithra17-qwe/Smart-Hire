@@ -24,6 +24,7 @@ const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@
 const phoneRegex = /^[6-9]\d{9}$/;
 
 // ─── AI SCORING LOGIC ────────────────────────────────────────────────────────
+// ─── AI SCORING LOGIC ────────────────────────────────────────────────────────
 async function computeMatchScore(
   resumeFile: { data: string; type: string } | null,
   project: any,
@@ -34,89 +35,41 @@ async function computeMatchScore(
   if (!resumeFile?.data) {
     return { matchScore: 0, matchSummary: "No resume uploaded — AI scoring could not be performed." };
   }
+  if (!project) {
+    return { matchScore: 0, matchSummary: "No project selected — AI scoring requires a Job Requisition." };
+  }
 
-  // PATH 1: JD-based AI scoring
-  if (project?.jdFileData && project?.jdFileType) {
-    try {
-      toast({ title: "🤖 AI Scoring", description: "Comparing resume against Job Description…" });
-      const result = await candidateMatchScoring({
-        jdFileDataB64:     project.jdFileData,
-        jdFileType:        project.jdFileType,
-        resumeFileDataB64: resumeFile.data,
-        resumeFileType:    resumeFile.type,
-      });
-      const score   = typeof result.matchScore === "number" ? result.matchScore : 0;
-      const summary = result.summary?.trim() || generateScoreSummary(score, formData, project, "jd");
-      return { matchScore: score, matchSummary: summary };
-    } catch (err) {
-      console.error("❌ JD-based AI scoring failed:", err);
+  try {
+    const hasJdText     = !!project.jdText?.trim();
+    const hasJdFileData = !!project.jdFileData;
+    const hasJdFile     = !!project.jdFileDataB64;
+
+    if (!hasJdText && !hasJdFileData && !hasJdFile) {
+      return {
+        matchScore: 0,
+        matchSummary: "This project has no Job Description. Please add a JD to the project before scoring.",
+      };
     }
+
+    toast({ title: "🤖 AI Scoring", description: "Analyzing resume against job requirements…" });
+
+    const result = await candidateMatchScoring({
+      jdText:            hasJdText     ? project.jdText        : (hasJdFileData ? project.jdFileData : undefined),
+      jdFileDataB64:     hasJdFile     ? project.jdFileDataB64 : undefined,
+      jdFileType:        hasJdFile     ? project.jdFileType    : undefined,
+      resumeFileDataB64: resumeFile.data,
+      resumeFileType:    resumeFile.type,
+    });
+
+    const score   = typeof result.matchScore === "number" ? result.matchScore : 0;
+    const summary = result.summary?.trim() || `Match score: ${score}%`;
+
+    return { matchScore: score, matchSummary: summary };
+
+  } catch (err) {
+    console.error("❌ AI scoring failed:", err);
+    return { matchScore: 0, matchSummary: "AI scoring failed. Please check the JD or try again." };
   }
-
-  // PATH 2: field-based scoring
-  toast({ title: "🤖 AI Scoring", description: "No JD available — scoring based on candidate profile…" });
-
-  let score = 40;
-  const reasons: string[] = [];
-  const gaps: string[]    = [];
-
-  const exp         = parseFloat(formData.experience);
-  const requiredExp = parseFloat(project?.experience || project?.minExperience || "0");
-  if (!isNaN(exp)) {
-    if (requiredExp > 0) {
-      if (exp >= requiredExp) { score += 15; reasons.push(`Experience (${exp} yrs) meets requirement (${requiredExp}+ yrs)`); }
-      else                    { gaps.push(`Experience (${exp} yrs) is below required ${requiredExp} yrs`); }
-    } else { score += 10; reasons.push(`${exp} years of experience noted`); }
-  } else { gaps.push("Experience not specified"); }
-
-  const candidateRole = (formData.candidateDesignation || "").toLowerCase();
-  const projectRole   = (formData.role || project?.jobRole || "").toLowerCase();
-  if (candidateRole && projectRole && candidateRole.split(" ").some((w: string) => projectRole.includes(w))) {
-    score += 15; reasons.push(`Designation "${formData.candidateDesignation}" aligns with role "${formData.role || project?.jobRole}"`);
-  } else if (projectRole) { gaps.push(`Designation may not align with required role "${formData.role || project?.jobRole}"`); }
-
-  const candidateLoc = (formData.candidateLocation || "").toLowerCase();
-  const projectLoc   = (formData.location || project?.location || "").toLowerCase();
-  if (candidateLoc && projectLoc && (candidateLoc.includes(projectLoc) || projectLoc.includes(candidateLoc))) {
-    score += 10; reasons.push(`Location match: ${formData.candidateLocation}`);
-  } else if (projectLoc && candidateLoc) {
-    gaps.push(`Location mismatch: candidate in "${formData.candidateLocation}", role requires "${formData.location || project?.location}"`);
-  }
-
-  if (formData.noticePeriod) {
-    if (formData.noticePeriod === "Immediate" || formData.noticePeriod === "0-15 days") { score += 10; reasons.push(`Notice period is ${formData.noticePeriod} — quick availability`); }
-    else { score += 5; reasons.push(`Notice period: ${formData.noticePeriod}`); }
-  } else { gaps.push("Notice period not specified"); }
-
-  if (formData.isComfortableOnsite === "Yes") { score += 5; reasons.push("Comfortable working onsite"); }
-
-  return {
-    matchScore:   Math.min(Math.max(score, 10), 95),
-    matchSummary: generateScoreSummary(Math.min(Math.max(score, 10), 95), formData, project, "field", reasons, gaps),
-  };
-}
-
-function generateScoreSummary(
-  score: number, formData: any, project: any,
-  mode: "jd" | "field", reasons: string[] = [], gaps: string[] = []
-): string {
-  let header = "";
-  if      (score === 0)  header = "Score: 0% — The resume could not be matched.";
-  else if (score <= 30)  header = `Score: ${score}% — Very low match.`;
-  else if (score <= 50)  header = `Score: ${score}% — Below average match.`;
-  else if (score <= 65)  header = `Score: ${score}% — Moderate match. Further evaluation recommended.`;
-  else if (score <= 80)  header = `Score: ${score}% — Good match. Recommended for interview.`;
-  else                   header = `Score: ${score}% — Strong match. Highly recommended.`;
-
-  const parts = [
-    header,
-    mode === "jd"
-      ? "Score generated by comparing resume against the uploaded Job Description using AI analysis."
-      : "Score generated based on candidate profile fields (no JD available for this project).",
-  ];
-  if (reasons.length) parts.push("✅ Strengths: " + reasons.join(" • "));
-  if (gaps.length)    parts.push("⚠️ Gaps: " + gaps.join(" • "));
-  return parts.join("\n\n");
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
@@ -222,7 +175,8 @@ export default function CandidateEvaluation() {
           setFormData(prev => ({ ...prev, ...extracted, experience: String(extracted.experience || "") }));
           toast({ title: "Resume Parsed", description: "Details auto-filled from resume." });
         }
-      } catch {
+      } catch (err) {
+        console.error("❌ Resume extraction failed:", err); // ADD THIS
         toast({ variant: "destructive", title: "Extraction Failed", description: "Fill details manually." });
       } finally {
         setIsLoadingExtracting(false);
@@ -248,17 +202,11 @@ export default function CandidateEvaluation() {
     if (!formData.isComfortableOnsite)         e.isComfortableOnsite  = "This field is required.";
     if (!formData.resumeFile)                  e.resumeFile           = "Resume is mandatory.";
 
-    // Project required for HR/Admin; optional for Agency
-    if ((role === "admin" || role === "hr") && !formData.projectId) {
-      e.projectId = "Project is mandatory.";
-    }
+    // Project is optional for all roles
+// (scoring is skipped automatically when no project is selected)
 
-    // Role + Location mandatory when project is not auto-filling them
-    const projectAutoFilled = !!formData.projectId && formData.projectId !== "none";
-    if (!projectAutoFilled) {
-      if (!formData.role)     e.role     = "Role / Designation is required.";
-      if (!formData.location) e.location = "Location is required.";
-    }
+   // Project, role, and location are all optional
+// Role + location are auto-filled when a project is selected
 
     return e;
   };
@@ -266,6 +214,11 @@ export default function CandidateEvaluation() {
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async (ev: React.FormEvent) => {
     ev.preventDefault();
+    // ← ADD THESE 4 LINES:
+  if (isLoadingExtracting) {
+    toast({ title: "Please wait", description: "Resume is still being extracted…" });
+    return;
+  }
     const formErrors = validateForm();
     if (Object.keys(formErrors).length > 0) { setErrors(formErrors); return; }
 
@@ -279,17 +232,27 @@ export default function CandidateEvaluation() {
         return;
       }
 
-      const selectedProject = projects.find(p => p.id === formData.projectId) || null;
-
-      const { matchScore, matchSummary } = await computeMatchScore(
-        formData.resumeFile,
-        selectedProject,
-        formData,
-        role,
-        toast
-      );
-
-      toast({ title: "✅ AI Scoring Complete", description: `Match score: ${matchScore}%` });
+      const selectedProject =
+      formData.projectId && formData.projectId !== "none"
+        ? projects.find(p => p.id === formData.projectId) || null
+        : null;
+      let matchScore = 0;
+      let matchSummary = "No project selected — AI scoring skipped.";
+      
+      if (selectedProject) {
+        const result = await computeMatchScore(
+          formData.resumeFile,
+          selectedProject,
+          formData,
+          role,
+          toast
+        );
+        matchScore   = result.matchScore;
+        matchSummary = result.matchSummary;
+        toast({ title: "✅ AI Scoring Complete", description: `Match score: ${matchScore}%` });
+      } else {
+        toast({ title: "ℹ️ Scoring Skipped", description: "Project not selected — AI scoring not performed." });
+      }
 
       const { projectId, ...rest } = formData;
 
@@ -432,27 +395,20 @@ export default function CandidateEvaluation() {
                   </div>
                 )}
 
-                <Label htmlFor="project" className="font-bold">
-                  Job Requisition / Project
-                  {isAgency && (
-                    <span className="text-muted-foreground font-normal text-xs ml-1">(optional)</span>
-                  )}
-                </Label>
+<Label htmlFor="project" className="font-bold">
+  Client Project
+  <span className="text-muted-foreground font-normal text-xs ml-1">(optional)</span>
+</Label>
 
                 <Select
                   value={formData.projectId}
                   onValueChange={(v: string) => handleInputChange("projectId", v)}
                 >
                   <SelectTrigger id="project" className={cn({ "border-red-500": errors.projectId })}>
-                    <SelectValue placeholder={
-                      isAgency ? "Select your assigned project (optional)…" : "Select a project…"
-                    } />
+                  <SelectValue placeholder="Select a project (optional)…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {/* Agency gets an explicit "no project" option */}
-                    {isAgency && (
-                      <SelectItem value="none">No project / Not sure</SelectItem>
-                    )}
+                  <SelectItem value="none">No project / Not sure</SelectItem>
                     {projects.map((p: any) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.projectName}

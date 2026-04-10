@@ -9,17 +9,37 @@ import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 import mammoth from 'mammoth';
 
+// Paste this ABOVE candidateMatchScoringFlow
+async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 5000): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const isQuotaError = err?.message?.includes('RESOURCE_EXHAUSTED') ||
+                           err?.message?.includes('Too Many Requests');
+      if (isQuotaError && i < retries - 1) {
+        console.warn(`⚠️ Quota hit, retrying in ${delayMs * (i + 1)}ms...`);
+        await new Promise(res => setTimeout(res, delayMs * (i + 1)));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error('Max retries exceeded');
+}
+
 const CandidateMatchScoringInputSchema = z.object({
-  jdFileDataB64: z.string().describe('Base64 JD content'),
-  jdFileType: z.string().describe('MIME type of JD'),
-  resumeFileDataB64: z.string().describe('Base64 Resume content'),
-  resumeFileType: z.string().describe('MIME type of Resume'),
+  jdFileDataB64: z.string().optional(),
+  jdFileType: z.string().optional(),
+  jdText: z.string().optional(),   // ✅ ADD THIS
+  resumeFileDataB64: z.string(),
+  resumeFileType: z.string(),
 });
 export type CandidateMatchScoringInput = z.infer<typeof CandidateMatchScoringInputSchema>;
 
 const CandidateMatchScoringOutputSchema = z.object({
   matchScore: z.number().min(0).max(100).describe('Match score between 0 and 100'),
-  summary: z.string().describe('A short explanation of the score'),
+  summary: z.string().describe('Detailed explanation of the score with strengths, gaps and recommendation'),
 });
 export type CandidateMatchScoringOutput = z.infer<typeof CandidateMatchScoringOutputSchema>;
 
@@ -35,7 +55,6 @@ async function extractText(b64: string, mime: string): Promise<string> {
   // Gemini 1.5 Flash can handle PDF URIs directly, so we'll return an empty string for PDF and handle it in prompt.
   return ''; 
 }
-
 const scoringPrompt = ai.definePrompt({
   name: 'candidateMatchScoringPrompt',
   input: {
@@ -46,8 +65,8 @@ const scoringPrompt = ai.definePrompt({
       resumeDataUri: z.string().optional(),
     })
   },
-  output: {schema: CandidateMatchScoringOutputSchema},
-  prompt: `Compare the candidate resume with the job description and calculate a match score.
+  output: { schema: CandidateMatchScoringOutputSchema },
+  prompt: `You are an expert recruiter and talent evaluator. Compare the candidate resume with the job description and calculate a precise match score.
 
 Job Description:
 {{#if jdText}}
@@ -69,21 +88,24 @@ Candidate Resume:
 Resume File: {{media url=resumeDataUri}}
 {{/if}}
 
-Evaluate the following criteria:
-- Skill match
-- Experience match
-- Role relevance
-- Keyword similarity
+Evaluate and score based on these criteria (with weightage):
+1. **Skill Match (40%)** - How well do the candidate's technical and soft skills align?
+2. **Experience Match (25%)** - Does the years and type of experience match requirements?
+3. **Role Relevance (20%)** - How relevant are past roles/designations to this position?
+4. **Keyword & Domain Alignment (15%)** - Industry terms, tools, certifications match?
 
 Return a JSON object with:
-- "matchScore": a number from 0 to 100.
-- "summary": a short explanation (max 2 sentences) of why this score was given.`,
+- "matchScore": a number from 0 to 100 (weighted average of above criteria).
+- "summary": a detailed multi-paragraph explanation covering:
+  * Overall score rationale
+  * Strengths: what the candidate matches well
+  * Gaps: what is missing or misaligned
+  * Recommendation: whether to shortlist, consider, or skip`,
 });
 
 export async function candidateMatchScoring(input: CandidateMatchScoringInput): Promise<CandidateMatchScoringOutput> {
   return candidateMatchScoringFlow(input);
 }
-
 const candidateMatchScoringFlow = ai.defineFlow(
   {
     name: 'candidateMatchScoringFlow',
@@ -96,15 +118,28 @@ const candidateMatchScoringFlow = ai.defineFlow(
     let resumeText = '';
     let resumeDataUri = '';
 
-    // Extract JD
-    if (input.jdFileType === 'application/pdf') {
+    // ── JD Handling ──────────────────────────────────────────────────────────
+    if (input.jdText) {
+      // Check if it's actually base64 (Firestore sometimes stores file data here)
+      const isBase64 = /^[A-Za-z0-9+/=]{100,}$/.test(input.jdText.replace(/\s/g, ''));
+      
+      if (isBase64) {
+        // Treat as PDF base64 — pass as media URI
+        jdDataUri = `data:application/pdf;base64,${input.jdText}`;
+      } else {
+        // It's real plain text
+        jdText = input.jdText;
+      }
+    } else if (input.jdFileType === 'application/pdf' && input.jdFileDataB64) {
       jdDataUri = `data:${input.jdFileType};base64,${input.jdFileDataB64}`;
-    } else {
+    } else if (input.jdFileDataB64 && input.jdFileType) {
       jdText = await extractText(input.jdFileDataB64, input.jdFileType);
-      if (!jdText) jdDataUri = `data:${input.jdFileType};base64,${input.jdFileDataB64}`;
+      if (!jdText) {
+        jdDataUri = `data:${input.jdFileType};base64,${input.jdFileDataB64}`;
+      }
     }
 
-    // Extract Resume
+    // ── Resume Handling ──────────────────────────────────────────────────────
     if (input.resumeFileType === 'application/pdf') {
       resumeDataUri = `data:${input.resumeFileType};base64,${input.resumeFileDataB64}`;
     } else {
@@ -112,7 +147,23 @@ const candidateMatchScoringFlow = ai.defineFlow(
       if (!resumeText) resumeDataUri = `data:${input.resumeFileType};base64,${input.resumeFileDataB64}`;
     }
 
-    const {output} = await scoringPrompt({ jdText, jdDataUri, resumeText, resumeDataUri });
-    return output!;
+    // ── Guard: if neither JD source is available, return 0 ──────────────────
+    if (!jdText && !jdDataUri) {
+      return {
+        matchScore: 0,
+        summary: 'No Job Description content found in the selected project. Please ensure the project has a JD uploaded or entered as text.',
+      };
+    }
+
+    const { output } = await scoringPrompt({ jdText, jdDataUri, resumeText, resumeDataUri });
+    
+    if (!output) {
+      return {
+        matchScore: 0,
+        summary: 'AI scoring returned no output. Please try again.',
+      };
+    }
+
+    return output;
   }
 );

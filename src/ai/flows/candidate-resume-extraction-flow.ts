@@ -11,6 +11,24 @@ import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 import mammoth from 'mammoth';
 
+async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 5000): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const isQuotaError = err?.message?.includes('RESOURCE_EXHAUSTED') ||
+                           err?.message?.includes('Too Many Requests');
+      if (isQuotaError && i < retries - 1) {
+        console.warn(`⚠️ Quota hit, retrying in ${delayMs * (i + 1)}ms...`);
+        await new Promise(res => setTimeout(res, delayMs * (i + 1)));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error('Max retries exceeded');
+}
+
 const CandidateResumeExtractionInputSchema = z.object({
   fileName: z.string().describe('The name of the resume file.'),
   fileType: z.string().describe('The MIME type of the resume file.'),
@@ -105,8 +123,9 @@ const candidateResumeExtractionFlow = ai.defineFlow(
       throw new Error('Resume could not be parsed. Please upload a text-based resume.');
     }
 
-    const {output} = await resumePrompt({ resumeDataUri, resumeText });
-    
+    const {output} = await withRetry(() =>
+      resumePrompt({ resumeDataUri, resumeText })
+    );    
     if (!output || Object.keys(output).filter(k => k !== 'skills').every(k => !output[k as keyof typeof output])) {
         // If everything except skills is empty, it might be a parsing failure
         console.warn('AI extraction returned mostly empty results.');
