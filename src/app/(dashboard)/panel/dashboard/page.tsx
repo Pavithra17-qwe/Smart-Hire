@@ -9,6 +9,11 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { type CarouselApi } from "@/components/ui/carousel";
+import {
+  Carousel, CarouselContent, CarouselItem,
+} from "@/components/ui/carousel";
+import { ChevronLeft} from "lucide-react";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -179,12 +184,26 @@ export default function PanelDashboard() {
   const [loading,    setLoading]    = useState(true);
   const [isMounted,  setIsMounted]  = useState(false);
 
+  const [panelCarouselApi, setPanelCarouselApi] = useState<CarouselApi>();
+const [panelCanScrollPrev, setPanelCanScrollPrev] = useState(false);
+const [panelCanScrollNext, setPanelCanScrollNext] = useState(true);
+
+useEffect(() => {
+  if (!panelCarouselApi) return;
+  const update = () => {
+    setPanelCanScrollPrev(panelCarouselApi.canScrollPrev());
+    setPanelCanScrollNext(panelCarouselApi.canScrollNext());
+  };
+  update();
+  panelCarouselApi.on("select", update);
+  return () => { panelCarouselApi.off("select", update); };
+}, [panelCarouselApi]);
+
   // ── FILTERS (mirrors admin dashboard pattern) ─────────────────────────────
   const [filterStage,  setFilterStage]  = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
 
   useEffect(() => { setIsMounted(true); }, []);
-
   useEffect(() => {
     if (!panelUid) return;
     const unsub = onSnapshot(collection(db, "candidates"), snap => {
@@ -197,10 +216,9 @@ export default function PanelDashboard() {
           createdAt: r.createdAt?.toDate?.() || new Date(),
         } as Candidate;
       });
-      // Only keep candidates assigned to this panel member
-      setCandidates(all.filter(c =>
-        c.l1InterviewerUid === panelUid || c.l2InterviewerUid === panelUid
-      ));
+
+      // ← NO filter by panelUid — panel sees all candidates
+      setCandidates(all);
       setLoading(false);
     });
     return () => unsub();
@@ -242,34 +260,41 @@ export default function PanelDashboard() {
 
   // ── ID sets for each stat card (always from full `candidates` list) ──────────
   // Guarantees: count on card == rows shown in history when you click it.
+// stat cards → still filtered by panelUid
+const myAssigned = useMemo(() =>
+  candidates.filter(c =>
+    c.l1InterviewerUid === panelUid || c.l2InterviewerUid === panelUid
+  ),
+[candidates, panelUid]);
 
-  const selectedIds = useMemo(() =>
-    candidates
-      .filter(c =>
-        (c.l1InterviewerUid === panelUid && c.l1Status === "Selected") ||
-        (c.l2InterviewerUid === panelUid && c.l2Status === "Selected")
-      )
-      .map(c => c.id),
-  [candidates, panelUid]);
+const selectedIds = useMemo(() =>
+  myAssigned
+    .filter(c =>
+      (c.l1InterviewerUid === panelUid && c.l1Status === "Selected") ||
+      (c.l2InterviewerUid === panelUid && c.l2Status === "Selected")
+    )
+    .map(c => c.id),
+[myAssigned, panelUid]);
 
-  const pendingFeedbackIds = useMemo(() =>
-    candidates
-      .filter(c => {
-        const l1Past = c.l1Status === "Scheduled" && c.l1ScheduledDate && c.l1ScheduledDate < todayStr && !c.l1Result;
-        const l2Past = c.l2Status === "Scheduled" && c.l2ScheduledDate && c.l2ScheduledDate < todayStr && !c.l2Result;
-        return l1Past || l2Past;
-      })
-      .map(c => c.id),
-  [candidates, todayStr]);
+const pendingFeedbackIds = useMemo(() =>
+  myAssigned
+    .filter(c => {
+      const l1Past = c.l1Status === "Scheduled" && c.l1ScheduledDate && c.l1ScheduledDate < todayStr && !c.l1Result;
+      const l2Past = c.l2Status === "Scheduled" && c.l2ScheduledDate && c.l2ScheduledDate < todayStr && !c.l2Result;
+      return l1Past || l2Past;
+    })
+    .map(c => c.id),
+[myAssigned, todayStr]);
 
-  const todayIds = useMemo(() =>
-    candidates
-      .filter(c =>
-        (c.l1Status === "Scheduled" && c.l1ScheduledDate === todayStr) ||
-        (c.l2Status === "Scheduled" && c.l2ScheduledDate === todayStr)
-      )
-      .map(c => c.id),
-  [candidates, todayStr]);
+const todayIds = useMemo(() =>
+  myAssigned
+    .filter(c =>
+      (c.l1Status === "Scheduled" && c.l1ScheduledDate === todayStr) ||
+      (c.l2Status === "Scheduled" && c.l2ScheduledDate === todayStr)
+    )
+    .map(c => c.id),
+[myAssigned, todayStr]);
+  
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   // Card counts use ID sets (match history). Round breakdown uses `filtered`.
@@ -282,7 +307,7 @@ export default function PanelDashboard() {
     const l2Rejected  = filtered.filter(c => c.l2Status === "Rejected").length;
 
     return {
-      totalAssigned:   candidates.length,
+      totalAssigned:   myAssigned.length,  // ← only assigned to me
       todayCount:      todayIds.length,
       pendingFeedback: pendingFeedbackIds.length,
       totalSelected:   selectedIds.length,
@@ -292,16 +317,19 @@ export default function PanelDashboard() {
       l1Selected,  l2Selected,
       l1Rejected,  l2Rejected,
     };
-  }, [filtered, candidates, todayIds, pendingFeedbackIds, selectedIds]);
+  }, [filtered, myAssigned, todayIds, pendingFeedbackIds, selectedIds]);
 
   // ── Interview lists (from filtered set) ───────────────────────────────────
-  const { todayInterviews, upcomingInterviews, pendingFeedbackList } = useMemo(() => {
-    const maxDate = new Date(today); maxDate.setDate(today.getDate() + 6);
-    const maxStr  = maxDate.toISOString().split("T")[0];
+  const { upcomingInterviews, pendingFeedbackList } = useMemo(() => {
+    const maxDate = new Date(today);
+    maxDate.setDate(today.getDate() + 6);
+    maxDate.setHours(23, 59, 59, 999);
+    const maxStr = maxDate.toISOString().split("T")[0];
 
-    const todayList: any[] = [], upcomingList: any[] = [], pendingList: any[] = [];
+    const upcomingList: any[] = [], pendingList: any[] = [];
 
-    filtered.forEach(c => {
+    // Use `candidates` directly — NOT `filtered` — so filters don't affect upcoming
+    candidates.forEach(c => {
       [
         { label: "L1 Interview", df: "l1ScheduledDate", sf: "l1TimeSlot", st: "l1Status", rf: "l1Result" },
         { label: "L2 Interview", df: "l2ScheduledDate", sf: "l2TimeSlot", st: "l2Status", rf: "l2Result" },
@@ -309,35 +337,53 @@ export default function PanelDashboard() {
         const ds     = (c as any)[df];
         const status = (c as any)[st];
         const result = (c as any)[rf];
-        if (status !== "Scheduled" || !ds) return;
+
+        // Only show Scheduled ones
+        if (!ds || status !== "Scheduled") return;
 
         const item = {
-          id: `${c.id}-${label}`, candidateId: c.id,
+          id: `${c.id}-${label}`,
+          candidateId: c.id,
           candidate: c.candidateName || "Unknown",
-          round: label, date: ds, timeSlot: (c as any)[sf] || "",
-          isToday: ds === todayStr, isPast: ds < todayStr, hasResult: !!result,
+          round: label,
+          date: ds,
+          timeSlot: (c as any)[sf] || "",
+          isToday: ds === todayStr,
+          isPast: ds < todayStr,
+          hasResult: !!result,
         };
 
-        if      (ds === todayStr)               todayList.push(item);
-        else if (ds < todayStr && !result)      pendingList.push(item);
-        else if (ds > todayStr && ds <= maxStr) upcomingList.push(item);
+        if (ds < todayStr && !result) {
+          pendingList.push(item);
+        } else if (ds >= todayStr && ds <= maxStr) {
+          upcomingList.push(item);
+        }
       });
     });
 
+    console.log("DEBUG upcoming:", upcomingList); // ← check browser console
+    console.log("DEBUG candidates:", candidates.map(c => ({
+      name: c.candidateName,
+      l1Status: c.l1Status,
+      l1Date: c.l1ScheduledDate,
+      l2Status: c.l2Status,
+      l2Date: c.l2ScheduledDate,
+    })));
+
     return {
-      todayInterviews:     todayList,
       upcomingInterviews:  upcomingList.sort((a, b) => a.date.localeCompare(b.date)),
       pendingFeedbackList: pendingList.sort((a, b) => b.date.localeCompare(a.date)),
     };
-  }, [filtered, todayStr]);
+  }, [candidates, todayStr]);
+  
 
   // ── Recent decisions (from filtered set) ──────────────────────────────────
   const recentDecisions = useMemo(() =>
-    filtered.filter(c =>
+    myAssigned.filter(c =>
       (c.l1InterviewerUid === panelUid && ["Selected", "Rejected"].includes(c.l1Status ?? "")) ||
       (c.l2InterviewerUid === panelUid && ["Selected", "Rejected"].includes(c.l2Status ?? ""))
     ).slice(0, 5),
-  [filtered, panelUid]);
+  [myAssigned, panelUid]);
 
   // ── Trend chart (always from full assigned list, not filtered) ────────────
   const trendData = useMemo<MonthlyData[]>(() => {
@@ -370,9 +416,12 @@ export default function PanelDashboard() {
   );
 
   return (
-    <div className="space-y-6 pb-10 w-full overflow-x-hidden">
 
-      {/* Live indicator */}
+<div className="w-full overflow-x-auto min-h-screen">
+<div className="min-w-[800px] space-y-6 pb-10">
+  
+
+    {/* Live indicator */}
       <div className="flex items-center justify-end">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-3 py-1.5 rounded-full">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse block" />
@@ -455,23 +504,6 @@ export default function PanelDashboard() {
         )}
       </div>
 
-      {/* Today's alert banner */}
-      {todayInterviews.length > 0 && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/20">
-          <div className="h-8 w-8 rounded-lg bg-emerald-100 dark:bg-emerald-900 flex items-center justify-center shrink-0">
-            <Calendar className="h-4 w-4 text-emerald-600" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
-              You have {todayInterviews.length} interview{todayInterviews.length > 1 ? "s" : ""} today
-            </p>
-            <p className="text-[11px] text-emerald-600 dark:text-emerald-500 truncate">
-              {todayInterviews.map(i => `${i.candidate} (${i.round})`).join(" · ")}
-            </p>
-          </div>
-          <Badge className="bg-emerald-500 shrink-0">{todayInterviews.length} today</Badge>
-        </div>
-      )}
 
       {/* Pending feedback alert */}
       {stats.pendingFeedback > 0 && (
@@ -618,19 +650,6 @@ export default function PanelDashboard() {
                 ))}
               </div>
             </div>
-
-            {/* Pass rate */}
-            {(stats.totalSelected + stats.totalRejected) > 0 && (
-              <div className="px-3 py-3 rounded-xl bg-muted text-center">
-                <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">My Pass Rate</p>
-                <p className="text-2xl font-black text-primary mt-1">
-                  {Math.round((stats.totalSelected / (stats.totalSelected + stats.totalRejected)) * 100)}%
-                </p>
-                <p className="text-[10px] text-muted-foreground">
-                  {stats.totalSelected} selected / {stats.totalSelected + stats.totalRejected} evaluated
-                </p>
-              </div>
-            )}
           </CardContent>
         </Card>
 
@@ -660,53 +679,6 @@ export default function PanelDashboard() {
         </Card>
       </div>
 
-      {/* ── ROW 3: Today + Upcoming ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        <div>
-          <SectionLabel>Today's Interviews</SectionLabel>
-          <Card className="shadow-sm border">
-            <CardContent className="p-5">
-              {todayInterviews.length > 0 ? (
-                <div className="grid grid-cols-1 gap-3">
-                  {todayInterviews.map(item => (
-                    <InterviewCard key={item.id} {...item} />
-                  ))}
-                </div>
-              ) : (
-                <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed rounded-xl gap-1.5">
-                  <CalendarDays className="h-5 w-5 text-muted-foreground/30" />
-                  <p className="text-xs font-semibold text-muted-foreground/50 uppercase tracking-wider">
-                    No interviews today
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div>
-          <SectionLabel>Upcoming (Next 7 Days)</SectionLabel>
-          <Card className="shadow-sm border">
-            <CardContent className="p-5">
-              {upcomingInterviews.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {upcomingInterviews.slice(0, 4).map(item => (
-                    <InterviewCard key={item.id} {...item} />
-                  ))}
-                </div>
-              ) : (
-                <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed rounded-xl gap-1.5">
-                  <CalendarDays className="h-5 w-5 text-muted-foreground/30" />
-                  <p className="text-xs font-semibold text-muted-foreground/50 uppercase tracking-wider">
-                    No upcoming interviews
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
 
       {/* ── ROW 4: Pending Feedback + Recent Decisions ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -802,7 +774,101 @@ export default function PanelDashboard() {
           </Card>
         </div>
       </div>
-
+    {/* ── ROW 4: Upcoming Interviews — Next 6 Days ── */}
+    <div>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest">
+            Upcoming Interviews (Next 6 Days)
+          </p>
+          {upcomingInterviews.length > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => panelCarouselApi?.scrollPrev()}
+                disabled={!panelCanScrollPrev}
+                className="h-7 w-7 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => panelCarouselApi?.scrollNext()}
+                disabled={!panelCanScrollNext}
+                className="h-7 w-7 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
+        <Card className="shadow-sm border">
+          <CardContent className="pt-5 px-4 pb-5">
+            {upcomingInterviews.length > 0 ? (
+              <Carousel
+                setApi={setPanelCarouselApi}
+                opts={{ align: "start", loop: false, slidesToScroll: 1 }}
+                className="w-full"
+              >
+                <CarouselContent className="-ml-3">
+                  {upcomingInterviews.map(item => (
+                    <CarouselItem key={item.id} className="pl-3 basis-1/4">
+                      <Link href={`/candidates/${item.candidateId}`} className="block h-full">
+                        <div className="h-full p-4 rounded-xl border bg-card hover:bg-muted/30 hover:border-primary/40 transition-all group cursor-pointer">
+                          <div className="flex items-start justify-between mb-2.5">
+                            <span className={cn(
+                              "text-xs font-bold px-2 py-0.5 rounded-md",
+                              item.round === "L1 Interview"
+                                ? "text-indigo-700 bg-indigo-100 dark:text-indigo-300 dark:bg-indigo-950/50"
+                                : "text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-950/50"
+                            )}>
+                              {item.round}
+                            </span>
+                            {item.isToday
+                              ? <Badge className="bg-emerald-500 text-[9px] h-4 px-1.5">TODAY</Badge>
+                              : <Badge variant="outline" className="text-[9px] h-4 px-1.5">Upcoming</Badge>}
+                          </div>
+                          <div className="space-y-1 mb-3">
+                            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <CalendarDays className="h-3 w-3 text-primary shrink-0" />
+                              <span>
+                                {item.isToday
+                                  ? "Today"
+                                  : new Date(item.date + "T00:00:00").toLocaleDateString("en-IN", {
+                                      day: "2-digit", month: "short", year: "numeric",
+                                    })}
+                              </span>
+                            </div>
+                            {item.timeSlot && (
+                              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                <Clock className="h-3 w-3 text-primary shrink-0" />
+                                <span>{item.timeSlot}</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="pt-2.5 border-t">
+                            <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">
+                              {item.candidate}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground truncate">
+                              Click to manage interview →
+                            </p>
+                          </div>
+                        </div>
+                      </Link>
+                    </CarouselItem>
+                  ))}
+                </CarouselContent>
+              </Carousel>
+            ) : (
+              <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed rounded-xl gap-1.5">
+                <CalendarDays className="h-5 w-5 text-muted-foreground/30" />
+                <p className="text-xs font-semibold text-muted-foreground/50 uppercase tracking-wider">
+                  No upcoming interviews in the next 6 days
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+</div>
     </div>
   );
 }

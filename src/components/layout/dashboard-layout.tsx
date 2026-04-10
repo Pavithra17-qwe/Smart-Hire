@@ -144,8 +144,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           </AlertDialog>
         </SidebarFooter>
       </Sidebar>
-      <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center justify-between px-6 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-30">
+      <SidebarInset className="overflow-x-auto">
+                <header className="flex h-16 shrink-0 items-center justify-between px-6 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-30">
           <div className="flex items-center gap-4">
             <SidebarTrigger className="-ml-1" />
           </div>
@@ -176,8 +176,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        <main className="flex-1 p-6 overflow-y-auto">
-          {children}
+<main className="flex-1 p-6 overflow-auto">
+            {children}
         </main>
       </SidebarInset>
     </SidebarProvider>

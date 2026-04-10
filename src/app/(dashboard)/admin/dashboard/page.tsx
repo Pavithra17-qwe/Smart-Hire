@@ -13,10 +13,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getDoc, doc } from "firebase/firestore";
 import { useSearchParams } from "next/navigation";
+import { type CarouselApi } from "@/components/ui/carousel";
 import {
   XCircle, Users, CalendarDays, Clock, ArrowUpRight, CheckCircle2,
   TrendingDown, Activity, BarChart3, PieChart as PieIcon,
-  Loader2, ShieldCheck, ChevronRight, UserCog, Building2,
+  Loader2, ShieldCheck,ChevronLeft, ChevronRight, UserCog, Building2,
   Layers, Briefcase, FileText
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -181,10 +182,23 @@ export default function AdminDashboard() {
   const [filterStage,  setFilterStage]  = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [isMounted, setIsMounted] = useState(false);
+  const [carouselApi, setCarouselApi] = useState<CarouselApi>();
+const [canScrollPrev, setCanScrollPrev] = useState(false);
+ const [canScrollNext, setCanScrollNext] = useState(true);
 
   
   const [creatorMap, setCreatorMap] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+      if (!carouselApi) return;
+       const update = () => {
+         setCanScrollPrev(carouselApi.canScrollPrev());
+         setCanScrollNext(carouselApi.canScrollNext());
+      };
+      update();
+      carouselApi.on("select", update);
+       return () => { carouselApi.off("select", update); };
+     }, [carouselApi]);
   
 
   useEffect(() => {
@@ -427,24 +441,57 @@ jdFileType: r.jdFileType || null,
 
   const upcoming = useMemo(() => {
     const list: any[] = [];
-    const today = new Date(); today.setHours(0,0,0,0);
-    const todayStr = today.toISOString().split("T")[0];
-    const maxDate  = new Date(today); maxDate.setDate(today.getDate()+6);
-    const maxStr   = maxDate.toISOString().split("T")[0];
+  
+    const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+  
+    const maxDate = new Date(today);
+    maxDate.setDate(today.getDate() + 6);
+    maxDate.setHours(23, 59, 59, 999); // ← FIX: include full day 6
+  
     filtered.forEach(c => {
-      [{key:"l1",label:"L1 Interview",df:"l1ScheduledDate",sf:"l1TimeSlot",st:"l1Status"},
-       {key:"l2",label:"L2 Interview",df:"l2ScheduledDate",sf:"l2TimeSlot",st:"l2Status"},
-       {key:"hr",label:"HR Round",    df:"hrScheduledDate",sf:"hrTimeSlot",st:"hrStatus"}]
-      .forEach(({key,label,df,sf,st}) => {
-        const ds = c[df];
-        if (c[st]==="Scheduled" && ds && ds>=todayStr && ds<=maxStr) {
-          list.push({ id:`${c.id}-${key}`, candidateName:c.candidateName||"Unknown Candidate", jobRole:c.candidateDesignation||c.designation||c.jobTitle||c.role||c.position||"—", roundLabel:label, date:ds, timeSlot:c[sf]||"", isToday:ds===todayStr, candidateId:c.id });
+      [
+        { key: "l1", label: "L1 Interview", df: "l1ScheduledDate", sf: "l1TimeSlot", st: "l1Status" },
+        { key: "l2", label: "L2 Interview", df: "l2ScheduledDate", sf: "l2TimeSlot", st: "l2Status" },
+        { key: "hr", label: "HR Round",     df: "hrScheduledDate", sf: "hrTimeSlot", st: "hrStatus" },
+      ].forEach(({ key, label, df, sf, st }) => {
+  
+        const dateStr = c[df];
+        if (!dateStr) return;                        // no date → skip
+        if (c[st] !== "Scheduled") return;           // only Scheduled → keep this check
+  
+        const eventDate = new Date(dateStr + "T00:00:00");
+        if (isNaN(eventDate.getTime())) return;      // invalid date → skip
+  
+        // Must be today or within next 6 days (inclusive)
+        if (eventDate < today || eventDate > maxDate) return;
+  
+        // For TODAY — skip only if the time slot has already ended
+        const todayStr = today.toISOString().split("T")[0];
+        if (dateStr === todayStr && c[sf]) {
+          const endPart = c[sf].split("-")[1]?.trim();
+          if (endPart) {
+            const eventEnd = new Date(`${dateStr} ${endPart}`);
+            if (!isNaN(eventEnd.getTime()) && eventEnd < now) return;
+          }
         }
+  
+        list.push({
+          id:            `${c.id}-${key}`,
+          candidateName: c.candidateName || "Unknown",
+          jobRole:       c.candidateDesignation || "—",
+          roundLabel:    label,
+          date:          dateStr,
+          timeSlot:      c[sf] || "",
+          isToday:       dateStr === today.toISOString().split("T")[0],
+          candidateId:   c.id,
+        });
       });
     });
-    return list.sort((a,b) => a.date.localeCompare(b.date));
+  
+    return list.sort((a, b) => a.date.localeCompare(b.date));
   }, [filtered]);
-
   const hasFilters = filterRole!=="all" || filterStage!=="all" || filterStatus!=="all";
 
   if (!isMounted) return (
@@ -454,15 +501,15 @@ jdFileType: r.jdFileType || null,
   );
 
   return (
-    <div className="space-y-6 pb-10 w-full overflow-x-hidden">
-
-      {/* Live indicator */}
+<div className="space-y-6 pb-10 w-full overflow-x-auto min-w-[800px]">
+          {/* Live indicator */}
       <div className="flex items-center justify-end">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-3 py-1.5 rounded-full">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse block" />
           Live data
         </div>
       </div>
+    
 
       {/* FILTERS */}
       <div className="bg-card border rounded-xl p-4 shadow-sm">
@@ -805,58 +852,98 @@ jdFileType: r.jdFileType || null,
       </div>
 
       {/* ROW 5: UPCOMING INTERVIEWS */}
-      <div>
-        <SectionLabel>Upcoming Interviews (Next 3 Days)</SectionLabel>
-        <Card className="shadow-sm border">
-        <CardContent className="pt-5 px-2 pb-5">
-                      {upcoming.length > 0 ? (
-              <Carousel opts={{align:"start"}} className="w-full">
-                <CarouselContent className="-ml-3">
-                  {upcoming.map(item => (
-                    <CarouselItem key={item.id} className="pl-3 basis-full sm:basis-1/2 md:basis-1/3 lg:basis-1/4">
-                      <Link href={`/candidates/${item.candidateId}`} className="block h-full">
-                        <div className="h-full p-4 rounded-xl border bg-card hover:bg-muted/30 hover:border-primary/40 transition-all group cursor-pointer">
-                          <div className="flex items-start justify-between mb-2.5">
-                            <span className="text-xs font-bold text-primary bg-primary/8 px-2 py-0.5 rounded-md">{item.roundLabel}</span>
-                            {item.isToday ? <Badge className="bg-emerald-500 text-[9px] h-4 px-1.5">TODAY</Badge> : <Badge variant="outline" className="text-[9px] h-4 px-1.5">Upcoming</Badge>}
-                          </div>
-                          <div className="space-y-1 mb-3">
-                            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                              <CalendarDays className="h-3 w-3 text-primary shrink-0" />
-                              <span>{item.isToday ? "Today" : new Date(item.date+"T00:00:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})}</span>
-                            </div>
-                            {item.timeSlot && (
-                              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                                <Clock className="h-3 w-3 text-primary shrink-0" />
-                                <span>{item.timeSlot}</span>
-                              </div>
-                            )}
-                          </div>
-                          <div className="pt-2.5 border-t">
-                            <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">{item.candidateName}</p>
-                            <p className="text-[11px] text-muted-foreground truncate">{item.jobRole}</p>
-                          </div>
-                        </div>
-                      </Link>
-                    </CarouselItem>
-                  ))}
-                </CarouselContent>
-                {upcoming.length > 4 && (
-  <div className="flex justify-end gap-2 mb-3">
-    <CarouselPrevious className="static translate-y-0" />
-    <CarouselNext className="static translate-y-0" />
-  </div>
-)}              </Carousel>
-            ) : (
-              <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed rounded-xl gap-1.5">
-                <CalendarDays className="h-5 w-5 text-muted-foreground/30" />
-                <p className="text-xs font-semibold text-muted-foreground/50 uppercase tracking-wider">No scheduled interviews in the next 3 days</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+<div>
+  <div className="flex items-center justify-between mb-3">
+    <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+      Upcoming Interviews (Next 6 Days)
+    </p>
+    {upcoming.length > 1 && (
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => carouselApi?.scrollPrev()}
+          disabled={!canScrollPrev}
+          className="h-7 w-7 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => carouselApi?.scrollNext()}
+          disabled={!canScrollNext}
+          className="h-7 w-7 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
       </div>
+    )}
+  </div>
 
-    </div>
+  <Card className="shadow-sm border">
+    <CardContent className="pt-5 px-4 pb-5">
+      {upcoming.length > 0 ? (
+        <Carousel
+          setApi={setCarouselApi}
+          opts={{ align: "start", loop: false }}
+          className="w-full"
+        >
+          <CarouselContent className="-ml-3">
+            {upcoming.map(item => (
+              <CarouselItem
+                key={item.id}
+                className="pl-3 basis-full sm:basis-1/2 md:basis-1/3 lg:basis-1/4"
+              >
+                <Link href={`/candidates/${item.candidateId}`} className="block h-full">
+                  <div className="h-full p-4 rounded-xl border bg-card hover:bg-muted/30 hover:border-primary/40 transition-all group cursor-pointer">
+                    <div className="flex items-start justify-between mb-2.5">
+                      <span className="text-xs font-bold text-primary bg-primary/8 px-2 py-0.5 rounded-md">
+                        {item.roundLabel}
+                      </span>
+                      {item.isToday
+                        ? <Badge className="bg-emerald-500 text-[9px] h-4 px-1.5">TODAY</Badge>
+                        : <Badge variant="outline" className="text-[9px] h-4 px-1.5">Upcoming</Badge>}
+                    </div>
+                    <div className="space-y-1 mb-3">
+                      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <CalendarDays className="h-3 w-3 text-primary shrink-0" />
+                        <span>
+                          {item.isToday
+                            ? "Today"
+                            : new Date(item.date + "T00:00:00").toLocaleDateString("en-IN", {
+                                day: "2-digit", month: "short", year: "numeric",
+                              })}
+                        </span>
+                      </div>
+                      {item.timeSlot && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <Clock className="h-3 w-3 text-primary shrink-0" />
+                          <span>{item.timeSlot}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="pt-2.5 border-t">
+                      <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">
+                        {item.candidateName}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground truncate">{item.jobRole}</p>
+                    </div>
+                  </div>
+                </Link>
+              </CarouselItem>
+            ))}
+          </CarouselContent>
+          {/* No CarouselPrevious / CarouselNext here — arrows are in the header above */}
+        </Carousel>
+      ) : (
+        <div className="h-24 flex flex-col items-center justify-center border-2 border-dashed rounded-xl gap-1.5">
+          <CalendarDays className="h-5 w-5 text-muted-foreground/30" />
+          <p className="text-xs font-semibold text-muted-foreground/50 uppercase tracking-wider">
+            No scheduled interviews in the next 6 days
+          </p>
+        </div>
+      )}
+    </CardContent>
+  </Card>
+</div>
+</div> 
   );
 }
+  

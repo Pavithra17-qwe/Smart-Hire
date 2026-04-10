@@ -130,5 +130,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return null;
   }
 
-  return <DashboardLayout>{children}</DashboardLayout>;
-}
+  return (
+    <DashboardLayout>
+    {children}
+  </DashboardLayout>
+  );}

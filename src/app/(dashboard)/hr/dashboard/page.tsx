@@ -350,8 +350,7 @@ export default function HRDashboard() {
   }
 
   return (
-    <div className="space-y-6 pb-10 w-full overflow-x-hidden">
-
+<div className="space-y-6 pb-10 w-full">
       {/* ── FILTERS ── */}
       <div className="bg-card border rounded-xl p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3 items-end">
@@ -690,7 +689,7 @@ export default function HRDashboard() {
           <CardContent className="pt-5 px-3 pb-5">
             {upcoming.length > 0 ? (
               <Carousel opts={{ align: "start" }} className="w-full">
-                <CarouselContent className="-ml-3">
+                <CarouselContent className="-ml-3 flex">
                   {upcoming.map(item => (
                     <CarouselItem key={item.id} className="pl-3 basis-full sm:basis-1/2 lg:basis-1/4 xl:basis-1/5">
                       <Link href={`/candidates/${item.candidateId}`} className="block h-full">
