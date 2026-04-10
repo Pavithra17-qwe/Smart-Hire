@@ -567,47 +567,29 @@ export default function CandidateEvaluation() {
                 {errors.expectedCtc && <p className="text-xs text-red-500">{errors.expectedCtc}</p>}
               </div>
 
-              {/* Project Role — auto-filled when project selected, editable otherwise */}
-              <div className="space-y-2">
-                <Label className="font-bold">
-                  Project Role / Designation
-                  {!projectAutoFilled && (
-                    <span className="text-muted-foreground font-normal text-xs ml-1">(enter manually)</span>
-                  )}
-                </Label>
-                <Input
-                  value={formData.role}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("role", e.target.value)}
-                  disabled={projectAutoFilled}
-                  placeholder={!projectAutoFilled ? "e.g. React Developer" : ""}
-                  className={cn({
-                    "border-red-500":          errors.role,
-                    "bg-muted/30 cursor-not-allowed": projectAutoFilled,
-                  })}
-                />
-                {errors.role && <p className="text-xs text-red-500">{errors.role}</p>}
-              </div>
+              {shouldShowFields && (
+  <>
+    {/* Project Role */}
+    <div className="space-y-2">
+      <Label className="font-bold">Project Role / Designation</Label>
+      <Input
+        value={formData.role}
+        disabled
+        className="bg-muted/30 cursor-not-allowed"
+      />
+    </div>
 
-              {/* Project Location — auto-filled when project selected, editable otherwise */}
-              <div className="space-y-2">
-                <Label className="font-bold">
-                  Project Location
-                  {!projectAutoFilled && (
-                    <span className="text-muted-foreground font-normal text-xs ml-1">(enter manually)</span>
-                  )}
-                </Label>
-                <Input
-                  value={formData.location}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("location", e.target.value)}
-                  disabled={projectAutoFilled}
-                  placeholder={!projectAutoFilled ? "e.g. Chennai, Remote" : ""}
-                  className={cn({
-                    "border-red-500":          errors.location,
-                    "bg-muted/30 cursor-not-allowed": projectAutoFilled,
-                  })}
-                />
-                {errors.location && <p className="text-xs text-red-500">{errors.location}</p>}
-              </div>
+    {/* Project Location */}
+    <div className="space-y-2">
+      <Label className="font-bold">Project Location</Label>
+      <Input
+        value={formData.location}
+        disabled
+        className="bg-muted/30 cursor-not-allowed"
+      />
+    </div>
+  </>
+)}
 
               {/* Notice Period */}
               <div className="space-y-2">
