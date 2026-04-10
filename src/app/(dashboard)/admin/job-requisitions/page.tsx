@@ -48,7 +48,7 @@ interface FormData {
 const EMPTY_FORM: FormData = {
   projectName: "", location: "", otherLocation: "",
   role: "", otherRole: "", status: "Active",
-  jdFileName: "", jdFileType: "", jdFileData: "",
+  jdFileName: "", jdFileType: "text", jdFileData: "",
   assignedAgencies: [],
 };
 
@@ -132,7 +132,7 @@ export default function JobRequisitions() {
     setIsLoading(true);
 
     const q = role === "agency"
-      ? query(collection(db, "job_requisitions"), where("createdBy", "==", user.uid), orderBy("createdDate", "desc"))
+      ? query(collection(db, "job_requisitions"), where("assignedAgencies", "array-contains", user.uid), orderBy("createdDate", "desc"))
       : query(collection(db, "job_requisitions"), orderBy("createdDate", "desc"));
 
     const unsub = onSnapshot(q,
@@ -190,7 +190,7 @@ export default function JobRequisitions() {
           otherRole:        ROLES_OPTIONS.includes(rol) ? "" : rol,
           status:           req.status     || "Active",
           jdFileName:       req.jdFileName || "",
-          jdFileType:       req.jdFileType || "manual",
+          jdFileType: req.jdFileType === "manual" ? "manual" : "text",
           jdFileData:       req.jdFileData || "",
           assignedAgencies: req.assignedAgencies || [],
         });
@@ -375,7 +375,6 @@ export default function JobRequisitions() {
               <SelectItem value="all">All Creators</SelectItem>
               <SelectItem value="admin">Admin</SelectItem>
               <SelectItem value="hr">HR</SelectItem>
-              <SelectItem value="agency">Agency</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -419,29 +418,41 @@ export default function JobRequisitions() {
                   }`}>{req.status}</span>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  {req.jdFileData && req.jdFileData.length > 10 ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!req.jdFileData) return;
-                        if (!req.jdFileData.startsWith("data:") && !req.jdFileData.startsWith("https")) {
-                          alert(req.jdFileData);
-                        } else {
-                          openJDFile(req.jdFileData, req.jdFileName);
-                        }
-                      }}
-                      title={req.jdFileName || "View JD"}
-                      className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 transition-colors"
-                    >
-                      <Eye className="h-4 w-4" />
-                      <span className="text-xs hidden sm:inline truncate max-w-[80px]">
-                        {req.jdFileName || "View"}
-                      </span>
-                    </button>
-                  ) : (
-                    <span className="text-gray-400 text-xs">No file</span>
-                  )}
-                </td>
+  {req.jdFileData && req.jdFileData.trim() !== "" ? (
+    <button
+      type="button"
+      onClick={() => {
+        if (!req.jdFileData) return;
+      
+        // 👉 HANDLE BOTH manual + txt
+        if (req.jdFileType === "manual" || req.jdFileType === "text") {
+          const newWindow = window.open("", "_blank");
+          if (newWindow) {
+            newWindow.document.write(`
+              <html>
+                <head><title>${req.jdFileName || "Job Description"}</title></head>
+                <body style="padding:20px; font-family:Arial;">
+<div style="white-space: pre-wrap; word-break: break-word;">
+  ${req.jdFileData}
+</div>                </body>
+              </html>
+            `);
+            newWindow.document.close();
+          }
+        } else {
+          // 👉 Only for PDF / DOC
+          openJDFile(req.jdFileData, req.jdFileName);
+        }
+      }}
+      className="text-indigo-600 hover:text-indigo-800"
+      title="View JD"
+    >
+      <Eye className="h-4 w-4" />
+    </button>
+  ) : (
+    <span className="text-gray-400 text-xs">No JD</span>
+  )}
+</td>
 
                 {/* ── NEW: Assigned Agencies column ── */}
                 <td className="px-6 py-4 text-sm text-gray-600 max-w-[200px]">
@@ -465,9 +476,16 @@ export default function JobRequisitions() {
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                   {req.createdDate?.toDate?.().toLocaleDateString("en-IN") || "—"}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                  {req.createdByName || req.createdByRole || "—"}
-                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+  <div className="flex flex-col">
+    <span className="text-gray-900 font-medium">
+      {req.createdByName || "—"}
+    </span>
+    <span className="text-xs text-gray-500">
+      {req.createdByRole || ""}
+    </span>
+  </div>
+</td>
                 <td className="px-6 py-4 text-right">
                   <DropdownMenu open={openDropdownId === req.id} onOpenChange={o => setOpenDropdownId(o ? req.id : null)}>
                     <DropdownMenuTrigger asChild>
@@ -645,7 +663,12 @@ export default function JobRequisitions() {
                   }}
                 />
               )}
-
+                 {/* Show existing file */}
+    {formData.jdFileName && (
+      <p className="text-xs text-muted-foreground">
+        Uploaded: {formData.jdFileName}
+      </p>
+    )}
               {formData.jdFileType === "manual" && (
                 <textarea
                   className="w-full border rounded-md p-3 text-sm"

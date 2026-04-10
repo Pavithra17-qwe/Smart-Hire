@@ -353,7 +353,12 @@ export default function CandidateEvaluation() {
 
   const isAgency           = role === "agency";
   const projectAutoFilled  = !!formData.projectId && formData.projectId !== "none";
+  const selectedProject = projects.find(p => p.id === formData.projectId);
 
+  const shouldShowFields =
+    selectedProject &&
+    selectedProject.roles?.length &&
+    selectedProject.locations?.length;
   return (
     <div className="max-w-3xl mx-auto py-8">
       <Card className="shadow-lg border-t-4 border-t-primary">
@@ -451,11 +456,7 @@ export default function CandidateEvaluation() {
                     {projects.map((p: any) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.projectName}
-                        {!isAgency && (
-                          <span className="text-muted-foreground text-xs ml-1">
-                            ({p.createdByName || p.createdByRole || ""})
-                          </span>
-                        )}
+                      
                       </SelectItem>
                     ))}
                     {projects.length === 0 && (
