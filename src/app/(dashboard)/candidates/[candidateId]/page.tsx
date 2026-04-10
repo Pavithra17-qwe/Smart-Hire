@@ -2,90 +2,59 @@
 
 /**
  * ============================================================
- * EMAIL BUG FIXES — WHAT WAS BROKEN AND WHY
+ * EMAIL THREADING — HOW IT WORKS
  * ============================================================
  *
- * BUG 1 — Resume Review: Uploader never got mail
- *   ROOT CAUSE: getUploaderInfo() only read `data.email` from
- *   the Firestore users collection. If that field was missing,
- *   uploaderEmail = null and enqueue() silently skipped it.
- *   FIX: Added fallback to candidate.createdByEmail (stored at
- *   upload time). Also added explicit console.error so you can
- *   see in the browser console exactly which UID has no email.
+ * Instead of sending 7-8 separate emails, every update for a
+ * candidate now arrives as a REPLY in the same email thread.
+ *
+ * HOW:
+ *   1. First email ever sent for a candidate (e.g. Resume Accepted)
+ *      → nodemailer sends it normally and returns a `messageId`.
+ *      → We save that messageId to Firestore:
+ *            candidates/{id}.emailThreadMessageId
+ *
+ *   2. Every email after that reads `emailThreadMessageId` from
+ *      the fresh candidate doc and passes it to sendInterviewEmail
+ *      as `threadMessageId`.
+ *
+ *   3. The flow adds nodemailer headers:
+ *            In-Reply-To:  <original messageId>
+ *            References:   <original messageId>
+ *      Gmail, Outlook, and Apple Mail all use these to show the
+ *      email as a reply in the existing conversation.
+ *
+ *   4. Subject is always identical:
+ *            "Candidate Update – John Doe (Frontend Developer)"
+ *      so clients group by subject + headers together.
+ *
+ * RESULT: Recipients see ONE conversation with replies like:
+ *   ┌─ Candidate Update – John Doe (Frontend Developer)
+ *   │   Mail 1 → Resume Accepted
+ *   │   Mail 2 → L1 Interview Scheduled
+ *   │   Mail 3 → L1 Cleared → Selected
+ *   │   Mail 4 → L2 Scheduled
+ *   └─  ...
+ *
+ * ============================================================
+ * EMAIL BUG FIXES (from previous version) — still in place
+ * ============================================================
+ *
+ * BUG 1 — Uploader never got mail
+ *   FIX: fallback to candidate.createdByEmail if user doc missing.
  *
  * BUG 2 — Panel not receiving mail when HR schedules L1/L2
- *   ROOT CAUSE A: panelUsers was fetched with:
- *     email: data.email || ''
- *   If the panel user doc stores email as a different field
- *   (e.g. data.emailAddress), this returns '' and enqueue()
- *   skips it. FIX: panelUsers fetch now tries multiple field
- *   names: email, emailAddress, userEmail.
- *
- *   ROOT CAUSE B: The panel_assigned email was sent to
- *   payload.panelEmail which could be '' if panelUsers had
- *   no email. The new panelUsers fetch fixes the source data.
+ *   FIX: panelUsers fetch tries email, emailAddress, userEmail, mail.
  *
  * BUG 3 — Panel feedback submitted: nobody received mail
- *   ROOT CAUSE A (CRITICAL): resumeReviewedByEmail was only
- *   saved to Firestore when using the NEW version of this file.
- *   Any candidate accepted with OLD code has no
- *   resumeReviewedByEmail field. Those cases fell through
- *   silently with no email sent to HR.
- *   FIX: Added 3-level fallback chain:
- *     1. freshCandidate.resumeReviewedByEmail  (new field)
- *     2. freshCandidate.l1InterviewerEmail /
- *        freshCandidate.l2InterviewerEmail     (HR who scheduled)
- *     3. Skip with warning — never crash
- *
- *   ROOT CAUSE B: getFreshCandidate was only called for panel
- *   feedback actions. This is correct — but the stale `candidate`
- *   React state was being used as fallback, which doesn't have
- *   fields written in the SAME action. The fresh read is now
- *   the only source for panel-feedback email resolution.
- *
- *   ROOT CAUSE C: uploaderEmail resolution happened BEFORE the
- *   fresh candidate read, so if createdBy lookup failed and
- *   candidate.createdByEmail was needed it was missed.
- *   FIX: uploaderEmail fallback now also checks freshCandidate.
+ *   FIX: 3-level fallback for HR email:
+ *     1. resumeReviewedByEmail
+ *     2. l1InterviewerEmail / l2InterviewerEmail
+ *     3. Skip with warning
  *
  * BUG 4 — HR self-confirm not sent when HR = uploader
- *   This was working via dedup Map (correct), but actorEmail
- *   was sometimes '' because user.email was null/undefined on
- *   the auth object. FIX: actorEmail now falls back to
- *   user.providerData[0]?.email as last resort.
+ *   FIX: actorEmail falls back to user.providerData[0]?.email.
  *
- * ============================================================
- * EMAIL FLOW SPEC (final)
- * ============================================================
- *
- * RESUME REVIEW accept/reject:
- *   → uploader (agency/HR who created candidate)
- *   → HR who reviewed (self-confirm, deduped if same person)
- *
- * L1 / L2 SCHEDULE:
- *   → uploader
- *   → HR who scheduled (self-confirm, deduped)
- *   → assigned panel member (emailType: panel_assigned)
- *
- * L1 / L2 PANEL FEEDBACK (panel-select / panel-reject):
- *   → uploader
- *   → HR who accepted the resume (resumeReviewedByEmail)
- *   → panel member who submitted feedback (self-confirm)
- *   Panel member gets confirmation of their OWN submission.
- *
- * HR ROUND SCHEDULE:
- *   → uploader
- *   → HR who scheduled (self-confirm, deduped)
- *
- * HR ROUND FEEDBACK (select / reject):
- *   → uploader
- *   → HR who gave feedback (self-confirm, deduped)
- *
- * OFFER STAGE (any action):
- *   → uploader
- *   → HR who acted (self-confirm, deduped)
- *
- * DEDUP: Map<email.toLowerCase(), params> — one email per address per action
  * ============================================================
  */
 
@@ -119,7 +88,7 @@ type EmailType =
   | 'offer_rejected'
   | 'panel_assigned'
   | 'panel_feedback_submitted';
-  
+
 type CandidateHistoryItem = {
   stage: string;
   updatedByName: string;
@@ -142,19 +111,12 @@ interface PanelUser {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-/**
- * FIX BUG 1 + BUG 4
- * Reads the user doc from Firestore and returns email + name.
- * Tries multiple possible email field names so it works even
- * if different parts of your codebase stored the field differently.
- */
 async function getUserInfo(uid: string): Promise<{ email: string | null; name: string | null }> {
   if (!uid) return { email: null, name: null };
   try {
     const snap = await getDoc(doc(db, 'users', uid));
     if (snap.exists()) {
       const d = snap.data();
-      // Try every possible field name your app might use
       const email = d.email || d.emailAddress || d.userEmail || d.mail || null;
       const name  = d.displayName || d.name || d.fullName || null;
       if (!email) {
@@ -174,13 +136,6 @@ async function getUserInfo(uid: string): Promise<{ email: string | null; name: s
   return { email: null, name: null };
 }
 
-/**
- * FIX BUG 3 (ROOT CAUSE B)
- * Always reads a fresh copy of the candidate from Firestore.
- * The React state `candidate` is stale after updateDoc — it will
- * NOT contain fields written in the current action until the
- * onSnapshot listener fires (async, after email dispatch).
- */
 async function getFreshCandidate(candidateId: string): Promise<Record<string, any> | null> {
   if (!candidateId) return null;
   try {
@@ -194,7 +149,8 @@ async function getFreshCandidate(candidateId: string): Promise<Record<string, an
 }
 
 /**
- * Sends a single email. Validates address before calling the flow.
+ * Sends a single email.
+ * Now accepts candidateId and threadMessageId for threading support.
  */
 async function sendEmail(params: {
   toEmail: string;
@@ -211,13 +167,21 @@ async function sendEmail(params: {
   interviewTime: string;
   senderRole: string;
   emailType: string;
+  // ── THREADING ──────────────────────────────────────────────
+  candidateId:     string;   // Firestore candidate doc ID
+  threadMessageId: string;   // messageId of first email — '' if not yet sent
 }) {
   const email = params.toEmail?.trim();
   if (!email || !email.includes('@')) {
     console.warn('[sendEmail] ⚠️  Skipping — invalid toEmail:', params.toEmail);
     return;
   }
-  console.log('[sendEmail] → Sending to:', email, '| type:', params.emailType, '| stage:', params.stage);
+  console.log(
+    '[sendEmail] → Sending to:', email,
+    '| type:', params.emailType,
+    '| stage:', params.stage,
+    '| thread:', params.threadMessageId || '(first email)',
+  );
   try {
     await sendInterviewEmail({
       candidateName:     params.candidateName,
@@ -232,8 +196,11 @@ async function sendEmail(params: {
       schedulingNotes:   params.schedulingNotes,
       interviewFeedback: params.interviewFeedback,
       stage:             params.stage,
-      senderRole: params.senderRole as 'panel' | 'hr' | 'system',
-      emailType: params.emailType as EmailType,
+      senderRole:        params.senderRole as 'panel' | 'hr' | 'system',
+      emailType:         params.emailType as EmailType,
+      // ── THREADING ────────────────────────────────────────
+      candidateId:      params.candidateId,
+      threadMessageId:  params.threadMessageId,
     });
     console.log('[sendEmail] ✅ Sent to:', email);
   } catch (err) {
@@ -499,7 +466,6 @@ const InterviewStageCard: React.FC<{
     setSchedErr('');
     const panel = panelUsers.find(p => p.uid === panelUid);
     const panelEmail = panel?.email || '';
-    // Debug check — shows in browser console if panel email is missing
     if (!panelEmail || !panelEmail.includes('@')) {
       console.error(
         '[Schedule] ❌ Panel member has no valid email!',
@@ -508,8 +474,8 @@ const InterviewStageCard: React.FC<{
       );
     }
     onAction('schedule', {
-      scheduledDate:  date,
-      timeSlot:       slot,
+      scheduledDate:   date,
+      timeSlot:        slot,
       schedulingNotes: notes.trim(),
       panelUid,
       panelName:  panel?.name || panel?.email || 'Panel',
@@ -831,12 +797,12 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     const q = query(collection(db, 'candidate_history'), where('candidateId', '==', candidateId));
     getDocs(q).then((snap) => {
       const data: CandidateHistoryItem[] = snap.docs.map(d => {
-        const doc = d.data();
+        const docData = d.data();
         return {
-          stage:         doc.stage         || '',
-          updatedByName: doc.updatedByName || '',
-          updatedByRole: doc.updatedByRole || '',
-          action:        doc.action        || '',
+          stage:         docData.stage         || '',
+          updatedByName: docData.updatedByName || '',
+          updatedByRole: docData.updatedByRole || '',
+          action:        docData.action        || '',
         };
       });
       setHistory(data);
@@ -852,28 +818,13 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     return () => unsub();
   }, [candidateId]);
 
-  /**
-   * FIX BUG 2 — Panel users fetched with multi-field email fallback.
-   *
-   * OLD CODE:  email: data.email || ''
-   * NEW CODE:  tries email, emailAddress, userEmail, mail
-   *
-   * This is the MOST COMMON reason panel members don't receive mail.
-   * If your panel users have email stored under a different Firestore
-   * field name, it was silently returning '' and being skipped.
-   *
-   * CHECK: Open Firebase console → users collection → any panel user document.
-   * The field that holds the email must match one of the names below.
-   * If it uses a different name, add it to the fallback chain here.
-   */
   useEffect(() => {
     if (role !== 'hr') return;
     getDocs(query(collection(db, 'users'), where('role', '==', 'panel'))).then(snap => {
       const users: PanelUser[] = snap.docs.map(d => {
         const data = d.data();
-        // Try every possible email field name
         const email =
-          data.email       ||
+          data.email        ||
           data.emailAddress ||
           data.userEmail    ||
           data.mail         ||
@@ -901,10 +852,9 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
   const handleAction = async (stage: string, action: string, payload: any) => {
     if (!candidate || !user) return;
 
-    // FIX BUG 4 — actorEmail: try every possible source on the auth user object
     const actorEmail =
-      user.email                         ||
-      user.providerData?.[0]?.email      ||   // Google / social login fallback
+      user.email                    ||
+      user.providerData?.[0]?.email ||
       '';
 
     const loggedInUserName = await getUserInfo(user.uid);
@@ -937,8 +887,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             resumeReviewStatus:    'Accepted',
             resumeFeedback:        payload.feedback,
             l1Status:              'Pending',
-            // These three fields are the KEY to panel-feedback email routing.
-            // They record EXACTLY which HR accepted the resume.
             resumeReviewedByEmail: actorEmail,
             resumeReviewedByUid:   user.uid,
             resumeReviewedByName:  actorName,
@@ -1052,36 +1000,25 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       }]);
     } catch (err) {
       console.error('Firestore update failed:', err);
-      return; // Don't send emails if Firestore write failed
+      return;
     }
 
     // ── EMAIL DISPATCH ────────────────────────────────────────────────────────
-    /**
-     * STEP 1 — Read fresh candidate from Firestore for ALL actions.
-     *
-     * WHY: The React state `candidate` is a snapshot from the last
-     * onSnapshot event. After updateDoc() above, the new fields
-     * (resumeReviewedByEmail, l1PanelEmail, etc.) are in Firestore
-     * but NOT yet in the React state. onSnapshot fires asynchronously
-     * after this function returns. So we ALWAYS read fresh.
-     *
-     * This is the most reliable approach and also handles legacy
-     * candidates that were created before these fields existed.
-     */
+
+    // STEP 1 — Always read fresh candidate after Firestore write
     const fresh = await getFreshCandidate(candidate.id);
     if (!fresh) {
       console.error('[Email] ❌ Could not read fresh candidate — emails skipped for action:', action);
       return;
     }
 
-    /**
-     * STEP 2 — Resolve uploader email with 3-level fallback.
-     *
-     * Level 1: Read from Firestore users collection by UID
-     * Level 2: Read createdByEmail stored directly on the candidate doc
-     *          (some upload flows store this at submission time)
-     * Level 3: null — will be skipped by enqueue()
-     */
+    // ── THREADING: read saved messageId from the fresh candidate doc ─────────
+    // If this is the first email ever for this candidate, this will be ''
+    // and the flow will save the new messageId back to Firestore for next time.
+    const threadMessageId: string = fresh.emailThreadMessageId || '';
+    console.log('[Email] threadMessageId:', threadMessageId || '(first email — will save after send)');
+
+    // STEP 2 — Resolve uploader email
     let uploaderEmail: string | null = null;
     let uploaderName:  string | null = null;
 
@@ -1090,12 +1027,10 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       uploaderEmail = uploaderInfo.email;
       uploaderName  = uploaderInfo.name;
     }
-    // Fallback: check if email was stored on the candidate doc itself
     if (!uploaderEmail && fresh.createdByEmail) {
       uploaderEmail = fresh.createdByEmail;
       console.log('[Email] Using createdByEmail fallback:', uploaderEmail);
     }
-
     if (!uploaderEmail) {
       console.error(
         '[Email] ❌ UPLOADER EMAIL NOT FOUND.',
@@ -1118,10 +1053,12 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       interviewFeedback: payload.feedback        || '',
       interviewDate:     payload.scheduledDate   || '',
       interviewTime:     payload.timeSlot        || '',
+      // ── THREADING fields passed to every email ──────────────────────────
+      candidateId:      candidate.id,
+      threadMessageId:  threadMessageId,
     };
 
-    // STEP 4 — Email queue: Map<email.toLowerCase(), params>
-    // Guarantees exactly ONE email per unique address per action.
+    // STEP 4 — Email queue (dedup by address)
     const queue = new Map<string, typeof baseParams & { toEmail: string; senderRole: string; emailType: string }>();
 
     const enqueue = (toEmail: string | null | undefined, senderRole: string, emailType: string) => {
@@ -1142,25 +1079,23 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     console.log('[Email]    uploaderEmail:', uploaderEmail || '⚠️  MISSING');
     console.log('[Email]    actorEmail:', actorEmail || '⚠️  MISSING');
 
-    // ── RESUME REVIEW: accept / reject ────────────────────────────────────────
+    // ── RESUME REVIEW ─────────────────────────────────────────────────────────
     if (stage === 'Resume Review') {
-      const emailType = action === 'accept' ? 'resume_accepted' : 'candidate_rejected';
-      enqueue(uploaderEmail, 'hr', emailType); // uploader (agency or HR)
-      enqueue(actorEmail,    'hr', emailType); // HR who reviewed (deduped if HR = uploader)
+      const emailType = action === 'accept' ? 'resume_accepted' : 'resume_rejected';
+      enqueue(uploaderEmail, 'hr', emailType);
+      enqueue(actorEmail,    'hr', emailType);
     }
 
-    // ── L1 SCHEDULE ────────────────────────────────────────────────────────────
+    // ── L1 SCHEDULE ───────────────────────────────────────────────────────────
     else if (action === 'schedule' && stage === 'L1 Interview') {
-      // FIX BUG 2 — panel email now comes from the fresh candidate doc
-      // (we just wrote l1PanelEmail to Firestore above, so fresh has it)
       const panelEmail = fresh.l1PanelEmail || payload.panelEmail || '';
       console.log('[Email]    l1PanelEmail:', panelEmail || '⚠️  MISSING');
-      enqueue(uploaderEmail, 'hr', 'interview_scheduled'); // uploader
-      enqueue(actorEmail,    'hr', 'interview_scheduled'); // HR who scheduled (deduped if HR = uploader)
-      enqueue(panelEmail,    'hr', 'panel_assigned');      // assigned panel member
+      enqueue(uploaderEmail, 'hr', 'interview_scheduled');
+      enqueue(actorEmail,    'hr', 'interview_scheduled');
+      enqueue(panelEmail,    'hr', 'panel_assigned');
     }
 
-    // ── L2 SCHEDULE ────────────────────────────────────────────────────────────
+    // ── L2 SCHEDULE ───────────────────────────────────────────────────────────
     else if (action === 'schedule' && stage === 'L2 Interview') {
       const panelEmail = fresh.l2PanelEmail || payload.panelEmail || '';
       console.log('[Email]    l2PanelEmail:', panelEmail || '⚠️  MISSING');
@@ -1169,11 +1104,10 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       enqueue(panelEmail,    'hr', 'panel_assigned');
     }
 
-    // ── HR ROUND SCHEDULE ──────────────────────────────────────────────────────
+    // ── HR ROUND SCHEDULE ─────────────────────────────────────────────────────
     else if (action === 'schedule' && stage === 'HR Round') {
       enqueue(uploaderEmail, 'hr', 'interview_scheduled');
       enqueue(actorEmail,    'hr', 'interview_scheduled');
-      // No panel for HR Round
     }
 
     // ── L1 / L2 PANEL FEEDBACK ────────────────────────────────────────────────
@@ -1181,43 +1115,27 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       (stage === 'L1 Interview' || stage === 'L2 Interview') &&
       (action === 'panel-select' || action === 'panel-reject')
     ) {
-      /**
-       * FIX BUG 3 — resolving HR email with 3-level fallback:
-       *
-       * Level 1: resumeReviewedByEmail — saved when HR accepted resume (BEST)
-       * Level 2: l1InterviewerEmail / l2InterviewerEmail — HR who scheduled
-       *          (not ideal but better than nothing for legacy candidates)
-       * Level 3: skip — log warning
-       *
-       * We use `fresh` here because `candidate` (React state) is stale
-       * and does not yet reflect the updateDoc we just ran.
-       */
       const reviewerEmail =
         fresh.resumeReviewedByEmail ||
         (stage === 'L1 Interview' ? fresh.l1InterviewerEmail : fresh.l2InterviewerEmail) ||
         null;
 
-      // Panel member email — needed for their self-confirm
       const panelMemberEmail = actorEmail;
+      const emailType = action === 'panel-select' ? 'candidate_selected' : 'candidate_rejected';
 
-      const emailType =
-        action === 'panel-select'
-          ? 'candidate_selected'
-          : 'candidate_rejected';
-    
       enqueue(uploaderEmail,    'panel', emailType);
       enqueue(reviewerEmail,    'panel', emailType);
       enqueue(panelMemberEmail, 'panel', emailType);
     }
 
-    // ── HR ROUND FEEDBACK ──────────────────────────────────────────────────────
+    // ── HR ROUND FEEDBACK ─────────────────────────────────────────────────────
     else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
       const emailType = action === 'select' ? 'candidate_selected' : 'candidate_rejected';
       enqueue(uploaderEmail, 'hr', emailType);
       enqueue(actorEmail,    'hr', emailType);
     }
 
-    // ── OFFER STAGE ────────────────────────────────────────────────────────────
+    // ── OFFER STAGE ───────────────────────────────────────────────────────────
     else if (stage === 'Offer Stage') {
       const emailType =
         action === 'release-offer' ? 'offer_released'  :
@@ -1227,7 +1145,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
       enqueue(actorEmail,    'hr', emailType);
     }
 
-    // ── FLUSH ──────────────────────────────────────────────────────────────────
+    // ── FLUSH ─────────────────────────────────────────────────────────────────
     const recipients = [...queue.keys()];
     console.log(`[Email] ── Sending to ${recipients.length} recipient(s):`, recipients);
 
