@@ -597,94 +597,10 @@ export default function HRDashboard() {
         </Card>
       </div>
 
-      {/* ── ROW 4: Recent candidates + AI Insights ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Recent candidates table (2/3) */}
-        <Card className="lg:col-span-2 shadow-sm border">
-          <CardHeader className="pb-3 pt-5 px-5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="h-7 w-7 rounded-lg bg-primary/10 flex items-center justify-center">
-                  <Users className="h-4 w-4 text-primary" />
-                </div>
-                <CardTitle className="text-base font-semibold">Recent Candidates</CardTitle>
-              </div>
-              <Button asChild variant="ghost" size="sm" className="text-xs">
-                <Link href="/candidates/list" className="flex items-center gap-1">
-                  View all <ArrowUpRight className="h-3 w-3" />
-                </Link>
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="px-5 pb-5">
-            {recent.length === 0 ? (
-              <div className="h-20 flex items-center justify-center text-sm text-muted-foreground">
-                No candidates yet.
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {/* Header row */}
-                <div className="grid grid-cols-12 gap-2 pb-2">
-                  <p className="col-span-4 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Candidate</p>
-                  <p className="col-span-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">AI Score</p>
-                  <p className="col-span-3 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Status</p>
-                  <p className="col-span-2 text-[10px] font-bold text-muted-foreground uppercase tracking-wider"></p>
-                </div>
-                {recent.map(c => {
-                  const score = typeof c.aiScore === "number" && c.aiScore > 0 ? c.aiScore : null;
-                  return (
-                    <div key={c.id} className="grid grid-cols-12 gap-2 items-center py-3 group">
-                      <div className="col-span-4 min-w-0">
-                        <p className="text-sm font-semibold truncate">{c.candidateName}</p>
-                        <p className="text-[11px] text-muted-foreground truncate">{c.candidateDesignation}</p>
-                      </div>
-                      <div className="col-span-3">
-                        {score !== null ? (
-                          <div className="flex items-center gap-1.5">
-                            <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden max-w-[60px]">
-                              <div
-                                className={cn("h-full rounded-full", score >= 75 ? "bg-emerald-500" : score >= 50 ? "bg-amber-500" : "bg-rose-400")}
-                                style={{ width: `${score}%` }}
-                              />
-                            </div>
-                            <span className={cn(
-                              "text-xs font-bold",
-                              score >= 75 ? "text-emerald-600" : score >= 50 ? "text-amber-600" : "text-rose-500"
-                            )}>
-                              {score}%
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-muted-foreground/50">—</span>
-                        )}
-                      </div>
-                      <div className="col-span-3">
-                        <Badge
-                          variant={c.finalStatus === "Rejected" ? "destructive" : c.finalStatus === "Completed" ? "default" : "secondary"}
-                          className="text-[10px]"
-                        >
-                          {c.finalStatus || "In Progress"}
-                        </Badge>
-                      </div>
-                      <div className="col-span-2 flex justify-end">
-                        <Button asChild variant="ghost" size="sm" className="h-7 text-xs">
-                          <Link href={`/candidates/${c.id}`}>View</Link>
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-      </div>
 
       {/* ── ROW 5: Upcoming interviews (Carousel) ── */}
       <div>
-        <SectionLabel>Upcoming Interviews</SectionLabel>
+      <SectionLabel>Upcoming Interviews (Next 6 Days)</SectionLabel>
         <Card className="shadow-sm border">
           <CardContent className="pt-5 px-3 pb-5">
             {upcoming.length > 0 ? (

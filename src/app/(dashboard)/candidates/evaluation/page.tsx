@@ -161,23 +161,58 @@ export default function CandidateEvaluation() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
+  
+    console.log("📁 File selected:", file.name, file.type, file.size);
+  
     setErrors(prev => ({ ...prev, resumeFile: "" }));
     setIsLoadingExtracting(true);
-
+  
+    setFormData(prev => ({
+      ...prev,
+      resumeFile:     { name: file.name, type: file.type, data: "" },
+      candidateName:  "",
+      candidateEmail: "",
+      phoneNumber:    "",
+      experience:     "",
+      currentCtc:     "",
+      expectedCtc:    "",
+      noticePeriod:   "",
+      currentCompany: "",
+    }));
+  
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = (reader.result as string).split(",")[1];
+      console.log("📄 Base64 length:", base64?.length);
+  
       setFormData(prev => ({ ...prev, resumeFile: { name: file.name, type: file.type, data: base64 } }));
+  
       try {
-        const extracted = await candidateResumeExtraction({ fileName: file.name, fileType: file.type, fileDataB64: base64 });
-        if (extracted) {
-          setFormData(prev => ({ ...prev, ...extracted, experience: String(extracted.experience || "") }));
-          toast({ title: "Resume Parsed", description: "Details auto-filled from resume." });
-        }
+        console.log("🚀 Calling candidateResumeExtraction...");
+        const extracted = await candidateResumeExtraction({
+          fileName: file.name,
+          fileType: file.type,
+          fileDataB64: base64,
+        });
+  
+        console.log("✅ Extracted result:", JSON.stringify(extracted, null, 2));  // ← KEY LOG
+  
+        setFormData(prev => ({
+          ...prev,
+          candidateName:  extracted.candidateName  ?? "",
+          candidateEmail: extracted.candidateEmail ?? "",
+          phoneNumber:    extracted.phoneNumber    ?? "",
+          experience:     String(extracted.experience ?? ""),
+          currentCtc:     extracted.currentCtc    ?? "",
+          expectedCtc:    extracted.expectedCtc   ?? "",
+          noticePeriod:   extracted.noticePeriod  ?? "",
+          currentCompany: extracted.currentCompany ?? "",
+        }));
+  
+        toast({ title: "Resume Parsed", description: "Details auto-filled from resume." });
       } catch (err) {
-        console.error("❌ Resume extraction failed:", err); // ADD THIS
-        toast({ variant: "destructive", title: "Extraction Failed", description: "Fill details manually." });
+        console.error("❌ Extraction error:", err);  // ← KEY LOG
+        toast({ variant: "destructive", title: "Extraction Failed", description: String(err) });
       } finally {
         setIsLoadingExtracting(false);
       }

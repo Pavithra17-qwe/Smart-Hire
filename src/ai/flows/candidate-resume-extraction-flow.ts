@@ -1,136 +1,167 @@
 'use server';
-/**
- * @fileOverview An AI agent for extracting candidate information from resumes.
- *
- * - candidateResumeExtraction - A function that handles the resume analysis process.
- * - CandidateResumeExtractionInput - The input type for the candidateResumeExtraction function.
- * - CandidateResumeExtractionOutput - The return type for the candidateResumeExtraction function.
- */
 
-import {ai} from '@/ai/genkit';
-import {z} from 'genkit';
+import { z } from 'genkit';
 import mammoth from 'mammoth';
 
-async function withRetry<T>(fn: () => Promise<T>, retries = 3, delayMs = 5000): Promise<T> {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      const isQuotaError = err?.message?.includes('RESOURCE_EXHAUSTED') ||
-                           err?.message?.includes('Too Many Requests');
-      if (isQuotaError && i < retries - 1) {
-        console.warn(`⚠️ Quota hit, retrying in ${delayMs * (i + 1)}ms...`);
-        await new Promise(res => setTimeout(res, delayMs * (i + 1)));
-      } else {
-        throw err;
-      }
-    }
-  }
-  throw new Error('Max retries exceeded');
-}
-
 const CandidateResumeExtractionInputSchema = z.object({
-  fileName: z.string().describe('The name of the resume file.'),
-  fileType: z.string().describe('The MIME type of the resume file.'),
-  fileDataB64: z.string().describe('The Base64 encoded content of the resume file.'),
+  fileName: z.string(),
+  fileType: z.string(),
+  fileDataB64: z.string(),
 });
 export type CandidateResumeExtractionInput = z.infer<typeof CandidateResumeExtractionInputSchema>;
 
 const CandidateResumeExtractionOutputSchema = z.object({
-  candidateName: z.string().optional().describe('Full name of the candidate.'),
-  candidateEmail: z.string().optional().describe('Email address of the candidate.'),
-  phoneNumber: z.string().optional().describe('10-digit phone number of the candidate.'),
-  experience: z.string().optional().describe('Total years of experience (e.g., "5.5").'),
-  currentCtc: z.string().optional().describe('Current annual salary (numeric string).'),
-  expectedCtc: z.string().optional().describe('Expected annual salary (numeric string).'),
-  noticePeriod: z.enum(["Immediate", "15 Days", "30 Days", "60 Days", "90 Days"]).optional().describe('The notice period or availability.'),
-  currentCompany: z.string().optional().describe('The name of the candidate\'s current employer.'),
-  skills: z.array(z.string()).optional().describe('A list of technical and soft skills identified in the resume.'),
+  candidateName: z.string().optional(),
+  candidateEmail: z.string().optional(),
+  phoneNumber: z.string().optional(),
+  experience: z.string().optional(),
+  currentCtc: z.string().optional(),
+  expectedCtc: z.string().optional(),
+  noticePeriod: z.enum(["Immediate", "15 Days", "30 Days", "60 Days", "90 Days"]).optional(),
+  currentCompany: z.string().optional(),
+  skills: z.array(z.string()).optional(),
 });
 export type CandidateResumeExtractionOutput = z.infer<typeof CandidateResumeExtractionOutputSchema>;
 
-export async function candidateResumeExtraction(input: CandidateResumeExtractionInput): Promise<CandidateResumeExtractionOutput> {
-  return candidateResumeExtractionFlow(input);
+function parseResumeText(text: string): CandidateResumeExtractionOutput {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  const JOB_TITLE_WORDS = /(?:management|engineer|developer|analyst|manager|consultant|officer|executive|associate|specialist|coordinator|director|lead|architect|designer|summary|objective|profile|experience|education|skills|contact|address|mobile|phone|email|linkedin|github|competencies|testing|agile|result|targeting|professional|dedicated|software|tester|responsibilities|description|title|client|period|tools|areas|key)/i;
+
+  const isNameLike = (l: string) => {
+    const words = l.trim().split(/\s+/);
+    return (
+      words.length >= 2 && words.length <= 4 &&
+      words.every(w => /^[A-Za-z]+$/.test(w)) &&
+      !/\d/.test(l) &&
+      !l.includes('@') && !l.includes('+') &&
+      !JOB_TITLE_WORDS.test(l)
+    );
+  };
+
+  const toTitleCase = (s: string) =>
+    s.replace(/\w+/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+
+  const emailMatch = text.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  const email = emailMatch?.[0] || '';
+
+  const phoneMatch = text.match(/(?:\+91[\s\-]?)?[6-9]\d{9}/);
+  const phone = phoneMatch?.[0]?.replace(/\D/g, '').slice(-10) || '';
+
+  let nameLine = '';
+  const nameLabelMatch = text.match(/(?:^|\n)\s*name\s*[:\-]\s*([A-Za-z\s]{3,40}?)(?:\n|$)/im);
+  if (nameLabelMatch) nameLine = nameLabelMatch[1].trim();
+
+  if (!nameLine && phone) {
+    const rawPhone = phoneMatch?.[0] || '';
+    const phoneIndex = text.indexOf(rawPhone);
+    if (phoneIndex !== -1) {
+      const afterLines = text.substring(phoneIndex, phoneIndex + 200).split('\n').map(l => l.trim()).filter(Boolean);
+      nameLine = afterLines.slice(1).find(isNameLike) || '';
+    }
+  }
+  if (!nameLine && email) {
+    const emailIndex = text.indexOf(email);
+    if (emailIndex !== -1) {
+      const nearLines = text.substring(Math.max(0, emailIndex - 50), emailIndex + 300).split('\n').map(l => l.trim()).filter(Boolean);
+      nameLine = nearLines.find(isNameLike) || '';
+    }
+  }
+  if (!nameLine) nameLine = lines.find(isNameLike) || '';
+  if (!nameLine) nameLine = lines[0] || '';
+
+  const expMatch = text.match(/(\d+\.?\d*)\s*(?:\+\s*)?(?:years?|yrs?)\s*(?:of\s*)?(?:experience|exp)?/i);
+  const experience = expMatch?.[1] || '';
+
+  const ctcMatch = text.match(/current\s*ctc\s*[:\-]?\s*([0-9,.]+\s*(?:lpa|lakhs?|lacs?|k)?)/i);
+  const currentCtc = ctcMatch?.[1]?.replace(/[^0-9.]/g, '') || '';
+
+  const ectcMatch = text.match(/expected\s*ctc\s*[:\-]?\s*([0-9,.]+\s*(?:lpa|lakhs?|lacs?|k)?)/i);
+  const expectedCtc = ectcMatch?.[1]?.replace(/[^0-9.]/g, '') || '';
+
+  let noticePeriod: "Immediate" | "15 Days" | "30 Days" | "60 Days" | "90 Days" | undefined;
+  const noticeMatch = text.match(/notice\s*period\s*[:\-]?\s*([^\n,]+)/i);
+  if (noticeMatch) {
+    const n = noticeMatch[1].toLowerCase();
+    if (n.includes('immediate') || n.includes('0')) noticePeriod = 'Immediate';
+    else if (n.includes('15')) noticePeriod = '15 Days';
+    else if (n.includes('30') || n.includes('one month') || n.includes('1 month')) noticePeriod = '30 Days';
+    else if (n.includes('60') || n.includes('two month') || n.includes('2 month')) noticePeriod = '60 Days';
+    else if (n.includes('90') || n.includes('three month') || n.includes('3 month')) noticePeriod = '90 Days';
+  }
+
+  const companyMatch =
+    text.match(/(?:currently\s*(?:working\s*)?(?:at|with|in)|employer\s*[:\-])\s*([A-Za-z0-9\s&.,]+?)(?:\n|,|\.|\|)/i) ||
+    text.match(/([A-Za-z0-9\s&.]+)\s*[\|–\-]\s*(?:present|current)/i);
+  const currentCompany = companyMatch?.[1]?.trim() || '';
+
+  const skillsMatch = text.match(/skills?\s*[:\-]?\s*([\s\S]{0,500}?)(?:\n\n|\n[A-Z]|experience|education|$)/i);
+  let skills: string[] = [];
+  if (skillsMatch) {
+    skills = skillsMatch[1]
+      .split(/[,\n•·\|\/]/)
+      .map(s => s.trim())
+      .filter(s => s.length > 1 && s.length < 40 && !/^\d+$/.test(s))
+      .slice(0, 20);
+  }
+
+  return {
+    candidateName:  nameLine ? toTitleCase(nameLine) : undefined,
+    candidateEmail: email    || undefined,
+    phoneNumber:    phone    || undefined,
+    experience:     experience || undefined,
+    currentCtc:     currentCtc || undefined,
+    expectedCtc:    expectedCtc || undefined,
+    noticePeriod,
+    currentCompany: currentCompany || undefined,
+    skills:         skills.length > 0 ? skills : undefined,
+  };
 }
 
-const resumePrompt = ai.definePrompt({
-  name: 'resumeExtractionPrompt',
-  input: {
-    schema: z.object({ 
-      resumeDataUri: z.string().optional(),
-      resumeText: z.string().optional()
-    })
-  },
-  output: {schema: CandidateResumeExtractionOutputSchema},
-  prompt: `You are an expert recruitment assistant.
-Extract the candidate's professional details from the provided resume.
+export async function candidateResumeExtraction(
+  input: CandidateResumeExtractionInput
+): Promise<CandidateResumeExtractionOutput> {
+  const buffer = Buffer.from(input.fileDataB64, 'base64');
 
-{{#if resumeDataUri}}
-Resume File: {{media url=resumeDataUri}}
-{{/if}}
+  const empty: CandidateResumeExtractionOutput = {
+    candidateName: undefined, candidateEmail: undefined,
+    phoneNumber: undefined, experience: undefined,
+    currentCtc: undefined, expectedCtc: undefined,
+    noticePeriod: undefined, currentCompany: undefined, skills: undefined,
+  };
 
-{{#if resumeText}}
-Resume Text Content:
-"""
-{{{resumeText}}}
-"""
-{{/if}}
+  let text = '';
 
-Instructions:
-- Extract the candidate's full name.
-- Extract the email address.
-- Extract the phone number (clean it to be exactly 10 digits if possible).
-- Extract total years of experience as a decimal number string (e.g., "3.5").
-- Extract current and expected CTCs as numeric strings representing annual amounts.
-- Map the notice period to one of: "Immediate", "15 Days", "30 Days", "60 Days", "90 Days".
-- Extract the candidate's current employer/company.
-- Identify all technical and soft skills.
-
-If a piece of information is missing, do not guess; leave the field empty.`,
-});
-
-const candidateResumeExtractionFlow = ai.defineFlow(
-  {
-    name: 'candidateResumeExtractionFlow',
-    inputSchema: CandidateResumeExtractionInputSchema,
-    outputSchema: CandidateResumeExtractionOutputSchema,
-  },
-  async (input) => {
-    let resumeDataUri: string | undefined;
-    let resumeText: string | undefined;
-
-    console.log(`Starting parsing for file: ${input.fileName} (${input.fileType})`);
-
-    // Handle PDF with native media support (Gemini handles PDF)
-    if (input.fileType === 'application/pdf') {
-      resumeDataUri = `data:${input.fileType};base64,${input.fileDataB64}`;
-      console.log('File type is PDF. Passing as media part to AI.');
-    } 
-    // Handle DOCX with mammoth text extraction
-    else if (input.fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const buffer = Buffer.from(input.fileDataB64, 'base64');
+  try {
+    if (input.fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
       const result = await mammoth.extractRawText({ buffer });
-      resumeText = result.value;
-      console.log('Extracted Text (Mammoth DOCX):', resumeText.substring(0, 500) + '...');
-    } 
-    // Handle legacy DOC or others by passing as data URI (Multimodal fallback)
-    else {
-      resumeDataUri = `data:${input.fileType};base64,${input.fileDataB64}`;
-      console.log('File type is legacy DOC or other. Passing as media part to AI.');
+      text = result.value;
+      console.log('DOCX text (first 300):', text.substring(0, 300));
+    } else if (input.fileType === 'application/pdf') {
+      try {
+        const pdfParse = require('pdf-parse');
+        const result = await pdfParse(buffer);
+        text = result.text;
+        console.log('PDF text (first 300):', text.substring(0, 300));
+      } catch (e) {
+        console.error('PDF parse failed:', e);
+        text = '';
+      }
+    } else {
+      text = buffer.toString('utf-8');
     }
 
-    if (!resumeText && !resumeDataUri) {
-      throw new Error('Resume could not be parsed. Please upload a text-based resume.');
-    }
-
-    const {output} = await withRetry(() =>
-      resumePrompt({ resumeDataUri, resumeText })
-    );    
-    if (!output || Object.keys(output).filter(k => k !== 'skills').every(k => !output[k as keyof typeof output])) {
-        // If everything except skills is empty, it might be a parsing failure
-        console.warn('AI extraction returned mostly empty results.');
-    }
-
-    return output!;
+  } catch (err) {
+    console.error('Extraction error:', err);
+    return empty;
   }
-);
+
+  if (!text.trim()) {
+    console.warn('No text extracted!');
+    return empty;
+  }
+
+  const result = parseResumeText(text);
+  console.log('Parsed result:', JSON.stringify(result));
+  return result;
+}

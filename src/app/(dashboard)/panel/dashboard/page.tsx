@@ -504,22 +504,6 @@ const todayIds = useMemo(() =>
         )}
       </div>
 
-
-      {/* Pending feedback alert */}
-      {stats.pendingFeedback > 0 && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/20">
-          <div className="h-8 w-8 rounded-lg bg-amber-100 dark:bg-amber-900 flex items-center justify-center shrink-0">
-            <AlertCircle className="h-4 w-4 text-amber-600" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-              {stats.pendingFeedback} interview{stats.pendingFeedback > 1 ? "s" : ""} pending feedback
-            </p>
-            <p className="text-[11px] text-amber-600">Please submit feedback so HR can proceed</p>
-          </div>
-        </div>
-      )}
-
       {/* ── ROW 1: Summary Stats ── */}
       {/* href uses pre-computed ID arrays so count on card == rows in history */}
       <div>
@@ -677,102 +661,6 @@ const todayIds = useMemo(() =>
             </ChartContainer>
           </CardContent>
         </Card>
-      </div>
-
-
-      {/* ── ROW 4: Pending Feedback + Recent Decisions ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        <div>
-          <SectionLabel>Pending Feedback</SectionLabel>
-          <Card className="shadow-sm border">
-            <CardContent className="p-5">
-              {pendingFeedbackList.length > 0 ? (
-                <div className="divide-y divide-border">
-                  {pendingFeedbackList.slice(0, 5).map(item => (
-                    <div key={item.id} className="flex items-center justify-between py-3 group">
-                      <div className="min-w-0 flex-1">
-                        {/* Name is the clickable link — uses router.push to navigate to detail page */}
-                        <button
-                          onClick={() => router.push(`/candidates/${item.candidateId}`)}
-                          className="text-sm font-semibold text-primary hover:underline truncate text-left block"
-                        >
-                          {item.candidate}
-                        </button>
-                        <p className="text-[11px] text-muted-foreground">{item.round}</p>
-                        <p className="text-[10px] text-amber-600 mt-0.5">
-                          Interview was on{" "}
-                          {new Date(item.date + "T00:00:00").toLocaleDateString("en-IN", {
-                            day: "2-digit", month: "short",
-                          })}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 ml-3 shrink-0">
-                        <Badge className="bg-amber-500 text-[10px]">Pending</Badge>
-                        <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="h-20 flex flex-col items-center justify-center gap-1.5">
-                  <CheckCircle2 className="h-6 w-6 text-emerald-400" />
-                  <p className="text-xs text-muted-foreground">All feedback submitted — you're up to date!</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div>
-          <SectionLabel>Recent Decisions</SectionLabel>
-          <Card className="shadow-sm border">
-            <CardContent className="p-5">
-              {recentDecisions.length === 0 ? (
-                <div className="h-20 flex items-center justify-center text-sm text-muted-foreground">
-                  No decisions made yet.
-                </div>
-              ) : (
-                <div className="divide-y divide-border">
-                  {recentDecisions.map(c => {
-                    const isL1   = c.l1InterviewerUid === panelUid && ["Selected", "Rejected"].includes(c.l1Status ?? "");
-                    const round  = isL1 ? "L1" : "L2";
-                    const status = isL1 ? c.l1Status : c.l2Status;
-                    return (
-                      <div key={c.id} className="flex items-center justify-between py-3 group">
-                        <div className="min-w-0 flex-1">
-                          {/* Name is the clickable link — uses router.push to navigate to detail page */}
-                          <button
-                            onClick={() => router.push(`/candidates/${c.id}`)}
-                            className="text-sm font-semibold text-left hover:text-primary hover:underline truncate block transition-colors"
-                          >
-                            {c.candidateName || "Unknown"}
-                          </button>
-                          <p className="text-[11px] text-muted-foreground truncate">
-                            {c.candidateDesignation}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2 ml-3 shrink-0">
-                          <Badge variant="outline" className={cn("text-[10px]",
-                            round === "L1"
-                              ? "border-indigo-300 text-indigo-700 dark:text-indigo-300"
-                              : "border-blue-300 text-blue-700 dark:text-blue-300"
-                          )}>{round}</Badge>
-                          <Badge
-                            variant={status === "Selected" ? "default" : "destructive"}
-                            className="text-[10px]"
-                          >
-                            {status}
-                          </Badge>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
       </div>
     {/* ── ROW 4: Upcoming Interviews — Next 6 Days ── */}
     <div>

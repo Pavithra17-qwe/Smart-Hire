@@ -14,7 +14,7 @@ export async function POST(req: Request) {
     }
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
 
     const prompt = `
     Analyze this candidate resume and return ONLY a valid JSON object with two keys: "score" (a number from 0 to 100) and "summary" (a brief, one-sentence summary of the candidate's fit).
