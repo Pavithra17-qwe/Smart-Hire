@@ -23,8 +23,6 @@ const NOTICE_PERIOD_OPTIONS = ["Immediate", "0-15 days", "15-30 days", "30-60 da
 const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
 const phoneRegex = /^[6-9]\d{9}$/;
 
-// ─── AI SCORING LOGIC ────────────────────────────────────────────────────────
-// ─── AI SCORING LOGIC ────────────────────────────────────────────────────────
 async function computeMatchScore(
   resumeFile: { data: string; type: string } | null,
   project: any,
@@ -40,11 +38,14 @@ async function computeMatchScore(
   }
 
   try {
+    // Check if project has any JD content at all
+    // jdFileType === 'manual' means HR typed the JD as text (stored in jdFileData)
+    const hasManualText = !!project.jdFileData?.trim() && project.jdFileType === 'manual';
     const hasJdText     = !!project.jdText?.trim();
-    const hasJdFileData = !!project.jdFileData;
     const hasJdFile     = !!project.jdFileDataB64;
+    const hasJdFileData = !!project.jdFileData && project.jdFileType !== 'manual';
 
-    if (!hasJdText && !hasJdFileData && !hasJdFile) {
+    if (!hasManualText && !hasJdText && !hasJdFile && !hasJdFileData) {
       return {
         matchScore: 0,
         matchSummary: "This project has no Job Description. Please add a JD to the project before scoring.",
@@ -53,10 +54,31 @@ async function computeMatchScore(
 
     toast({ title: "🤖 AI Scoring", description: "Analyzing resume against job requirements…" });
 
+    // Resolve the JD text — check all possible field names and types
+    const resolvedJdText =
+      project.jdText?.trim() ||
+      (project.jdFileType === 'manual' ? project.jdFileData?.trim() : '') ||
+      '';
+
+    // Resolve the JD file — only for actual uploaded PDF/DOCX (not manual text)
+    const resolvedJdFile =
+      project.jdFileDataB64 ||
+      (project.jdFileType !== 'manual' ? project.jdFileData : '') ||
+      '';
+
+    const resolvedJdType =
+      project.jdFileType && project.jdFileType !== 'manual'
+        ? project.jdFileType
+        : 'application/pdf';
+
+    console.log('[Evaluation] resolvedJdText length:', resolvedJdText.length);
+    console.log('[Evaluation] resolvedJdFile present:', !!resolvedJdFile);
+    console.log('[Evaluation] resumeFile type:', resumeFile?.type);
+
     const result = await candidateMatchScoring({
-      jdText:            hasJdText     ? project.jdText        : (hasJdFileData ? project.jdFileData : undefined),
-      jdFileDataB64:     hasJdFile     ? project.jdFileDataB64 : undefined,
-      jdFileType:        hasJdFile     ? project.jdFileType    : undefined,
+      jdText:            resolvedJdText || undefined,
+      jdFileDataB64:     resolvedJdFile || undefined,
+      jdFileType:        resolvedJdFile ? resolvedJdType : undefined,
       resumeFileDataB64: resumeFile.data,
       resumeFileType:    resumeFile.type,
     });
@@ -71,7 +93,6 @@ async function computeMatchScore(
     return { matchScore: 0, matchSummary: "AI scoring failed. Please check the JD or try again." };
   }
 }
-
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function CandidateEvaluation() {
   const { user, role, name: loggedInName } = useAuth();
