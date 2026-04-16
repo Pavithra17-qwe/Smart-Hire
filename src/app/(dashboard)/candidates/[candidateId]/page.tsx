@@ -278,15 +278,6 @@ const AIMatchCard: React.FC<{ candidate: Candidate }> = ({ candidate }) => {
           ))}
         </div>
       </div>
-      {candidate.matchSummary && (
-        <div style={{ marginTop: '12px', padding: '8px 10px', borderRadius: '6px', background: '#EEF2FF', border: '1px solid #C7D2FE' }}>
-          <p style={{ fontSize: '12px', fontWeight: '700', color: '#3730A3' }}>
-            {candidate.matchSummary?.includes('Job Description') || candidate.matchSummary?.includes('JD')
-              ? 'AI compared resume against Job Description'
-              : 'Scored based on candidate profile (No JD available)'}
-          </p>
-        </div>
-      )}
     </div>
   );
 };
