@@ -107,7 +107,8 @@ export default function CandidateEvaluation() {
     candidateName:        "",
     candidateEmail:       "",
     phoneNumber:          "",
-    candidateLocation:    "",
+    currentLocation:      "",
+    permanentLocation:    "",
     experience:           "",
     candidateDesignation: "",
     currentCtc:           "",
@@ -228,6 +229,8 @@ export default function CandidateEvaluation() {
           expectedCtc:    extracted.expectedCtc   ?? "",
           noticePeriod:   extracted.noticePeriod  ?? "",
           currentCompany: extracted.currentCompany ?? "",
+          currentLocation:   "",
+          permanentLocation: "",
         }));
   
         toast({ title: "Resume Parsed", description: "Details auto-filled from resume." });
@@ -249,7 +252,8 @@ export default function CandidateEvaluation() {
                                                e.candidateEmail       = "A valid email is required.";
     if (!formData.phoneNumber.trim() || !phoneRegex.test(formData.phoneNumber))
                                                e.phoneNumber          = "A valid 10-digit Indian phone number is required.";
-    if (!formData.candidateLocation.trim())    e.candidateLocation    = "Candidate location is required.";
+    if (!formData.currentLocation.trim())   e.currentLocation   = "Current location is required.";
+    if (!formData.permanentLocation.trim()) e.permanentLocation = "Permanent location is required.";
     if (!formData.experience)                  e.experience           = "Experience is required.";
     if (!formData.candidateDesignation.trim()) e.candidateDesignation = "Candidate designation is required.";
     if (!formData.currentCtc)                  e.currentCtc           = "Current CTC is required.";
@@ -520,16 +524,35 @@ export default function CandidateEvaluation() {
                 {errors.phoneNumber && <p className="text-xs text-red-500">{errors.phoneNumber}</p>}
               </div>
 
-              {/* Candidate Location */}
-              <div className="space-y-2">
-                <Label className="font-bold">Candidate Location</Label>
-                <Input
-                  value={formData.candidateLocation}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("candidateLocation", e.target.value)}
-                  className={cn({ "border-red-500": errors.candidateLocation })}
-                />
-                {errors.candidateLocation && <p className="text-xs text-red-500">{errors.candidateLocation}</p>}
-              </div>
+         {/* Current Location */}
+<div className="space-y-2">
+  <Label className="font-bold">Current Location</Label>
+  <Input
+    value={formData.currentLocation}
+    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+      handleInputChange("currentLocation", e.target.value)
+    }
+    className={cn({ "border-red-500": errors.currentLocation })}
+  />
+  {errors.currentLocation && (
+    <p className="text-xs text-red-500">{errors.currentLocation}</p>
+  )}
+</div>
+
+{/* Permanent Location */}
+<div className="space-y-2">
+  <Label className="font-bold">Permanent Location</Label>
+  <Input
+    value={formData.permanentLocation}
+    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+      handleInputChange("permanentLocation", e.target.value)
+    }
+    className={cn({ "border-red-500": errors.permanentLocation })}
+  />
+  {errors.permanentLocation && (
+    <p className="text-xs text-red-500">{errors.permanentLocation}</p>
+  )}
+</div>
 
               {/* Experience */}
               <div className="space-y-2">
