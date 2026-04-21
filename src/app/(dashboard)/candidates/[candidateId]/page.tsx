@@ -367,202 +367,407 @@ const ResumeReviewCard: React.FC<{
   const [panelUid, setPanelUid] = useState('');
   const [err, setErr]           = useState('');
 
-  const status = (candidate.resumeReviewStatus || 'Pending') as string;
+  const status          = (candidate.resumeReviewStatus || 'Pending') as string;
   const assignedPanel   = (candidate as any).resumePanelUid;
   const panelName       = (candidate as any).resumePanelName;
   const panelFeedback   = (candidate as any).resumePanelFeedback;
   const panelDecision   = (candidate as any).resumePanelDecision;
+  const hrFeedback      = (candidate as any).resumeHRFeedback;
 
   const isDone          = ['Accepted', 'Rejected'].includes(status);
   const isHR            = role === 'hr';
   const isPanel         = role === 'panel';
   const isAssignedPanel = isPanel && user?.uid === assignedPanel;
 
-  // HR direct review
-  const handleAct = (action: 'accept' | 'reject') => {
-    if (!feedback.trim()) { setErr('Feedback is required.'); return; }
-    setErr('');
-    onAction(action, { feedback: feedback.trim() });
-  };
+  // ── Step states ────────────────────────────────────────────────────────────
+  // Step 1 (HR review + assign): done once panel is assigned or status moved on
+  const step1Done = !!assignedPanel || isDone;
+  // Step 2 (Panel feedback): done once panel submitted
+  const step2Done = !!panelFeedback;
+  // Step 3 (HR final call): active when status === 'Panel Reviewed'
+  const step3Active = status === 'Panel Reviewed';
 
-  // HR assign panel
+  // ── Handlers ───────────────────────────────────────────────────────────────
   const handleAssign = () => {
-    if (!panelUid) { setErr('Please select a panel member.'); return; }
+    if (!feedback.trim()) { setErr('HR feedback is required.'); return; }
+    if (!panelUid)        { setErr('Please select a panel member.'); return; }
     setErr('');
     const panel = panelUsers.find(p => p.uid === panelUid);
     onAction('assign-panel', {
       panelUid,
       panelName:  panel?.name || panel?.email || 'Panel',
       panelEmail: panel?.email || '',
+      feedback:   feedback.trim(),
     });
   };
 
-  // Panel submit feedback
+  const handleHRReject = () => {
+    if (!feedback.trim()) { setErr('HR feedback is required before rejecting.'); return; }
+    setErr('');
+    onAction('reject', { feedback: feedback.trim() });
+  };
+
   const handlePanelSubmit = (decision: 'panel-accept' | 'panel-reject') => {
-    if (!feedback.trim()) { setErr('Feedback is required.'); return; }
+    if (!feedback.trim()) { setErr('Panel feedback is required.'); return; }
     setErr('');
     onAction(decision, { feedback: feedback.trim() });
   };
 
+  // ── Dot color helper ───────────────────────────────────────────────────────
+  const dotStyle = (done: boolean, active: boolean, color = '#7C3AED'): React.CSSProperties => ({
+    width: '10px',
+    height: '10px',
+    borderRadius: '50%',
+    flexShrink: 0,
+    marginTop: '2px',
+    background: done ? '#1D9E75' : active ? color : 'transparent',
+    border: done ? 'none' : active ? 'none' : '1.5px dashed #B4B2A9',
+  });
+
+  const timelineRow: React.CSSProperties = {
+    display: 'flex',
+    gap: 0,
+  };
+
+  const spineCol: React.CSSProperties = {
+    width: '36px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    paddingTop: '2px',
+    flexShrink: 0,
+  };
+
+  const vline: React.CSSProperties = {
+    flex: 1,
+    width: '1.5px',
+    background: '#E5E7EB',
+    margin: '4px 0',
+    minHeight: '16px',
+  };
+
+  const bodyCol: React.CSSProperties = {
+    flex: 1,
+    paddingBottom: '16px',
+  };
+
+  const whoLabel = (pill: string, pillColor: { bg: string; text: string }, label: string): React.ReactNode => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px' }}>
+      <span style={{
+        fontSize: '10px', fontWeight: '700', padding: '1px 7px',
+        borderRadius: '999px', background: pillColor.bg, color: pillColor.text,
+      }}>{pill}</span>
+      <span style={{ fontSize: '11px', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+    </div>
+  );
+
+  const hrPill  = { bg: '#FAEEDA', text: '#92400E' };
+  const panPill = { bg: '#E1F5EE', text: '#065F46' };
+
+  // ── Normalised badge ───────────────────────────────────────────────────────
+  const badgeMap: Record<string, { label: string; bg: string; color: string }> = {
+    Pending:        { label: 'Pending',        bg: '#EDE9FE', color: '#5B21B6' },
+    'Panel Assigned': { label: 'Panel Assigned', bg: '#EFF6FF', color: '#1D4ED8' },
+    'Panel Reviewed': { label: 'Panel Reviewed', bg: '#FEF3C7', color: '#92400E' },
+    Accepted:       { label: 'Accepted',       bg: '#D1FAE5', color: '#065F46' },
+    Rejected:       { label: 'Rejected',       bg: '#FEE2E2', color: '#991B1B' },
+  };
+  const badge = badgeMap[status] || { label: status, bg: '#F3F4F6', color: '#374151' };
+
   return (
-    <StageShell title="Resume Review" status={status} isLocked={false}>
+    <div style={{
+      borderRadius: '12px',
+      border: `1.5px solid ${['Pending','Panel Assigned','Panel Reviewed'].includes(status) ? '#7C3AED' : '#E5E7EB'}`,
+      boxShadow: ['Pending','Panel Assigned','Panel Reviewed'].includes(status) ? '0 2px 10px rgba(124,58,237,0.08)' : 'none',
+      background: 'white',
+      overflow: 'hidden',
+    }}>
 
-      {/* ── Panel assignment info (once assigned) ── */}
-      {assignedPanel && (
-        <div style={{ ...iBox, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <p style={lbl}>👤 Assigned Panel Reviewer</p>
-          <p style={{ ...saved, color: '#1D4ED8', fontWeight: '600' }}>{panelName || assignedPanel}</p>
-          <UpdatedByBadge history={history} stage="Resume Review" actions={['assign-panel']} />
-        </div>
-      )}
+      {/* ── Card header ── */}
+      <div style={{
+        padding: '13px 16px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        borderBottom: '1px solid #F3F4F6',
+      }}>
+        <h3 style={{ fontWeight: 'bold', fontSize: '15px', margin: 0 }}>Resume Review</h3>
+        <span style={{
+          fontSize: '11px', fontWeight: '700', padding: '3px 10px',
+          borderRadius: '999px', background: badge.bg, color: badge.color,
+        }}>{badge.label}</span>
+      </div>
 
-      {/* ── Panel feedback display (once submitted) ── */}
-      {panelFeedback && (
-        <div style={{
-          ...iBox,
-          background: panelDecision === 'reject' ? '#FFF8F8' : '#F6FEF9',
-          border: `1px solid ${panelDecision === 'reject' ? '#FECACA' : '#86EFAC'}`,
-          display: 'flex', flexDirection: 'column', gap: '6px'
-        }}>
-          <p style={lbl}>💬 Panel Feedback</p>
-          <p style={{ ...saved, color: panelDecision === 'reject' ? '#DC2626' : '#065F46' }}>{panelFeedback}</p>
-          <p style={{ fontSize: '11px', fontWeight: '700', color: panelDecision === 'reject' ? '#DC2626' : '#059669' }}>
-            Panel Decision: {panelDecision === 'reject' ? '✕ Reject' : '✓ Accept'}
-          </p>
-          <UpdatedByBadge history={history} stage="Resume Review" actions={['panel-accept', 'panel-reject']} />
-        </div>
-      )}
+      {/* ── Timeline body ── */}
+      <div style={{ padding: '10px 16px 4px' }}>
 
-      {/* ── Final result (Accepted / Rejected) ── */}
-      {isDone && (
-        <div style={{
-          ...iBox,
-          background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9',
-          border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#86EFAC'}`,
-          display: 'flex', flexDirection: 'column', gap: '8px'
-        }}>
-          <p style={lbl}>📋 Review Details</p>
-          <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#374151' }}>
-            {candidate.resumeFeedback || 'No feedback provided.'}
-          </p>
-          <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
-        </div>
-      )}
-
-      {/* ── HR: Pending — Two options ── */}
-      {isHR && status === 'Pending' && (
-        <>
-          {/* Option A: Assign Panel */}
-          <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
-            <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' }}>Option A — Assign Panel to Review</p>
-            <p style={{ fontSize: '12px', color: '#6B7280', marginBottom: '10px' }}>
-              Assign a panel member to review the resume first, then you make the final call.
-            </p>
-            <select
-              value={panelUid}
-              onChange={e => { setPanelUid(e.target.value); if (e.target.value) setErr(''); }}
-              style={{ width: '100%', borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px 12px', fontSize: '13px', marginBottom: '10px', background: 'white' }}
-            >
-              <option value="">— Select Panel Member —</option>
-              {panelUsers.map(p => (
-                <option key={p.uid} value={p.uid}>
-                  {p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}
-                </option>
-              ))}
-            </select>
-            {err && !feedback && <p style={errS}><AlertCircle className="h-3 w-3" />{err}</p>}
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button onClick={handleAssign} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>
-                👤 Assign Panel
-              </Button>
-            </div>
+        {/* ════════════════════════════════════════════
+            STEP 1 — HR: review info + write feedback + assign panel
+            ════════════════════════════════════════════ */}
+        <div style={timelineRow}>
+          <div style={spineCol}>
+            <div style={dotStyle(step1Done, !step1Done, '#F59E0B')} />
+            <div style={vline} />
           </div>
+          <div style={bodyCol}>
+            {whoLabel('HR', hrPill, step1Done ? 'Step 1 — done' : 'Step 1 — active')}
 
-          {/* Divider */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <hr style={{ flex: 1, borderColor: '#E5E7EB' }} />
-            <span style={{ fontSize: '12px', color: '#9CA3AF', fontWeight: '600' }}>OR</span>
-            <hr style={{ flex: 1, borderColor: '#E5E7EB' }} />
-          </div>
+            {/* ── Step 1 done: show saved info ── */}
+            {step1Done && (
+              <div style={{
+                background: '#F9FAFB', borderRadius: '8px',
+                padding: '10px 12px', border: '1px solid #E5E7EB',
+                display: 'flex', flexDirection: 'column', gap: '4px',
+              }}>
+                <p style={{ fontSize: '13px', fontWeight: '600', color: '#374151', margin: 0 }}>
+                  Resume reviewed — panel assigned
+                </p>
+                {hrFeedback && (
+                  <p style={{ fontSize: '12px', color: '#6B7280', margin: 0 }}>"{hrFeedback}"</p>
+                )}
+                <p style={{ fontSize: '11px', color: '#9CA3AF', margin: 0 }}>
+                  Assigned → <strong style={{ color: '#1D4ED8' }}>{panelName || assignedPanel}</strong>
+                </p>
+                <UpdatedByBadge history={history} stage="Resume Review" actions={['assign-panel']} />
+              </div>
+            )}
 
-          {/* Option B: HR reviews directly */}
-          <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
-            <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' }}>Option B — Review Directly</p>
-            <p style={{ fontSize: '12px', color: '#6B7280', marginBottom: '10px' }}>
-              Review the resume yourself and accept or reject immediately.
-            </p>
-            <Textarea
-              placeholder="Enter resume review feedback (mandatory)…"
-              value={feedback}
-              onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
-              style={{ resize: 'vertical', minHeight: '80px' }}
-            />
-            {err && feedback !== undefined && !panelUid && <p style={errS}><AlertCircle className="h-3 w-3" />{err}</p>}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
-              <Button variant="destructive" onClick={() => handleAct('reject')}>✕ Reject</Button>
-              <Button variant="default"     onClick={() => handleAct('accept')}>✓ Move to L1</Button>
-            </div>
-          </div>
-        </>
-      )}
+            {/* ── Step 1 active (HR, Pending): show candidate info + form ── */}
+            {isHR && status === 'Pending' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
 
-      {/* ── HR: Waiting for panel feedback ── */}
-      {isHR && status === 'Panel Assigned' && (
-        <ReadOnlyNote msg="Waiting for the assigned panel member to review the resume and submit feedback." />
-      )}
+                {/* Candidate quick info */}
+                <div style={{
+                  background: '#F0F9FF', borderRadius: '10px',
+                  padding: '12px 14px', border: '1px solid #BAE6FD',
+                }}>
+                  <p style={{ fontWeight: '700', fontSize: '12px', color: '#0369A1', marginBottom: '8px' }}>
+                    Candidate Overview
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    {([
+                      ['Experience',    `${(candidate as any).experience || '—'} Years`],
+                      ['Notice Period', (candidate as any).noticePeriod  || '—'],
+                      ['Current CTC',  (candidate as any).currentCtc    || '—'],
+                      ['Expected CTC', (candidate as any).expectedCtc   || '—'],
+                      ['Location',     (candidate as any).currentLocation || (candidate as any).candidateLocation || '—'],
+                      ['Onsite',       (candidate as any).isComfortableOnsite || '—'],
+                    ] as [string, string][]).map(([label, value]) => (
+                      <div key={label}>
+                        <p style={{ fontSize: '11px', color: '#6B7280', margin: 0 }}>{label}</p>
+                        <p style={{ fontSize: '13px', fontWeight: '600', color: '#111827', margin: 0 }}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
-      {/* ── HR: Panel reviewed — make final call ── */}
-      {isHR && status === 'Panel Reviewed' && (
-        <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
-          <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '10px' }}>
-            Panel has reviewed the resume. Make your final decision:
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-            <Button variant="destructive" onClick={() => onAction('reject', {})}>✕ Reject</Button>
-            <Button variant="default"     onClick={() => onAction('accept', {})}>✓ Move to L1</Button>
+                {/* HR Feedback textarea */}
+                <div>
+                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>
+                    HR Feedback <span style={{ color: '#DC2626' }}>*</span>
+                  </p>
+                  <Textarea
+                    placeholder="Write your resume review notes…"
+                    value={feedback}
+                    onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
+                    style={{ resize: 'vertical', minHeight: '80px' }}
+                  />
+                </div>
+
+                {/* Panel selector */}
+                <div>
+                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>
+                    Assign Panel Member <span style={{ color: '#DC2626' }}>*</span>
+                  </p>
+                  <select
+                    value={panelUid}
+                    onChange={e => { setPanelUid(e.target.value); setErr(''); }}
+                    style={{
+                      width: '100%', borderRadius: '8px',
+                      border: '1px solid #E5E7EB', padding: '9px 12px',
+                      fontSize: '13px', background: 'white',
+                    }}
+                  >
+                    <option value="">— Select panel member —</option>
+                    {panelUsers.map(p => (
+                      <option key={p.uid} value={p.uid}>
+                        {p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {err && (
+                  <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertCircle className="h-3 w-3" />{err}
+                  </p>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                  <Button variant="destructive" onClick={handleHRReject}>✕ Reject</Button>
+                  <Button onClick={handleAssign} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>
+                    Assign to Panel →
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Step 1 visible but not actionable for non-HR ── */}
+            {!isHR && !step1Done && (
+              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for HR to review and assign panel.</p>
+            )}
           </div>
         </div>
-      )}
 
-      {/* ── Panel: submit feedback ── */}
-      {isAssignedPanel && status === 'Panel Assigned' && (
-        <div style={{ background: '#F0FDF4', borderRadius: '10px', padding: '14px', border: '1px solid #86EFAC' }}>
-          <p style={{ fontWeight: 'bold', fontSize: '13px', color: '#065F46', marginBottom: '4px' }}>
-            Submit Resume Review Feedback
-          </p>
-          <Textarea
-            placeholder="Enter your resume review feedback (mandatory)…"
-            value={feedback}
-            onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
-            style={{ resize: 'vertical', minHeight: '90px' }}
-          />
-          {err && <p style={errS}><AlertCircle className="h-3 w-3" />{err}</p>}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
-            <Button variant="destructive" onClick={() => handlePanelSubmit('panel-reject')}>✕ Reject</Button>
-            <Button variant="default" onClick={() => handlePanelSubmit('panel-accept')}
-              style={{ background: '#059669', color: 'white' }}>✓ Accept Resume</Button>
+        {/* ════════════════════════════════════════════
+            STEP 2 — Panel: review resume + add feedback + accept/reject
+            ════════════════════════════════════════════ */}
+        <div style={timelineRow}>
+          <div style={spineCol}>
+            <div style={dotStyle(step2Done, status === 'Panel Assigned', '#2563EB')} />
+            <div style={vline} />
+          </div>
+          <div style={bodyCol}>
+            {whoLabel('Panel', panPill,
+              step2Done
+                ? 'Step 2 — done'
+                : status === 'Panel Assigned'
+                  ? 'Step 2 — active'
+                  : 'Step 2 — waiting',
+            )}
+
+            {/* ── Panel feedback saved ── */}
+            {step2Done && (
+              <div style={{
+                background: panelDecision === 'reject' ? '#FFF8F8' : '#F6FEF9',
+                border: `1px solid ${panelDecision === 'reject' ? '#FECACA' : '#86EFAC'}`,
+                borderRadius: '8px', padding: '10px 12px',
+                display: 'flex', flexDirection: 'column', gap: '4px',
+              }}>
+                <p style={{ fontSize: '12px', color: panelDecision === 'reject' ? '#DC2626' : '#065F46', margin: 0 }}>
+                  "{panelFeedback}"
+                </p>
+                <p style={{
+                  fontSize: '11px', fontWeight: '700', margin: 0,
+                  color: panelDecision === 'reject' ? '#DC2626' : '#059669',
+                }}>
+                  {panelDecision === 'reject' ? '✕ Panel: Reject' : '✓ Panel: Accept'}
+                </p>
+                <UpdatedByBadge history={history} stage="Resume Review" actions={['panel-accept', 'panel-reject']} />
+              </div>
+            )}
+
+            {/* ── Panel member: submit feedback ── */}
+            {isAssignedPanel && status === 'Panel Assigned' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <Textarea
+                  placeholder="Enter your resume review feedback…"
+                  value={feedback}
+                  onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
+                  style={{ resize: 'vertical', minHeight: '90px' }}
+                />
+                {err && (
+                  <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertCircle className="h-3 w-3" />{err}
+                  </p>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                  <Button variant="destructive" onClick={() => handlePanelSubmit('panel-reject')}>✕ Reject</Button>
+                  <Button onClick={() => handlePanelSubmit('panel-accept')}
+                    style={{ background: '#059669', color: 'white' }}>
+                    ✓ Accept Resume
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* ── HR waiting for panel ── */}
+            {isHR && status === 'Panel Assigned' && (
+              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>
+                Waiting for <strong style={{ color: '#374151' }}>{panelName}</strong> to submit feedback.
+              </p>
+            )}
+
+            {/* ── Non-assigned panel ── */}
+            {isPanel && !isAssignedPanel && status === 'Panel Assigned' && (
+              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>You are not assigned to this resume.</p>
+            )}
+
+            {/* ── Locked (not yet at this step) ── */}
+            {status === 'Pending' && (
+              <p style={{ fontSize: '12px', color: '#D1D5DB' }}>Waiting for HR to assign a panel member.</p>
+            )}
           </div>
         </div>
-      )}
 
-      {/* ── Panel: already submitted ── */}
-      {isAssignedPanel && (status === 'Panel Reviewed' || isDone) && (
-        <ReadOnlyNote msg="You have submitted your feedback. Waiting for HR's final decision." />
-      )}
+        {/* ════════════════════════════════════════════
+            STEP 3 — HR: final call — Reject or Move to L1
+            ════════════════════════════════════════════ */}
+        <div style={timelineRow}>
+          <div style={spineCol}>
+            <div style={dotStyle(isDone, step3Active, '#F59E0B')} />
+          </div>
+          <div style={{ ...bodyCol, paddingBottom: '6px' }}>
+            {whoLabel('HR', hrPill,
+              isDone
+                ? 'Step 3 — done'
+                : step3Active
+                  ? 'Step 3 — active'
+                  : 'Step 3 — waiting',
+            )}
 
-      {/* ── Panel: not assigned ── */}
-      {isPanel && !isAssignedPanel && !isDone && (
-        <ReadOnlyNote msg="You are not assigned to review this resume." />
-      )}
+            {/* ── Done: show final result ── */}
+            {isDone && (
+              <div style={{
+                background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9',
+                border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#86EFAC'}`,
+                borderRadius: '8px', padding: '10px 12px',
+                display: 'flex', flexDirection: 'column', gap: '4px',
+              }}>
+                <p style={{
+                  fontSize: '12px', fontWeight: '700', margin: 0,
+                  color: status === 'Rejected' ? '#DC2626' : '#059669',
+                }}>
+                  {status === 'Rejected' ? '✕ Resume Rejected' : '✓ Moved to L1 Interview'}
+                </p>
+                <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
+              </div>
+            )}
 
-      {/* ── Agency / Admin ── */}
-      {(role === 'admin' || role === 'agency') && (
-        <ReadOnlyNote msg="Only HR and assigned panel can manage Resume Review." />
-      )}
-    </StageShell>
+            {/* ── HR: panel reviewed — make final call ── */}
+            {isHR && step3Active && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <p style={{ fontSize: '12px', color: '#6B7280' }}>
+                  Panel has reviewed the resume.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                  <Button variant="destructive" onClick={() => onAction('reject', {})}>
+                    ✕ Reject
+                  </Button>
+                  <Button onClick={() => onAction('accept', {})}
+                    style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>
+                    ✓ Move to L1
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Not HR, step 3 not yet reached ── */}
+            {!isHR && !isDone && (
+              <p style={{ fontSize: '12px', color: '#D1D5DB' }}>
+                {step3Active ? 'Waiting for HR to make final call.' : 'Pending previous steps.'}
+              </p>
+            )}
+
+            {/* ── Admin / Agency ── */}
+            {(role === 'admin' || role === 'agency') && step3Active && (
+              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Only HR can make the final call.</p>
+            )}
+          </div>
+        </div>
+
+      </div>
+    </div>
   );
 };
-
 // ─── STAGE 2 & 3: L1 / L2 INTERVIEW ─────────────────────────────────────────
 const InterviewStageCard: React.FC<{
   candidate: Candidate; role: UserRole | null; user: any;
@@ -1037,6 +1242,8 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             resumePanelEmail:      payload.panelEmail,
             resumeAssignedByEmail: actorEmail,
             resumeAssignedByUid:   user.uid,
+            resumeFeedback:        payload.feedback || '',
+            resumeHRFeedback:      payload.feedback || '',
           };
           historyData.status = 'Panel Assigned';
         } else if (action === 'panel-accept') {
@@ -1254,9 +1461,19 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
     if (stage === 'Resume Review') {
       if (action === 'assign-panel') {
         const panelEmail = payload.panelEmail || fresh.resumePanelEmail || '';
-        enqueue(panelEmail,    'hr', 'panel_assigned');
-        enqueue(actorEmail,    'hr', 'panel_assigned');
-      } else if (action === 'panel-accept' || action === 'panel-reject') {
+        const hrFeedback = payload.feedback   || fresh.resumeHRFeedback || '';
+        const queueWithFeedback = { ...baseParams, interviewFeedback: hrFeedback };
+        const enqueueWithFeedback = (toEmail: string | null | undefined, senderRole: string, emailType: string) => {
+          const raw = toEmail?.trim();
+          if (!raw || !raw.includes('@')) return;
+          const key = raw.toLowerCase();
+          if (queue.has(key)) return;
+          queue.set(key, { ...queueWithFeedback, toEmail: raw, senderRole, emailType });
+        };
+        enqueueWithFeedback(panelEmail, 'hr', 'panel_assigned');
+        enqueueWithFeedback(actorEmail, 'hr', 'panel_assigned');
+      }
+       else if (action === 'panel-accept' || action === 'panel-reject') {
         const hrEmail  = fresh.resumeAssignedByEmail || uploaderEmail;
         const emailType = action === 'panel-accept' ? 'resume_accepted' : 'resume_rejected';
         enqueue(hrEmail,    'panel', emailType);
@@ -1378,7 +1595,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '30% 70%', gap: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '35% 70%', gap: '24px' }}>
 
         {/* ── LEFT COLUMN ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -1390,9 +1607,6 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             <p style={{ color: 'gray', fontSize: '14px', margin: '0 0 10px' }}>{candidate.candidateDesignation}</p>
             <span style={finalBadgeStyle}>{finalStatus}</span>
           </div>
-
-          <AIMatchCard candidate={candidate} />
-
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center' }}>
             {candidate.resumeFile?.data ? (
               <Button variant="outline" onClick={() => {
@@ -1414,6 +1628,37 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
               <p style={{ color: 'gray', fontSize: '13px' }}>No resume uploaded</p>
             )}
           </div>
+          <AIMatchCard candidate={candidate} />
+          <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
+  <h2 style={{ fontWeight: 'bold', marginBottom: '16px' }}>Professional Background</h2>
+
+  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+    {[
+      ['Full Name',      candidate.candidateName],
+      ['Email',          candidate.candidateEmail],
+      ['Phone',          candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'],
+      ['Experience',     candidate.experience ? `${candidate.experience} Years` : '—'],
+      ['Current CTC',    candidate.currentCtc   || '—'],
+      ['Expected CTC',   candidate.expectedCtc  || '—'],
+      ['Notice Period',  candidate.noticePeriod  || '—'],
+      ['Onsite Comfort', candidate.isComfortableOnsite || '—'],
+    ].map(([label, value]) => (
+      <div key={label as string}>
+        
+        {/* HEADER → BOLD */}
+        <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' }}>
+          {label}
+        </p>
+
+        {/* VALUE → SMALL */}
+        <p style={{ color: 'gray', fontSize: '12px', wordBreak: 'break-all' }}>
+          {value as string}
+        </p>
+
+      </div>
+    ))}
+  </div>
+</div>
         </div>
 
         {/* ── RIGHT COLUMN ── */}
@@ -1448,26 +1693,7 @@ export default function CandidatePage({ params }: { params: { candidateId: strin
             </div>
           </div>
 
-          <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
-            <h2 style={{ fontWeight: 'bold', marginBottom: '16px' }}>Professional Background</h2>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              {[
-                ['Full Name',      candidate.candidateName],
-                ['Email',          candidate.candidateEmail],
-                ['Phone',          candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'],
-                ['Experience',     candidate.experience ? `${candidate.experience} Years` : '—'],
-                ['Current CTC',    candidate.currentCtc   || '—'],
-                ['Expected CTC',   candidate.expectedCtc  || '—'],
-                ['Notice Period',  candidate.noticePeriod  || '—'],
-                ['Onsite Comfort', candidate.isComfortableOnsite || '—'],
-              ].map(([label, value]) => (
-                <div key={label as string}>
-                  <p style={{ color: 'gray', fontSize: '12px', marginBottom: '2px' }}>{label}</p>
-                  <p style={{ fontWeight: 'bold', wordBreak: 'break-all' }}>{value as string}</p>
-                </div>
-              ))}
-            </div>
-          </div>
+         
         </div>
       </div>
     </div>

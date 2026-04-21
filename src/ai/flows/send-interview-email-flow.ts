@@ -259,14 +259,17 @@ Best regards,
 The SmartHire HR Team`;
 
 
-case 'panel_assigned':
+case 'panel_assigned': {
+  const hrFeedbackSection = interviewFeedback
+    ? `\nHR Notes :\n  ${interviewFeedback}\n`
+    : '';
   return `Hi,
 
 This is an update for the following candidate.
 
 UPDATE : 👤 You have been assigned as the interviewer – ${stage}
 ${candidateBlock}
-${interviewDate ? `Date        : ${interviewDate}\n` : ''}${interviewTime ? `Time Slot   : ${interviewTime}\n` : ''}${schedNotesSection}${handledBy}
+${interviewDate ? `Date        : ${interviewDate}\n` : ''}${interviewTime ? `Time Slot   : ${interviewTime}\n` : ''}${hrFeedbackSection}${schedNotesSection}${handledBy}
 
 ${stage === 'Resume Review'
 ? 'Please review the candidate\'s resume and submit your feedback.'
@@ -274,6 +277,7 @@ ${stage === 'Resume Review'
 
 Best regards,
 The SmartHire Team`;
+}
 
     default:
       return `Hi,
