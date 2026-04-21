@@ -258,18 +258,19 @@ We appreciate all the effort invested in this process.
 Best regards,
 The SmartHire HR Team`;
 
-    case 'panel_assigned':
-      return `Hi,
+
+case 'panel_assigned':
+  return `Hi,
 
 This is an update for the following candidate.
 
 UPDATE : 👤 You have been assigned as the interviewer – ${stage}
 ${candidateBlock}
-Date        : ${interviewDate}
-Time Slot   : ${interviewTime}
-${schedNotesSection}${handledBy}
+${interviewDate ? `Date        : ${interviewDate}\n` : ''}${interviewTime ? `Time Slot   : ${interviewTime}\n` : ''}${schedNotesSection}${handledBy}
 
-Please be available at the scheduled time.
+${stage === 'Resume Review'
+? 'Please review the candidate\'s resume and submit your feedback.'
+: 'Please be available at the scheduled time.'}
 
 Best regards,
 The SmartHire Team`;
