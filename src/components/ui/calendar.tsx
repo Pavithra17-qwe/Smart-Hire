@@ -53,29 +53,52 @@ function Calendar({
         ...classNames,
       }}
       components={{
-        IconLeft: () => <ChevronLeft className="h-4 w-4" />,
-        IconRight: () => <ChevronRight className="h-4 w-4" />,
-        Dropdown: ({ value, onChange, children }: DropdownProps) => {
-          const options = React.Children.toArray(
-            children
-          ) as React.ReactElement<React.HTMLProps<HTMLOptionElement>>[];
-          const selected = options.find((child) => child.props.value === value);
+        Nav: ({ previousMonth, nextMonth, onPreviousClick, onNextClick }) => (
+          <div className="flex items-center justify-between w-full px-2">
+            <button
+              onClick={onPreviousClick}
+              disabled={!previousMonth}
+              className="h-7 w-7 flex items-center justify-center opacity-50 hover:opacity-100"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+    
+            <button
+              onClick={onNextClick}
+              disabled={!nextMonth}
+              className="h-7 w-7 flex items-center justify-center opacity-50 hover:opacity-100"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        ),
+    
+        Dropdown: ({ value, onChange, children }: DropdownProps & { children?: React.ReactNode }) => {
+          const options = React.Children.toArray(children) as React.ReactElement<
+            React.HTMLProps<HTMLOptionElement>
+          >[];
+        
+          const selected = options.find(
+            (child) => child.props.value?.toString() === value?.toString()
+          );
+        
           const handleChange = (newValue: string) => {
             const changeEvent = {
               target: { value: newValue },
             } as React.ChangeEvent<HTMLSelectElement>;
             onChange?.(changeEvent);
           };
+        
           return (
             <Select
-              value={value?.toString()}
+              value={value?.toString() ?? ""}
               onValueChange={(newValue) => handleChange(newValue)}
             >
               <SelectTrigger className="h-8 text-xs font-medium">
                 <SelectValue>{selected?.props?.children}</SelectValue>
               </SelectTrigger>
+        
               <SelectContent className="max-h-60">
-                <SelectItem value={value?.toString()} className="hidden">{selected?.props?.children}</SelectItem>
                 {options.map((option) => (
                   <SelectItem
                     key={option.props.value?.toString()}

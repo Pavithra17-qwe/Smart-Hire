@@ -17,13 +17,12 @@ import { Mail, Lock, Eye, EyeOff, Loader2, ArrowLeft, Briefcase } from "lucide-r
 // Your app's base URL — Firebase will append ?oobCode=... to this
 // and redirect the user here after they click the email link.
 // ─────────────────────────────────────────────────────────────────────────────
-const APP_URL = "https://9000-firebase-smarthireproject-1773939832860.cluster-cz5nqyh5nreq6ua6gaqd7okl7o.cloudworkstations.dev";
-
+const APP_URL = "https://smart-hire-six.vercel.app";
 const roleAreaMap: { [key: string]: string } = {
-  admin:  "admin",
+  admin: "admin",
   agency: "agency",
-  hr:     "hr",
-  panel:  "panel",
+  hr: "hr",
+  panel: "panel",
 };
 
 function LoginForm() {
@@ -78,7 +77,8 @@ function LoginForm() {
 
       toast({ title: "Success", description: "Login successful. Welcome to SmartHire." });
 
-      const role = userData.role;
+      const role = userData.role?.toLowerCase();
+
       if (role && roleAreaMap[role]) {
         router.push(`/${roleAreaMap[role]}/dashboard`);
       } else {
@@ -112,9 +112,8 @@ function LoginForm() {
     setIsSendingReset(true);
     try {
       await sendPasswordResetEmail(auth, forgotEmail, {
-        url: `https://recruitement-5778d.firebaseapp.com/login`,
-            });
-  
+        url: `https://smart-hire-six.vercel.app/login`,
+      });
       toast({
         title: "Reset link sent!",
         description: `Check your inbox at ${forgotEmail}. Click the link to set your new password.`,
@@ -240,9 +239,9 @@ function LoginForm() {
       <div className="hidden lg:flex flex-1 relative bg-gradient-to-br from-[#6C63FF] to-[#7B72FF] items-center justify-center p-12">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(255,255,255,0.15),_transparent)] pointer-events-none" />
         <div className="relative z-10 max-w-lg text-center space-y-10 flex flex-col items-center">
-          <div className="relative w-full max-w-[420px] aspect-square rounded-xl shadow-2xl overflow-hidden bg-white/10 backdrop-blur-sm border border-white/20">
-            <Image src="/ai-recruitment.png" alt="AI Recruitment Illustration" fill className="object-contain p-8" priority />
-          </div>
+        <div className="relative w-full max-w-[420px] aspect-square rounded-xl shadow-2xl overflow-hidden bg-white/10 backdrop-blur-sm border border-white/20">
+  <Image src="/ai-recruitment.png" alt="AI Recruitment Illustration" fill className="object-contain p-8" priority />
+</div>
           <div className="space-y-4 px-6 text-white text-center">
             <h2 className="text-4xl font-bold font-headline leading-tight tracking-tight text-white">
               Smart Hiring,<br />Powered by AI

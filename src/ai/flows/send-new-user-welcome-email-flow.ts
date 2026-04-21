@@ -64,7 +64,7 @@ const sendNewUserWelcomeEmailFlow = ai.defineFlow(
       return { success: false };
     }
 
-    const emailBody = `Welcome to SmartHire!\n\nYour user account has been created successfully.\n\nRole: ${input.role}\n\nLogin Details:\nEmail: ${input.email}\nTemporary Password: ${input.tempPassword}\n\nLogin to SmartHire:\nhttps://smart-hire-swart.vercel.app/\n\nPlease log in using the above credentials and change your password after your first login.\n\nBest regards,\nThe SmartHire Team`;
+    const emailBody = `Welcome to SmartHire!\n\nYour user account has been created successfully.\n\nRole: ${input.role}\n\nLogin Details:\nEmail: ${input.email}\nTemporary Password: ${input.tempPassword}\n\nLogin to SmartHire:\nhttps://smart-hire-six.vercel.app/login\n\nPlease log in using the above credentials and change your password after your first login.\n\nBest regards,\nThe SmartHire Team`;
 
     try {
       const transporter = nodemailer.createTransport({

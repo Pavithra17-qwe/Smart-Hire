@@ -58,7 +58,7 @@
  * ============================================================
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation';
 import {
   doc, onSnapshot, updateDoc, addDoc, getDoc, getDocs,
@@ -1135,8 +1135,8 @@ const OfferStageCard: React.FC<{
 };
 
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
-export default function CandidatePage({ params }: { params: { candidateId: string } }) {
-  const { candidateId } = params;
+export default function CandidatePage({ params }: { params: Promise<{ candidateId: string }> }) {
+  const { candidateId } = use(params);  // ← use() unwraps the Promise without async
   const [candidate, setCandidate]   = useState<Candidate | null>(null);
   const [loading, setLoading]       = useState(true);
   const [panelUsers, setPanelUsers] = useState<PanelUser[]>([]);
