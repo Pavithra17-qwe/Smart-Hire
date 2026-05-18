@@ -3,7 +3,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 @layer base {
   :root {
     --background: 240 5% 96%; /* light grey */

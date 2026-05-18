@@ -90,7 +90,8 @@ async function computeMatchScore(
 
   } catch (err) {
     console.error("❌ AI scoring failed:", err);
-    return { matchScore: 0, matchSummary: "AI scoring failed. Please check the JD or try again." };
+    return { matchScore: 0, matchSummary:
+      "AI scoring could not be completed because the resume or JD content exceeded the supported size limit." };
   }
 }
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────

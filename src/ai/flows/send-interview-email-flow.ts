@@ -1,24 +1,9 @@
 'use server';
-/**
- * @fileOverview Sends interview/offer emails via Nodemailer SMTP.
- *
- * EMAIL THREADING:
- *   - First email for a candidate saves its messageId to Firestore
- *     as `emailThreadMessageId` on the candidate document.
- *   - All subsequent emails pass that messageId in `In-Reply-To`
- *     and `References` headers so they land in the same thread.
- *   - Subject is always "Candidate Update – <name> (<role>)" so
- *     email clients recognise it as the same conversation.
- *
- * Two separate feedback fields in email:
- *   schedulingNotes   — entered when proposing interview date/time
- *   interviewFeedback — entered after interview when selecting/rejecting
- */
 
 import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
-import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
+import { adminDb } from '@/lib/firebaseAdmin';        // ✅ Admin SDK only
+import { FieldValue } from 'firebase-admin/firestore'; // ✅ Admin SDK only
 import nodemailer from 'nodemailer';
 
 // ─────────────────────────────────────────────
@@ -53,13 +38,9 @@ const SendInterviewEmailInputSchema = z.object({
     'panel_feedback_submitted',
   ]).optional(),
 
-  // ── THREADING FIELDS ──────────────────────────────────────────────────────
-  // candidateId   : Firestore document ID — needed to save the first messageId
-  // threadMessageId: The messageId of the FIRST email ever sent for this
-  //                  candidate. Pass it in every subsequent send so nodemailer
-  //                  adds In-Reply-To / References headers and clients thread them.
   candidateId:      z.string().optional().default(''),
   threadMessageId:  z.string().optional().default(''),
+interviewLink: z.string().optional().default(''),
 });
 
 export type SendInterviewEmailInput = z.infer<typeof SendInterviewEmailInputSchema>;
@@ -82,42 +63,26 @@ function buildFromField(senderRole?: string): string {
   return `"${displayName}" <${smtpUser}>`;
 }
 
-/**
- * Subject is ALWAYS the same string for a given candidate so that
- * email clients (Gmail, Outlook, Apple Mail) keep all updates in
- * one conversation thread when combined with In-Reply-To headers.
- */
 function getSubject(candidateName: string, jobRole: string): string {
   return `Candidate Update – ${candidateName} (${jobRole})`;
 }
 
-/**
- * Returns a human-readable label for the current action so the email
- * body clearly tells the reader what just happened.
- */
-function getActionLabel(emailType: string | undefined, stage: string): string {
-  switch (emailType) {
-    case 'resume_accepted':          return '✅ Resume Accepted';
-    case 'resume_rejected':          return '❌ Resume Rejected';
-    case 'interview_scheduled':      return `📅 Interview Scheduled – ${stage}`;
-    case 'candidate_selected':       return `✅ Candidate Selected – ${stage}`;
-    case 'candidate_rejected':       return `❌ Candidate Rejected – ${stage}`;
-    case 'offer_released':           return '📨 Offer Released';
-    case 'offer_accepted':           return '🎉 Offer Accepted';
-    case 'offer_rejected':           return '❌ Offer Rejected';
-    case 'panel_assigned':           return `👤 Panel Assigned – ${stage}`;
-    case 'panel_feedback_submitted': return `💬 Panel Feedback Submitted – ${stage}`;
-    default:                         return `🔔 Status Update – ${stage}`;
-  }
-}
-
 function getEmailBody(input: SendInterviewEmailInput): string {
   const {
-    candidateName, jobRole, experience, location,
-    interviewerName, interviewerEmail,
-    interviewDate, interviewTime,
-    schedulingNotes, interviewFeedback,
-    emailType, senderRole, stage,
+    candidateName,
+    jobRole,
+    experience,
+    location,
+    interviewerName,
+    interviewerEmail,
+    interviewDate,
+    interviewTime,
+    schedulingNotes,
+    interviewFeedback,
+    emailType,
+    senderRole,
+    stage,
+    interviewLink,
   } = input;
 
   const roleLabel = senderRole === 'hr' ? 'HR' : 'Panel';
@@ -136,7 +101,6 @@ Handled by :
     ? `\nInterview Feedback :\n  ${interviewFeedback}\n`
     : '';
 
-  // Shared candidate block
   const candidateBlock = `
 Candidate   : ${candidateName}
 Job Role    : ${jobRole}
@@ -172,21 +136,59 @@ Thank you for your effort.
 Best regards,
 The SmartHire Team`;
 
-    case 'interview_scheduled':
-      return `Hi,
+case 'interview_scheduled': {
+  const isAIInterview =
+    input.schedulingNotes?.includes('AI interview link:') ||
+    input.schedulingNotes?.includes('Interview link:');
 
-This is an update for the following candidate.
+  if (isAIInterview) {
+    // Extract just the URL from schedulingNotes
+    // schedulingNotes format: "AI interview link: https://..."
+    const urlMatch = input.schedulingNotes?.match(/https?:\/\/[^\s]+/);
+    const interviewUrl = urlMatch ? urlMatch[0] : input.schedulingNotes || '';
 
-UPDATE : 📅 Interview Scheduled – ${stage}
-${candidateBlock}
-Date        : ${interviewDate}
-Time Slot   : ${interviewTime}
-${schedNotesSection}${handledBy}
+    return `Hi ${candidateName},
 
-Please ensure the candidate is informed and prepared.
+Congratulations! You have been shortlisted for the ${jobRole} position.
+
+Please complete your AI-powered video interview using the link below:
+
+${interviewUrl}
+
+IMPORTANT INSTRUCTIONS:
+  • This link is valid for 48 hours only
+  • Enable your CAMERA and MICROPHONE before starting
+  • Find a quiet, well-lit environment
+  • Complete the interview in one sitting — do not switch tabs or close the browser
+  • The interview includes a self-introduction and technical questions
+
+Once submitted, our team will review your responses and get back to you.
+
+Handled by :
+  - Name  : ${interviewerName}
+  - Role  : HR
 
 Best regards,
 The SmartHire Team`;
+  }
+
+  // Normal interview schedule (L2, HR round)
+  return `Hi,
+
+This is to inform you that the ${stage} has been scheduled.
+
+Candidate   : ${candidateName}
+Job Role    : ${jobRole}
+Date        : ${interviewDate}
+Time Slot   : ${interviewTime}
+${schedulingNotes ? `\nNotes :\n  ${schedulingNotes}\n` : ''}
+Handled by :
+  - Name  : ${interviewerName}
+  - Role  : HR
+
+Best regards,
+The SmartHire Team`;
+}
 
     case 'candidate_selected':
       return `Hi,
@@ -258,12 +260,11 @@ We appreciate all the effort invested in this process.
 Best regards,
 The SmartHire HR Team`;
 
-
-case 'panel_assigned': {
-  const hrFeedbackSection = interviewFeedback
-    ? `\nHR Notes :\n  ${interviewFeedback}\n`
-    : '';
-  return `Hi,
+    case 'panel_assigned': {
+      const hrFeedbackSection = interviewFeedback
+        ? `\nHR Notes :\n  ${interviewFeedback}\n`
+        : '';
+      return `Hi,
 
 This is an update for the following candidate.
 
@@ -272,12 +273,12 @@ ${candidateBlock}
 ${interviewDate ? `Date        : ${interviewDate}\n` : ''}${interviewTime ? `Time Slot   : ${interviewTime}\n` : ''}${hrFeedbackSection}${schedNotesSection}${handledBy}
 
 ${stage === 'Resume Review'
-? 'Please review the candidate\'s resume and submit your feedback.'
-: 'Please be available at the scheduled time.'}
+  ? "Please review the candidate's resume and submit your feedback."
+  : 'Please be available at the scheduled time.'}
 
 Best regards,
 The SmartHire Team`;
-}
+    }
 
     default:
       return `Hi,
@@ -315,19 +316,19 @@ const sendInterviewEmailFlow = ai.defineFlow(
       const errorMessage = `Missing required SMTP config: ${missingVars.join(', ')}`;
       console.error(`[SmartHire Email] ERROR: ${errorMessage}`);
       try {
-        await addDoc(collection(db, 'notifications'), {
+        // ✅ Admin SDK
+        await adminDb.collection('notifications').add({
           type:           'Interview Email',
           recipientEmail: input.candidateEmail,
           status:         'Failed',
           error:          errorMessage,
-          sentAt:         serverTimestamp(),
+          sentAt:         FieldValue.serverTimestamp(),
         });
       } catch (_) {}
       return { success: false };
     }
 
     const fromField = buildFromField(input.senderRole);
-    // ── THREADING: subject must be IDENTICAL across all emails for this candidate
     const subject   = getSubject(input.candidateName, input.jobRole);
     const body      = getEmailBody(input);
 
@@ -355,10 +356,6 @@ const sendInterviewEmailFlow = ai.defineFlow(
         mailOptions.replyTo = `"${input.interviewerName}" <${input.interviewerEmail}>`;
       }
 
-      // ── THREADING HEADERS ──────────────────────────────────────────────────
-      // If we already have a threadMessageId (from the first email ever sent
-      // for this candidate), attach it so email clients show this as a reply
-      // in the same conversation, not a new separate email.
       if (input.threadMessageId) {
         mailOptions.inReplyTo  = input.threadMessageId;
         mailOptions.references = input.threadMessageId;
@@ -369,23 +366,20 @@ const sendInterviewEmailFlow = ai.defineFlow(
       const sentMessageId = info.messageId;
       console.log(`[SmartHire Email] SUCCESS - MessageId: ${sentMessageId}`);
 
-      // ── SAVE THREAD MESSAGE ID ─────────────────────────────────────────────
-      // If this is the FIRST email for this candidate (no threadMessageId yet),
-      // save the messageId we just got back to the candidate Firestore document.
-      // Every subsequent email will read this value and use it for threading.
+      // ✅ Admin SDK — save thread message ID
       if (!input.threadMessageId && input.candidateId) {
         try {
-          await updateDoc(doc(db, 'candidates', input.candidateId), {
+          await adminDb.doc(`candidates/${input.candidateId}`).update({
             emailThreadMessageId: sentMessageId,
           });
-          console.log(`[SmartHire Email] Saved emailThreadMessageId to candidate ${input.candidateId}: ${sentMessageId}`);
+          console.log(`[SmartHire Email] Saved emailThreadMessageId to candidate ${input.candidateId}`);
         } catch (saveErr) {
-          // Non-fatal — threading just won't work for subsequent emails for this candidate
           console.error('[SmartHire Email] Could not save emailThreadMessageId:', saveErr);
         }
       }
 
-      const logRef = await addDoc(collection(db, 'notifications'), {
+      // ✅ Admin SDK — log the notification
+      const logRef = await adminDb.collection('notifications').add({
         type:              'Interview Email',
         emailType:         input.emailType       || 'generic',
         stage:             input.stage           || '',
@@ -402,7 +396,7 @@ const sendInterviewEmailFlow = ai.defineFlow(
         threadMessageId:   input.threadMessageId   || '',
         sentMessageId:     sentMessageId,
         status:            'Sent',
-        sentAt:            serverTimestamp(),
+        sentAt:            FieldValue.serverTimestamp(),
         messageId:         sentMessageId,
       });
 
@@ -411,14 +405,15 @@ const sendInterviewEmailFlow = ai.defineFlow(
     } catch (error: any) {
       console.error('[SmartHire Email] FAILED:', error);
       try {
-        await addDoc(collection(db, 'notifications'), {
-          type:          'Interview Email',
-          emailType:     input.emailType || 'generic',
-          candidateName: input.candidateName,
+        // ✅ Admin SDK — log failure
+        await adminDb.collection('notifications').add({
+          type:           'Interview Email',
+          emailType:      input.emailType || 'generic',
+          candidateName:  input.candidateName,
           recipientEmail: input.candidateEmail,
-          status:        'Failed',
-          error:         error.message,
-          sentAt:        serverTimestamp(),
+          status:         'Failed',
+          error:          error.message,
+          sentAt:         FieldValue.serverTimestamp(),
         });
       } catch (_) {}
       return { success: false };

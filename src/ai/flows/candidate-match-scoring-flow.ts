@@ -69,12 +69,13 @@ const candidateMatchScoringFlow = ai.defineFlow(
     let jdDataUri: string | undefined;
     let resumeText: string | undefined;
     let resumeDataUri: string | undefined;
+    const MAX_TEXT_LENGTH = 12000;
 
     // ── JD: plain text path ───────────────────────────────────────────────────
     // This handles both project.jdText AND project.jdFileData with type "manual"
     // Both arrive here via the jdText input field after the evaluation page resolves them
     if (input.jdText && input.jdText.trim().length > 10) {
-      jdText = input.jdText.trim();
+      jdText = input.jdText.trim().slice(0, MAX_TEXT_LENGTH);
       console.log('[Scoring] JD is plain text, length:', jdText.length);
     }
 

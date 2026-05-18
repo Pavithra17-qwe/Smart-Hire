@@ -2,6 +2,7 @@
 
 import { z } from 'genkit';
 import mammoth from 'mammoth';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 
 const CandidateResumeExtractionInputSchema = z.object({
   fileName: z.string(),
@@ -139,15 +140,38 @@ export async function candidateResumeExtraction(
       console.log('DOCX text (first 300):', text.substring(0, 300));
     } else if (input.fileType === 'application/pdf') {
       try {
-        const pdfParse = require('pdf-parse');
-        const result = await pdfParse(buffer);
-        text = result.text;
+        async function extractPDFText(buffer: Buffer) {
+          const loadingTask = pdfjsLib.getDocument({ data: buffer });
+          const pdf = await loadingTask.promise;
+    
+          let text = '';
+    
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+    
+            const strings = content.items.map((item: any) => item.str);
+            text += strings.join(' ') + '\n';
+          }
+    
+          return text;
+        }
+    
+        // ✅ IMPORTANT LINE (YOU MISSED THIS)
+        text = await extractPDFText(buffer);
+        console.log("FULL PDF TEXT:", text);
+        if (!text || text.trim().length < 50) {
+          console.warn("Weak PDF extraction - try better resume");
+          return empty;  // ✅ ADD THIS
+        }
         console.log('PDF text (first 300):', text.substring(0, 300));
+    
       } catch (e) {
         console.error('PDF parse failed:', e);
         text = '';
       }
-    } else {
+    }
+     else {
       text = buffer.toString('utf-8');
     }
 

@@ -74,7 +74,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { Candidate } from '@/types/candidate';
 import { normalizeStatus } from '@/lib/normalizeStatus';
 import { sendInterviewEmail } from '@/ai/flows/send-interview-email-flow';
-
+import { AIInterviewStatusCard } from '@/components/AIInterviewStatus/AIInterviewStatusCard';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type EmailType =
@@ -148,10 +148,6 @@ async function getFreshCandidate(candidateId: string): Promise<Record<string, an
   return null;
 }
 
-/**
- * Sends a single email.
- * Now accepts candidateId and threadMessageId for threading support.
- */
 async function sendEmail(params: {
   toEmail: string;
   candidateName: string;
@@ -167,9 +163,8 @@ async function sendEmail(params: {
   interviewTime: string;
   senderRole: string;
   emailType: string;
-  // ── THREADING ──────────────────────────────────────────────
-  candidateId:     string;   // Firestore candidate doc ID
-  threadMessageId: string;   // messageId of first email — '' if not yet sent
+  candidateId:     string;
+  threadMessageId: string;
 }) {
   const email = params.toEmail?.trim();
   if (!email || !email.includes('@')) {
@@ -198,9 +193,9 @@ async function sendEmail(params: {
       stage:             params.stage,
       senderRole:        params.senderRole as 'panel' | 'hr' | 'system',
       emailType:         params.emailType as EmailType,
-      // ── THREADING ────────────────────────────────────────
-      candidateId:      params.candidateId,
-      threadMessageId:  params.threadMessageId,
+      candidateId:       params.candidateId,
+      threadMessageId:   params.threadMessageId,
+      interviewLink:     '',
     });
     console.log('[sendEmail] ✅ Sent to:', email);
   } catch (err) {
@@ -379,15 +374,10 @@ const ResumeReviewCard: React.FC<{
   const isPanel         = role === 'panel';
   const isAssignedPanel = isPanel && user?.uid === assignedPanel;
 
-  // ── Step states ────────────────────────────────────────────────────────────
-  // Step 1 (HR review + assign): done once panel is assigned or status moved on
-  const step1Done = !!assignedPanel || isDone;
-  // Step 2 (Panel feedback): done once panel submitted
-  const step2Done = !!panelFeedback;
-  // Step 3 (HR final call): active when status === 'Panel Reviewed'
+  const step1Done   = !!assignedPanel || isDone;
+  const step2Done   = !!panelFeedback;
   const step3Active = status === 'Panel Reviewed';
 
-  // ── Handlers ───────────────────────────────────────────────────────────────
   const handleAssign = () => {
     if (!feedback.trim()) { setErr('HR feedback is required.'); return; }
     if (!panelUid)        { setErr('Please select a panel member.'); return; }
@@ -413,50 +403,20 @@ const ResumeReviewCard: React.FC<{
     onAction(decision, { feedback: feedback.trim() });
   };
 
-  // ── Dot color helper ───────────────────────────────────────────────────────
   const dotStyle = (done: boolean, active: boolean, color = '#7C3AED'): React.CSSProperties => ({
-    width: '10px',
-    height: '10px',
-    borderRadius: '50%',
-    flexShrink: 0,
-    marginTop: '2px',
+    width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0, marginTop: '2px',
     background: done ? '#1D9E75' : active ? color : 'transparent',
     border: done ? 'none' : active ? 'none' : '1.5px dashed #B4B2A9',
   });
 
-  const timelineRow: React.CSSProperties = {
-    display: 'flex',
-    gap: 0,
-  };
-
-  const spineCol: React.CSSProperties = {
-    width: '36px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    paddingTop: '2px',
-    flexShrink: 0,
-  };
-
-  const vline: React.CSSProperties = {
-    flex: 1,
-    width: '1.5px',
-    background: '#E5E7EB',
-    margin: '4px 0',
-    minHeight: '16px',
-  };
-
-  const bodyCol: React.CSSProperties = {
-    flex: 1,
-    paddingBottom: '16px',
-  };
+  const timelineRow: React.CSSProperties = { display: 'flex', gap: 0 };
+  const spineCol: React.CSSProperties = { width: '36px', display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '2px', flexShrink: 0 };
+  const vline: React.CSSProperties = { flex: 1, width: '1.5px', background: '#E5E7EB', margin: '4px 0', minHeight: '16px' };
+  const bodyCol: React.CSSProperties = { flex: 1, paddingBottom: '16px' };
 
   const whoLabel = (pill: string, pillColor: { bg: string; text: string }, label: string): React.ReactNode => (
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px' }}>
-      <span style={{
-        fontSize: '10px', fontWeight: '700', padding: '1px 7px',
-        borderRadius: '999px', background: pillColor.bg, color: pillColor.text,
-      }}>{pill}</span>
+      <span style={{ fontSize: '10px', fontWeight: '700', padding: '1px 7px', borderRadius: '999px', background: pillColor.bg, color: pillColor.text }}>{pill}</span>
       <span style={{ fontSize: '11px', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
     </div>
   );
@@ -464,13 +424,12 @@ const ResumeReviewCard: React.FC<{
   const hrPill  = { bg: '#FAEEDA', text: '#92400E' };
   const panPill = { bg: '#E1F5EE', text: '#065F46' };
 
-  // ── Normalised badge ───────────────────────────────────────────────────────
   const badgeMap: Record<string, { label: string; bg: string; color: string }> = {
-    Pending:        { label: 'Pending',        bg: '#EDE9FE', color: '#5B21B6' },
+    Pending:          { label: 'Pending',        bg: '#EDE9FE', color: '#5B21B6' },
     'Panel Assigned': { label: 'Panel Assigned', bg: '#EFF6FF', color: '#1D4ED8' },
     'Panel Reviewed': { label: 'Panel Reviewed', bg: '#FEF3C7', color: '#92400E' },
-    Accepted:       { label: 'Accepted',       bg: '#D1FAE5', color: '#065F46' },
-    Rejected:       { label: 'Rejected',       bg: '#FEE2E2', color: '#991B1B' },
+    Accepted:         { label: 'Accepted',       bg: '#D1FAE5', color: '#065F46' },
+    Rejected:         { label: 'Rejected',       bg: '#FEE2E2', color: '#991B1B' },
   };
   const badge = badgeMap[status] || { label: status, bg: '#F3F4F6', color: '#374151' };
 
@@ -479,29 +438,15 @@ const ResumeReviewCard: React.FC<{
       borderRadius: '12px',
       border: `1.5px solid ${['Pending','Panel Assigned','Panel Reviewed'].includes(status) ? '#7C3AED' : '#E5E7EB'}`,
       boxShadow: ['Pending','Panel Assigned','Panel Reviewed'].includes(status) ? '0 2px 10px rgba(124,58,237,0.08)' : 'none',
-      background: 'white',
-      overflow: 'hidden',
+      background: 'white', overflow: 'hidden',
     }}>
-
-      {/* ── Card header ── */}
-      <div style={{
-        padding: '13px 16px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        borderBottom: '1px solid #F3F4F6',
-      }}>
+      <div style={{ padding: '13px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #F3F4F6' }}>
         <h3 style={{ fontWeight: 'bold', fontSize: '15px', margin: 0 }}>Resume Review</h3>
-        <span style={{
-          fontSize: '11px', fontWeight: '700', padding: '3px 10px',
-          borderRadius: '999px', background: badge.bg, color: badge.color,
-        }}>{badge.label}</span>
+        <span style={{ fontSize: '11px', fontWeight: '700', padding: '3px 10px', borderRadius: '999px', background: badge.bg, color: badge.color }}>{badge.label}</span>
       </div>
-
-      {/* ── Timeline body ── */}
       <div style={{ padding: '10px 16px 4px' }}>
 
-        {/* ════════════════════════════════════════════
-            STEP 1 — HR: review info + write feedback + assign panel
-            ════════════════════════════════════════════ */}
+        {/* STEP 1 */}
         <div style={timelineRow}>
           <div style={spineCol}>
             <div style={dotStyle(step1Done, !step1Done, '#F59E0B')} />
@@ -509,39 +454,18 @@ const ResumeReviewCard: React.FC<{
           </div>
           <div style={bodyCol}>
             {whoLabel('HR', hrPill, step1Done ? 'Step 1 — done' : 'Step 1 — active')}
-
-            {/* ── Step 1 done: show saved info ── */}
             {step1Done && (
-              <div style={{
-                background: '#F9FAFB', borderRadius: '8px',
-                padding: '10px 12px', border: '1px solid #E5E7EB',
-                display: 'flex', flexDirection: 'column', gap: '4px',
-              }}>
-                <p style={{ fontSize: '13px', fontWeight: '600', color: '#374151', margin: 0 }}>
-                  Resume reviewed — panel assigned
-                </p>
-                {hrFeedback && (
-                  <p style={{ fontSize: '12px', color: '#6B7280', margin: 0 }}>"{hrFeedback}"</p>
-                )}
-                <p style={{ fontSize: '11px', color: '#9CA3AF', margin: 0 }}>
-                  Assigned → <strong style={{ color: '#1D4ED8' }}>{panelName || assignedPanel}</strong>
-                </p>
+              <div style={{ background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', border: '1px solid #E5E7EB', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <p style={{ fontSize: '13px', fontWeight: '600', color: '#374151', margin: 0 }}>Resume reviewed — panel assigned</p>
+                {hrFeedback && <p style={{ fontSize: '12px', color: '#6B7280', margin: 0 }}>"{hrFeedback}"</p>}
+                <p style={{ fontSize: '11px', color: '#9CA3AF', margin: 0 }}>Assigned → <strong style={{ color: '#1D4ED8' }}>{panelName || assignedPanel}</strong></p>
                 <UpdatedByBadge history={history} stage="Resume Review" actions={['assign-panel']} />
               </div>
             )}
-
-            {/* ── Step 1 active (HR, Pending): show candidate info + form ── */}
             {isHR && status === 'Pending' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-
-                {/* Candidate quick info */}
-                <div style={{
-                  background: '#F0F9FF', borderRadius: '10px',
-                  padding: '12px 14px', border: '1px solid #BAE6FD',
-                }}>
-                  <p style={{ fontWeight: '700', fontSize: '12px', color: '#0369A1', marginBottom: '8px' }}>
-                    Candidate Overview
-                  </p>
+                <div style={{ background: '#F0F9FF', borderRadius: '10px', padding: '12px 14px', border: '1px solid #BAE6FD' }}>
+                  <p style={{ fontWeight: '700', fontSize: '12px', color: '#0369A1', marginBottom: '8px' }}>Candidate Overview</p>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                     {([
                       ['Experience',    `${(candidate as any).experience || '—'} Years`],
@@ -558,209 +482,85 @@ const ResumeReviewCard: React.FC<{
                     ))}
                   </div>
                 </div>
-
-                {/* HR Feedback textarea */}
                 <div>
-                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>
-                    HR Feedback <span style={{ color: '#DC2626' }}>*</span>
-                  </p>
-                  <Textarea
-                    placeholder="Write your resume review notes…"
-                    value={feedback}
-                    onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
-                    style={{ resize: 'vertical', minHeight: '80px' }}
-                  />
+                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>HR Feedback <span style={{ color: '#DC2626' }}>*</span></p>
+                  <Textarea placeholder="Write your resume review notes…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }} style={{ resize: 'vertical', minHeight: '80px' }} />
                 </div>
-
-                {/* Panel selector */}
                 <div>
-                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>
-                    Assign Panel Member <span style={{ color: '#DC2626' }}>*</span>
-                  </p>
-                  <select
-                    value={panelUid}
-                    onChange={e => { setPanelUid(e.target.value); setErr(''); }}
-                    style={{
-                      width: '100%', borderRadius: '8px',
-                      border: '1px solid #E5E7EB', padding: '9px 12px',
-                      fontSize: '13px', background: 'white',
-                    }}
-                  >
+                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>Assign Panel Member <span style={{ color: '#DC2626' }}>*</span></p>
+                  <select value={panelUid} onChange={e => { setPanelUid(e.target.value); setErr(''); }} style={{ width: '100%', borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px 12px', fontSize: '13px', background: 'white' }}>
                     <option value="">— Select panel member —</option>
                     {panelUsers.map(p => (
-                      <option key={p.uid} value={p.uid}>
-                        {p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}
-                      </option>
+                      <option key={p.uid} value={p.uid}>{p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}</option>
                     ))}
                   </select>
                 </div>
-
-                {err && (
-                  <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <AlertCircle className="h-3 w-3" />{err}
-                  </p>
-                )}
-
+                {err && <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><AlertCircle className="h-3 w-3" />{err}</p>}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                   <Button variant="destructive" onClick={handleHRReject}>✕ Reject</Button>
-                  <Button onClick={handleAssign} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>
-                    Assign to Panel →
-                  </Button>
+                  <Button onClick={handleAssign} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>Assign to Panel →</Button>
                 </div>
               </div>
             )}
-
-            {/* ── Step 1 visible but not actionable for non-HR ── */}
-            {!isHR && !step1Done && (
-              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for HR to review and assign panel.</p>
-            )}
+            {!isHR && !step1Done && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for HR to review and assign panel.</p>}
           </div>
         </div>
 
-        {/* ════════════════════════════════════════════
-            STEP 2 — Panel: review resume + add feedback + accept/reject
-            ════════════════════════════════════════════ */}
+        {/* STEP 2 */}
         <div style={timelineRow}>
           <div style={spineCol}>
             <div style={dotStyle(step2Done, status === 'Panel Assigned', '#2563EB')} />
             <div style={vline} />
           </div>
           <div style={bodyCol}>
-            {whoLabel('Panel', panPill,
-              step2Done
-                ? 'Step 2 — done'
-                : status === 'Panel Assigned'
-                  ? 'Step 2 — active'
-                  : 'Step 2 — waiting',
-            )}
-
-            {/* ── Panel feedback saved ── */}
+            {whoLabel('Panel', panPill, step2Done ? 'Step 2 — done' : status === 'Panel Assigned' ? 'Step 2 — active' : 'Step 2 — waiting')}
             {step2Done && (
-              <div style={{
-                background: panelDecision === 'reject' ? '#FFF8F8' : '#F6FEF9',
-                border: `1px solid ${panelDecision === 'reject' ? '#FECACA' : '#86EFAC'}`,
-                borderRadius: '8px', padding: '10px 12px',
-                display: 'flex', flexDirection: 'column', gap: '4px',
-              }}>
-                <p style={{ fontSize: '12px', color: panelDecision === 'reject' ? '#DC2626' : '#065F46', margin: 0 }}>
-                  "{panelFeedback}"
-                </p>
-                <p style={{
-                  fontSize: '11px', fontWeight: '700', margin: 0,
-                  color: panelDecision === 'reject' ? '#DC2626' : '#059669',
-                }}>
-                  {panelDecision === 'reject' ? '✕ Panel: Reject' : '✓ Panel: Accept'}
-                </p>
+              <div style={{ background: panelDecision === 'reject' ? '#FFF8F8' : '#F6FEF9', border: `1px solid ${panelDecision === 'reject' ? '#FECACA' : '#86EFAC'}`, borderRadius: '8px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <p style={{ fontSize: '12px', color: panelDecision === 'reject' ? '#DC2626' : '#065F46', margin: 0 }}>"{panelFeedback}"</p>
+                <p style={{ fontSize: '11px', fontWeight: '700', margin: 0, color: panelDecision === 'reject' ? '#DC2626' : '#059669' }}>{panelDecision === 'reject' ? '✕ Panel: Reject' : '✓ Panel: Accept'}</p>
                 <UpdatedByBadge history={history} stage="Resume Review" actions={['panel-accept', 'panel-reject']} />
               </div>
             )}
-
-            {/* ── Panel member: submit feedback ── */}
             {isAssignedPanel && status === 'Panel Assigned' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <Textarea
-                  placeholder="Enter your resume review feedback…"
-                  value={feedback}
-                  onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
-                  style={{ resize: 'vertical', minHeight: '90px' }}
-                />
-                {err && (
-                  <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <AlertCircle className="h-3 w-3" />{err}
-                  </p>
-                )}
+                <Textarea placeholder="Enter your resume review feedback…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }} style={{ resize: 'vertical', minHeight: '90px' }} />
+                {err && <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><AlertCircle className="h-3 w-3" />{err}</p>}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                   <Button variant="destructive" onClick={() => handlePanelSubmit('panel-reject')}>✕ Reject</Button>
-                  <Button onClick={() => handlePanelSubmit('panel-accept')}
-                    style={{ background: '#059669', color: 'white' }}>
-                    ✓ Accept Resume
-                  </Button>
+                  <Button onClick={() => handlePanelSubmit('panel-accept')} style={{ background: '#059669', color: 'white' }}>✓ Accept Resume</Button>
                 </div>
               </div>
             )}
-
-            {/* ── HR waiting for panel ── */}
-            {isHR && status === 'Panel Assigned' && (
-              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>
-                Waiting for <strong style={{ color: '#374151' }}>{panelName}</strong> to submit feedback.
-              </p>
-            )}
-
-            {/* ── Non-assigned panel ── */}
-            {isPanel && !isAssignedPanel && status === 'Panel Assigned' && (
-              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>You are not assigned to this resume.</p>
-            )}
-
-            {/* ── Locked (not yet at this step) ── */}
-            {status === 'Pending' && (
-              <p style={{ fontSize: '12px', color: '#D1D5DB' }}>Waiting for HR to assign a panel member.</p>
-            )}
+            {isHR && status === 'Panel Assigned' && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for <strong style={{ color: '#374151' }}>{panelName}</strong> to submit feedback.</p>}
+            {isPanel && !isAssignedPanel && status === 'Panel Assigned' && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>You are not assigned to this resume.</p>}
+            {status === 'Pending' && <p style={{ fontSize: '12px', color: '#D1D5DB' }}>Waiting for HR to assign a panel member.</p>}
           </div>
         </div>
 
-        {/* ════════════════════════════════════════════
-            STEP 3 — HR: final call — Reject or Move to L1
-            ════════════════════════════════════════════ */}
+        {/* STEP 3 */}
         <div style={timelineRow}>
           <div style={spineCol}>
             <div style={dotStyle(isDone, step3Active, '#F59E0B')} />
           </div>
           <div style={{ ...bodyCol, paddingBottom: '6px' }}>
-            {whoLabel('HR', hrPill,
-              isDone
-                ? 'Step 3 — done'
-                : step3Active
-                  ? 'Step 3 — active'
-                  : 'Step 3 — waiting',
-            )}
-
-            {/* ── Done: show final result ── */}
+            {whoLabel('HR', hrPill, isDone ? 'Step 3 — done' : step3Active ? 'Step 3 — active' : 'Step 3 — waiting')}
             {isDone && (
-              <div style={{
-                background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9',
-                border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#86EFAC'}`,
-                borderRadius: '8px', padding: '10px 12px',
-                display: 'flex', flexDirection: 'column', gap: '4px',
-              }}>
-                <p style={{
-                  fontSize: '12px', fontWeight: '700', margin: 0,
-                  color: status === 'Rejected' ? '#DC2626' : '#059669',
-                }}>
-                  {status === 'Rejected' ? '✕ Resume Rejected' : '✓ Moved to L1 Interview'}
-                </p>
+              <div style={{ background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9', border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#86EFAC'}`, borderRadius: '8px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <p style={{ fontSize: '12px', fontWeight: '700', margin: 0, color: status === 'Rejected' ? '#DC2626' : '#059669' }}>{status === 'Rejected' ? '✕ Resume Rejected' : '✓ Moved to L1 Interview'}</p>
                 <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
               </div>
             )}
-
-            {/* ── HR: panel reviewed — make final call ── */}
             {isHR && step3Active && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <p style={{ fontSize: '12px', color: '#6B7280' }}>
-                  Panel has reviewed the resume.
-                </p>
+                <p style={{ fontSize: '12px', color: '#6B7280' }}>Panel has reviewed the resume.</p>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                  <Button variant="destructive" onClick={() => onAction('reject', {})}>
-                    ✕ Reject
-                  </Button>
-                  <Button onClick={() => onAction('accept', {})}
-                    style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>
-                    ✓ Move to L1
-                  </Button>
+                  <Button variant="destructive" onClick={() => onAction('reject', {})}>✕ Reject</Button>
+                  <Button onClick={() => onAction('accept', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L1</Button>
                 </div>
               </div>
             )}
-
-            {/* ── Not HR, step 3 not yet reached ── */}
-            {!isHR && !isDone && (
-              <p style={{ fontSize: '12px', color: '#D1D5DB' }}>
-                {step3Active ? 'Waiting for HR to make final call.' : 'Pending previous steps.'}
-              </p>
-            )}
-
-            {/* ── Admin / Agency ── */}
-            {(role === 'admin' || role === 'agency') && step3Active && (
-              <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Only HR can make the final call.</p>
-            )}
+            {!isHR && !isDone && <p style={{ fontSize: '12px', color: '#D1D5DB' }}>{step3Active ? 'Waiting for HR to make final call.' : 'Pending previous steps.'}</p>}
+            {(role === 'admin' || role === 'agency') && step3Active && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Only HR can make the final call.</p>}
           </div>
         </div>
 
@@ -768,6 +568,227 @@ const ResumeReviewCard: React.FC<{
     </div>
   );
 };
+
+// ─── AI SCORE REPORT (shown inline inside L1 card once interview completes) ──
+const AIScoreReport: React.FC<{
+  candidate: Candidate;
+  role: UserRole | null;
+  status: string;
+  savedFeedback: string | undefined;
+  onAction: (action: string, payload: any) => void;
+}> = ({ candidate, role, status, savedFeedback, onAction }) => {
+  const [hrNotes, setHrNotes] = React.useState('');
+  const [hrErr,   setHrErr]   = React.useState('');
+
+  const overallScore  = (candidate as any).l1AIScore              ?? null;
+  const techScore     = (candidate as any).l1AITechnicalScore     ?? null;
+  const commScore     = (candidate as any).l1AICommunicationScore ?? null;
+  const bodyScore     = (candidate as any).l1AIBodyLanguageScore  ?? null;
+  const eyeScore      = (candidate as any).l1AIEyeContactScore    ?? null;
+  const summary       = (candidate as any).l1AISummary            || '';
+  const rec           = (candidate as any).l1AIRecommendation     || '';
+  const strengths     = (candidate as any).l1AIStrengths          || [];
+  const improvements  = (candidate as any).l1AIImprovements       || [];
+
+  // Detect failed evaluation: all scores are 0 or null
+  const hasMeaningfulScores = [techScore, commScore, bodyScore, eyeScore].some(s => s !== null && s > 0);
+  const evaluationFailed    = !hasMeaningfulScores;
+  const isDone              = status === 'Selected' || status === 'Rejected';
+
+  // Colour helpers
+  const scoreColor = (s: number | null) =>
+    s === null ? '#9CA3AF' : s >= 80 ? '#059669' : s >= 60 ? '#D97706' : s >= 40 ? '#F59E0B' : '#DC2626';
+  const scoreBg = (s: number | null) =>
+    s === null ? '#F3F4F6' : s >= 80 ? '#D1FAE5' : s >= 60 ? '#FEF3C7' : s >= 40 ? '#FEF9C3' : '#FEE2E2';
+  const scoreBorder = (s: number | null) =>
+    s === null ? '#E5E7EB' : s >= 80 ? '#86EFAC' : s >= 60 ? '#FCD34D' : s >= 40 ? '#FDE68A' : '#FECACA';
+
+  const recBg    = rec === 'Strong Yes' ? '#DCFCE7' : rec === 'Yes' ? '#EFF6FF' : rec === 'Maybe' ? '#FFFBEB' : '#FEE2E2';
+  const recColor = rec === 'Strong Yes' ? '#15803D' : rec === 'Yes' ? '#1D4ED8' : rec === 'Maybe' ? '#92400E' : '#991B1B';
+
+  // Overall score ring — large prominent display
+  const oColor  = scoreColor(overallScore);
+  const oBg     = scoreBg(overallScore);
+  const oBorder = scoreBorder(overallScore);
+
+  // Sub-scores — only rendered when evaluation succeeded
+  const subScores = [
+    { label: 'Technical',     icon: '💻', score: techScore  },
+    { label: 'Communication', icon: '🗣️', score: commScore  },
+    { label: 'Body Language', icon: '🧍', score: bodyScore  },
+    { label: 'Eye Contact',   icon: '👁️', score: eyeScore   },
+  ];
+
+  return (
+    <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '14px', overflow: 'hidden', background: 'white' }}>
+
+      {/* ── Header ── */}
+      <div style={{ padding: '13px 16px', borderBottom: '1px solid #F3F4F6', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FAFAFA' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '18px' }}>🤖</span>
+          <span style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>AI Interview Report</span>
+        </div>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {rec && (
+            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px', background: recBg, color: recColor }}>
+              {rec}
+            </span>
+          )}
+          <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px', background: '#D1FAE5', color: '#065F46' }}>
+            ✓ Completed
+          </span>
+        </div>
+      </div>
+
+      {/* ── Score section ── */}
+      <div style={{ padding: '20px 16px 16px' }}>
+
+        {evaluationFailed ? (
+          /* Failed evaluation — show warning, no scores */
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#FEF9C3', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px 16px' }}>
+            <span style={{ fontSize: '24px', flexShrink: 0 }}>⚠️</span>
+            <div>
+              <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: '0 0 3px' }}>AI Evaluation Could Not Be Completed</p>
+              <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>
+                {summary || 'The interview recording could not be processed. Please review the recording manually and make your decision below.'}
+              </p>
+            </div>
+          </div>
+        ) : (
+          /* Successful evaluation — Overall + sub-scores */
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+
+            {/* Overall score — large ring */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', minWidth: '100px' }}>
+              <div style={{
+                width: '90px', height: '90px', borderRadius: '50%',
+                border: `5px solid ${oColor}`, background: oBg,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                boxShadow: `0 0 0 3px ${oBorder}`,
+              }}>
+                <span style={{ fontSize: '28px', fontWeight: 900, color: oColor, lineHeight: 1 }}>
+                  {overallScore ?? '—'}
+                </span>
+                <span style={{ fontSize: '10px', color: oColor, fontWeight: 600, opacity: 0.8 }}>/100</span>
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textAlign: 'center' }}>Overall Score</span>
+              <div style={{ background: oColor, color: 'white', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px' }}>
+                {(overallScore ?? 0) >= 80 ? 'Excellent' : (overallScore ?? 0) >= 60 ? 'Good' : (overallScore ?? 0) >= 40 ? 'Average' : 'Needs Work'}
+              </div>
+            </div>
+
+            {/* Sub-scores — vertical bars */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', justifyContent: 'center', paddingTop: '4px' }}>
+              {subScores.map(({ label, icon, score }) => {
+                const c = scoreColor(score);
+                const pct = score ?? 0;
+                return (
+                  <div key={label}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '12px', color: '#374151', fontWeight: 500 }}>{icon} {label}</span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: c }}>{score ?? '—'}<span style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 400 }}>/100</span></span>
+                    </div>
+                    <div style={{ height: '7px', background: '#F3F4F6', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: c, borderRadius: '4px', transition: 'width 0.6s ease' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── AI Summary (only when eval succeeded) ── */}
+      {!evaluationFailed && summary && (
+        <div style={{ margin: '0 16px 14px', background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '8px', padding: '10px 14px' }}>
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#0369A1', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>📋 AI Summary</p>
+          <p style={{ fontSize: '12px', color: '#374151', margin: 0, lineHeight: 1.7 }}>{summary}</p>
+        </div>
+      )}
+
+      {/* ── Strengths + Improvements ── */}
+      {(strengths.length > 0 || improvements.length > 0) && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', padding: '0 16px 14px' }}>
+          {strengths.length > 0 && (
+            <div style={{ background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: '8px', padding: '10px 12px' }}>
+              <p style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', margin: '0 0 6px', textTransform: 'uppercase' }}>✓ Strengths</p>
+              {(strengths as string[]).map((s: string, i: number) => (
+                <p key={i} style={{ fontSize: '12px', color: '#374151', margin: '0 0 4px', lineHeight: 1.5 }}>• {s}</p>
+              ))}
+            </div>
+          )}
+          {improvements.length > 0 && (
+            <div style={{ background: '#FFFBEB', border: '1px solid #FCD34D', borderRadius: '8px', padding: '10px 12px' }}>
+              <p style={{ fontSize: '11px', fontWeight: 700, color: '#92400E', margin: '0 0 6px', textTransform: 'uppercase' }}>↑ To Improve</p>
+              {(improvements as string[]).map((s: string, i: number) => (
+                <p key={i} style={{ fontSize: '12px', color: '#374151', margin: '0 0 4px', lineHeight: 1.5 }}>• {s}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Video recording link ── */}
+      {(candidate as any).l1AIVideoUrl && (
+        <div style={{ padding: '0 16px 14px' }}>
+          <a href={(candidate as any).l1AIVideoUrl} target="_blank" rel="noreferrer"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#7C3AED', fontWeight: 600, padding: '7px 14px', background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: '8px', textDecoration: 'none' }}>
+            ▶ Watch Recording
+          </a>
+        </div>
+      )}
+
+      {/* ── HR Decision panel ── */}
+      {role === 'hr' && !isDone && (
+        <div style={{ margin: '0 16px 16px', background: '#F8F7FF', borderRadius: '10px', padding: '14px', border: '1px solid #DDD6FE' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#4C1D95', margin: '0 0 4px' }}>👤 Your Decision</p>
+          <p style={{ fontSize: '12px', color: '#6B7280', margin: '0 0 10px' }}>
+            {evaluationFailed
+              ? 'AI evaluation failed — review the recording manually, then decide.'
+              : 'Review the AI scores above, then move the candidate forward or reject.'}
+          </p>
+          <p style={{ fontSize: '11px', fontWeight: 600, color: '#374151', margin: '0 0 5px' }}>
+            HR Notes <span style={{ color: '#DC2626' }}>*</span>
+          </p>
+          <Textarea
+            placeholder="Add your review notes before deciding (required)…"
+            value={hrNotes}
+            onChange={e => { setHrNotes(e.target.value); if (e.target.value.trim()) setHrErr(''); }}
+            style={{ resize: 'vertical', minHeight: '80px', marginBottom: '10px', background: 'white' }}
+          />
+          {hrErr && (
+            <p style={{ color: '#DC2626', fontSize: '12px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <AlertCircle className="h-3 w-3" />{hrErr}
+            </p>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <Button variant="destructive" onClick={() => {
+              if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
+              onAction('ai-reject', { feedback: hrNotes.trim(), aiScore: overallScore ?? 0 });
+            }}>✕ Reject</Button>
+            <Button onClick={() => {
+              if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
+              onAction('ai-select', { feedback: hrNotes.trim(), aiScore: overallScore ?? 0 });
+            }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L2</Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Final decision (already made) ── */}
+      {isDone && savedFeedback && (
+        <div style={{ margin: '0 16px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F0FDF9', border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#6EE7B7'}`, borderRadius: '8px', padding: '10px 14px' }}>
+          <p style={{ fontSize: '12px', fontWeight: 700, margin: '0 0 4px', color: status === 'Rejected' ? '#DC2626' : '#059669' }}>
+            {status === 'Rejected' ? '✕ Rejected by HR' : '✓ Moved to L2 by HR'}
+          </p>
+          <p style={{ fontSize: '12px', color: '#374151', margin: 0 }}>{savedFeedback}</p>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
 // ─── STAGE 2 & 3: L1 / L2 INTERVIEW ─────────────────────────────────────────
 const InterviewStageCard: React.FC<{
   candidate: Candidate; role: UserRole | null; user: any;
@@ -781,6 +802,8 @@ const InterviewStageCard: React.FC<{
   const [panelUid, setPanelUid] = useState('');
   const [feedback, setFeedback] = useState('');
   const [schedErr, setSchedErr] = useState('');
+  const [aiLinkLoading, setAiLinkLoading] = useState(false);
+  const [aiLinkSent, setAiLinkSent]       = useState(false);
   const [fbErr, setFbErr]       = useState('');
   const today = new Date().toISOString().split('T')[0];
 
@@ -818,21 +841,26 @@ const InterviewStageCard: React.FC<{
     setSchedErr('');
     const panel = panelUsers.find(p => p.uid === panelUid);
     const panelEmail = panel?.email || '';
-    if (!panelEmail || !panelEmail.includes('@')) {
-      console.error(
-        '[Schedule] ❌ Panel member has no valid email!',
-        '\nUID:', panelUid, '\nPanel object:', panel,
-        '\nFIX: Check that panelUsers is fetched correctly and that panel user documents have an email field.'
-      );
-    }
     onAction('schedule', {
-      scheduledDate:   date,
-      timeSlot:        slot,
-      schedulingNotes: notes.trim(),
-      panelUid,
-      panelName:  panel?.name || panel?.email || 'Panel',
-      panelEmail: panelEmail,
+      scheduledDate: date, timeSlot: slot, schedulingNotes: notes.trim(),
+      panelUid, panelName: panel?.name || panel?.email || 'Panel', panelEmail,
     });
+  };
+
+  const handleAISchedule = async () => {
+    if (!date)         { setSchedErr('Please select a deadline date.'); return; }
+    if (!notes.trim()) { setSchedErr('Please add notes for the candidate.'); return; }
+    setSchedErr('');
+    setAiLinkLoading(true);
+    try {
+      await onAction('ai-schedule', { scheduledDate: date, schedulingNotes: notes.trim(), interviewType: 'ai' });
+      setAiLinkSent(true);
+    } catch (err) {
+      console.error('AI schedule failed:', err);
+      setSchedErr('Failed to send AI interview link. Please try again.');
+    } finally {
+      setAiLinkLoading(false);
+    }
   };
 
   const handlePanelDecision = (action: 'panel-select' | 'panel-reject') => {
@@ -845,7 +873,6 @@ const InterviewStageCard: React.FC<{
 
   return (
     <StageShell title={title} status={status} isLocked={isLocked}>
-
       {showScheduleInfo && (
         <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '12px', overflow: 'hidden', background: 'white' }}>
           <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -853,29 +880,27 @@ const InterviewStageCard: React.FC<{
             <div>
               <p style={lbl}>Date & Time</p>
               <p style={{ ...saved, fontWeight: '600', color: '#374151', margin: 0 }}>
-                {new Date(savedDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {savedSlot}
-              </p>
+  {new Date(savedDate).toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })}
+
+  {savedSlot
+    ? ` at ${savedSlot}`
+    : (candidate as any).l1InterviewType === 'ai'
+      ? ' — Candidate has 48 hours to complete'
+      : ''}
+</p>
             </div>
-            {savedNotes && (
-              <div>
-                <p style={lbl}>📝 Scheduling Notes</p>
-                <p style={{ ...saved, color: '#374151', margin: 0 }}>{savedNotes}</p>
-              </div>
-            )}
-            {panelName && (
-              <div>
-                <p style={lbl}>👤 Assigned Panel</p>
-                <p style={{ ...saved, color: '#1D4ED8', fontWeight: '600', margin: 0 }}>{panelName}</p>
-              </div>
-            )}
+            {savedNotes && <div><p style={lbl}>📝 Scheduling Notes</p><p style={{ ...saved, color: '#374151', margin: 0 }}>{savedNotes}</p></div>}
+            {panelName && <div><p style={lbl}>👤 Assigned Panel</p><p style={{ ...saved, color: '#1D4ED8', fontWeight: '600', margin: 0 }}>{panelName}</p></div>}
             <UpdatedByBadge history={history} stage={title} actions={['schedule']} />
           </div>
           {showFeedback && (
             <>
               <div style={{ borderTop: '1px solid #E5E7EB', background: '#F9FAFB', padding: '7px 16px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-                  💬 Interview Feedback
-                </span>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>💬 Interview Feedback</span>
               </div>
               <div style={{ padding: '14px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>{savedFeedback}</p>
@@ -886,20 +911,40 @@ const InterviewStageCard: React.FC<{
         </div>
       )}
 
-      {canHRSchedule && (
+      {/* ── AI Interview: waiting for candidate ── */}
+      {stageKey === 'l1' &&
+       status === 'Scheduled' &&
+       (candidate as any).l1InterviewType === 'ai' &&
+       (candidate as any).l1AIStatus !== 'completed' && (
+        <AIInterviewStatusCard
+          candidateId={candidate.id}
+          candidateName={candidate.candidateName || ''}
+          role={role}
+          onDecision={(action, payload) => onAction(action, payload)}
+        />
+      )}
+
+      {/* ── AI Interview: inline score report in L1 once completed ── */}
+      {stageKey === 'l1' &&
+       (candidate as any).l1InterviewType === 'ai' &&
+       (candidate as any).l1AIStatus === 'completed' && (
+        <AIScoreReport
+          candidate={candidate}
+          role={role}
+          status={status}
+          savedFeedback={savedFeedback}
+          onAction={onAction}
+        />
+      )}
+
+      {canHRSchedule && stageKey === 'l2' && (
         <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Schedule {title}</p>
           <p style={{ ...lbl, marginBottom: '6px' }}>Assign Panel Member <span style={{ color: '#DC2626' }}>*</span></p>
-          <select
-            value={panelUid}
-            onChange={e => { setPanelUid(e.target.value); if (e.target.value) setSchedErr(''); }}
-            style={{ width: '100%', borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px 12px', fontSize: '13px', marginBottom: '12px', background: 'white' }}
-          >
+          <select value={panelUid} onChange={e => { setPanelUid(e.target.value); if (e.target.value) setSchedErr(''); }} style={{ width: '100%', borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px 12px', fontSize: '13px', marginBottom: '12px', background: 'white' }}>
             <option value="">— Select Panel Member —</option>
             {panelUsers.map(p => (
-              <option key={p.uid} value={p.uid}>
-                {p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}
-              </option>
+              <option key={p.uid} value={p.uid}>{p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}</option>
             ))}
           </select>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
@@ -913,12 +958,7 @@ const InterviewStageCard: React.FC<{
             </select>
           </div>
           <p style={{ ...lbl, marginBottom: '6px' }}>Scheduling Notes <span style={{ color: '#DC2626' }}>*</span></p>
-          <Textarea
-            placeholder="Add notes for this interview…"
-            value={notes}
-            onChange={e => { setNotes(e.target.value); if (e.target.value.trim()) setSchedErr(''); }}
-            style={{ resize: 'vertical', minHeight: '80px', background: 'white' }}
-          />
+          <Textarea placeholder="Add notes for this interview…" value={notes} onChange={e => { setNotes(e.target.value); if (e.target.value.trim()) setSchedErr(''); }} style={{ resize: 'vertical', minHeight: '80px', background: 'white' }} />
           {schedErr && <p style={errS}><AlertCircle className="h-3 w-3" />{schedErr}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
             <Button onClick={handleSchedule} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>📅 Schedule</Button>
@@ -929,23 +969,16 @@ const InterviewStageCard: React.FC<{
       {canPanelFeedback && (
         <div style={{ background: '#F0FDF4', borderRadius: '10px', padding: '14px', border: '1px solid #86EFAC' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', color: '#065F46', marginBottom: '4px' }}>Submit Interview Feedback</p>
-          <Textarea
-            placeholder="Enter your technical interview feedback (mandatory)…"
-            value={feedback}
-            onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }}
-            style={{ resize: 'vertical', minHeight: '90px' }}
-          />
+          <Textarea placeholder="Enter your technical interview feedback (mandatory)…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }} style={{ resize: 'vertical', minHeight: '90px' }} />
           {fbErr && <p style={errS}><AlertCircle className="h-3 w-3" />{fbErr}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
             <Button variant="destructive" onClick={() => handlePanelDecision('panel-reject')}>✕ Reject</Button>
-            <Button variant="default" onClick={() => handlePanelDecision('panel-select')} style={{ background: '#059669', color: 'white' }}>
-              ✓ Move to {nextStageLabel}
-            </Button>
+            <Button variant="default" onClick={() => handlePanelDecision('panel-select')} style={{ background: '#059669', color: 'white' }}>✓ Move to {nextStageLabel}</Button>
           </div>
         </div>
       )}
 
-      {isHR && status === 'Scheduled' && (
+      {isHR && status === 'Scheduled' && (candidate as any).l1InterviewType !== 'ai' && (
         <ReadOnlyNote msg="Waiting for the assigned panel member to submit their feedback and decision." />
       )}
       {isPanel && !isAssignedPanel && !isLocked && (
@@ -1002,12 +1035,7 @@ const HRRoundCard: React.FC<{
                 {new Date(candidate.hrScheduledDate!).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} at {candidate.hrTimeSlot}
               </p>
             </div>
-            {candidate.hrSchedulingNotes && (
-              <div>
-                <p style={lbl}>📝 Scheduling Notes</p>
-                <p style={{ ...saved, color: '#374151', margin: 0 }}>{candidate.hrSchedulingNotes}</p>
-              </div>
-            )}
+            {candidate.hrSchedulingNotes && <div><p style={lbl}>📝 Scheduling Notes</p><p style={{ ...saved, color: '#374151', margin: 0 }}>{candidate.hrSchedulingNotes}</p></div>}
             <UpdatedByBadge history={history} stage="HR Round" actions={['schedule']} />
           </div>
           {showFeedback && (
@@ -1023,7 +1051,6 @@ const HRRoundCard: React.FC<{
           )}
         </div>
       )}
-
       {isHR && status === 'Pending' && (
         <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Schedule HR Round</p>
@@ -1038,22 +1065,17 @@ const HRRoundCard: React.FC<{
             </select>
           </div>
           <p style={{ ...lbl, marginBottom: '6px' }}>Scheduling Notes <span style={{ color: '#DC2626' }}>*</span></p>
-          <Textarea placeholder="Add notes for this HR round…" value={notes}
-            onChange={e => { setNotes(e.target.value); if (e.target.value.trim()) setSchedErr(''); }}
-            style={{ resize: 'vertical', minHeight: '80px', background: 'white' }} />
+          <Textarea placeholder="Add notes for this HR round…" value={notes} onChange={e => { setNotes(e.target.value); if (e.target.value.trim()) setSchedErr(''); }} style={{ resize: 'vertical', minHeight: '80px', background: 'white' }} />
           {schedErr && <p style={errS}><AlertCircle className="h-3 w-3" />{schedErr}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
             <Button onClick={handleSchedule} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>📅 Schedule</Button>
           </div>
         </div>
       )}
-
       {isHR && status === 'Scheduled' && (
         <>
           <p style={{ ...lbl, marginBottom: '2px' }}>Interview Feedback <span style={{ color: '#DC2626' }}>*</span></p>
-          <Textarea placeholder="Enter post-HR-round feedback (mandatory)…" value={feedback}
-            onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }}
-            style={{ resize: 'vertical', minHeight: '90px' }} />
+          <Textarea placeholder="Enter post-HR-round feedback (mandatory)…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }} style={{ resize: 'vertical', minHeight: '90px' }} />
           {fbErr && <p style={errS}><AlertCircle className="h-3 w-3" />{fbErr}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
             <Button variant="destructive" onClick={() => handleDecide('reject')}>✕ Reject</Button>
@@ -1061,10 +1083,7 @@ const HRRoundCard: React.FC<{
           </div>
         </>
       )}
-
-      {!isHR && status !== 'Locked' && (
-        <ReadOnlyNote msg="Only HR can manage the HR Round." />
-      )}
+      {!isHR && status !== 'Locked' && <ReadOnlyNote msg="Only HR can manage the HR Round." />}
     </StageShell>
   );
 };
@@ -1096,9 +1115,7 @@ const OfferStageCard: React.FC<{
       )}
       {(status === 'Accepted' || status === 'Rejected') && candidate.offerFeedback && (
         <div style={{ background: status === 'Accepted' ? '#F0FDF9' : '#FFF5F5', borderRadius: '10px', padding: '12px 14px', border: `1px solid ${status === 'Accepted' ? '#6EE7B7' : '#FCA5A5'}`, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <p style={{ ...lbl, color: status === 'Accepted' ? '#065F46' : '#991B1B', fontSize: '13px', fontWeight: '700', margin: 0 }}>
-            {status === 'Accepted' ? '🎉 Offer Accepted' : '❌ Offer Rejected'}
-          </p>
+          <p style={{ ...lbl, color: status === 'Accepted' ? '#065F46' : '#991B1B', fontSize: '13px', fontWeight: '700', margin: 0 }}>{status === 'Accepted' ? '🎉 Offer Accepted' : '❌ Offer Rejected'}</p>
           <div style={iBox}>
             <p style={lbl}>Response Notes</p>
             <p style={{ ...saved, color: status === 'Accepted' ? '#065F46' : '#DC2626' }}>{candidate.offerFeedback}</p>
@@ -1117,9 +1134,7 @@ const OfferStageCard: React.FC<{
       {isHR && status === 'Released' && (
         <>
           <p style={{ ...lbl, marginBottom: '2px' }}>Response Notes <span style={{ color: '#DC2626' }}>*</span></p>
-          <Textarea placeholder="Enter candidate's response or notes (mandatory)…" value={offerFeedback}
-            onChange={e => { setOfferFeedback(e.target.value); if (e.target.value.trim()) setOfferError(''); }}
-            style={{ resize: 'vertical', minHeight: '80px' }} />
+          <Textarea placeholder="Enter candidate's response or notes (mandatory)…" value={offerFeedback} onChange={e => { setOfferFeedback(e.target.value); if (e.target.value.trim()) setOfferError(''); }} style={{ resize: 'vertical', minHeight: '80px' }} />
           {offerError && <p style={errS}><AlertCircle className="h-3 w-3" />{offerError}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
             <Button variant="destructive" onClick={() => handleOfferAction('offer-reject')}>✕ Mark Rejected</Button>
@@ -1127,16 +1142,14 @@ const OfferStageCard: React.FC<{
           </div>
         </>
       )}
-      {!isHR && status !== 'Locked' && status !== 'Released' && (
-        <ReadOnlyNote msg="Only HR can manage the Offer Stage." />
-      )}
+      {!isHR && status !== 'Locked' && status !== 'Released' && <ReadOnlyNote msg="Only HR can manage the Offer Stage." />}
     </StageShell>
   );
 };
 
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 export default function CandidatePage({ params }: { params: Promise<{ candidateId: string }> }) {
-  const { candidateId } = use(params);  // ← use() unwraps the Promise without async
+  const { candidateId } = use(params);
   const [candidate, setCandidate]   = useState<Candidate | null>(null);
   const [loading, setLoading]       = useState(true);
   const [panelUsers, setPanelUsers] = useState<PanelUser[]>([]);
@@ -1175,27 +1188,11 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
     getDocs(query(collection(db, 'users'), where('role', '==', 'panel'), where('status', '==', 'Active'))).then(snap => {
       const users: PanelUser[] = snap.docs.map(d => {
         const data = d.data();
-        const email =
-          data.email        ||
-          data.emailAddress ||
-          data.userEmail    ||
-          data.mail         ||
-          '';
-        const name =
-          data.displayName ||
-          data.name        ||
-          data.fullName    ||
-          '';
-        if (!email) {
-          console.error(
-            `[PanelUsers] ❌ Panel user UID "${d.id}" has no email field.`,
-            '\nDocument data:', data,
-            '\nFIX: Add an "email" field to this user document in Firebase.'
-          );
-        }
+        const email = data.email || data.emailAddress || data.userEmail || data.mail || '';
+        const name  = data.displayName || data.name || data.fullName || '';
+        if (!email) console.error(`[PanelUsers] ❌ Panel user UID "${d.id}" has no email field.`, '\nDocument data:', data);
         return { uid: d.id, name, email };
       });
-      console.log('[PanelUsers] Loaded:', users.map(u => ({ uid: u.uid, email: u.email || '⚠️ MISSING' })));
       setPanelUsers(users);
     });
   }, [role]);
@@ -1204,19 +1201,12 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
   const handleAction = async (stage: string, action: string, payload: any) => {
     if (!candidate || !user) return;
 
-    const actorEmail =
-      user.email                    ||
-      user.providerData?.[0]?.email ||
-      '';
-
+    const actorEmail = user.email || user.providerData?.[0]?.email || '';
     const loggedInUserName = await getUserInfo(user.uid);
     const actorName = loggedInUserName.name || user.displayName || actorEmail || 'Unknown';
 
     const historyData: any = {
-      candidateId,
-      stage,
-      action,
-      status:          '',
+      candidateId, stage, action, status: '',
       feedback:        payload.feedback        || '',
       schedulingNotes: payload.schedulingNotes || '',
       scheduledDate:   payload.scheduledDate   || null,
@@ -1247,57 +1237,80 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
           };
           historyData.status = 'Panel Assigned';
         } else if (action === 'panel-accept') {
-          updateData = {
-            resumeReviewStatus:  'Panel Reviewed',
-            resumePanelFeedback: payload.feedback,
-            resumePanelDecision: 'accept',
-          };
+          updateData = { resumeReviewStatus: 'Panel Reviewed', resumePanelFeedback: payload.feedback, resumePanelDecision: 'accept' };
           historyData.status = 'Panel Reviewed';
         } else if (action === 'panel-reject') {
-          updateData = {
-            resumeReviewStatus:  'Panel Reviewed',
-            resumePanelFeedback: payload.feedback,
-            resumePanelDecision: 'reject',
-          };
+          updateData = { resumeReviewStatus: 'Panel Reviewed', resumePanelFeedback: payload.feedback, resumePanelDecision: 'reject' };
           historyData.status = 'Panel Reviewed';
         } else if (action === 'accept') {
+          const token = globalThis.crypto.randomUUID();
+          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+          const interviewUrl = `${baseUrl}/interview/${token}`;
+          const resumeText = [
+            `Name: ${candidate.candidateName}`,
+            `Role: ${candidate.candidateDesignation}`,
+            `Experience: ${(candidate as any).experience} years`,
+            `Skills: ${(candidate as any).skills || ''}`,
+            `Current Company: ${(candidate as any).currentCompany || ''}`,
+            `Notice Period: ${(candidate as any).noticePeriod || ''}`,
+          ].filter(Boolean).join('\n');
+          const jobDescription = (candidate as any).jobDescription || (candidate as any).jdText || `Role: ${candidate.candidateDesignation}`;
+          const expiresAt = Timestamp.fromMillis(Date.now() + 48 * 60 * 60 * 1000);
+          await addDoc(collection(db, 'ai_interviews'), {
+            token, candidateId: candidate.id, candidateName: candidate.candidateName || '',
+            candidateEmail: candidate.candidateEmail || '', jobRole: candidate.candidateDesignation || '',
+            resumeText, jobDescription, scheduledByUid: user.uid, scheduledByName: actorName,
+            status: 'pending', createdAt: Timestamp.now(), expiresAt, interviewUrl,
+          });
           updateData = {
-            resumeReviewStatus:    'Accepted',
-            resumeFeedback:        payload.feedback || (candidate as any).resumePanelFeedback || '',
-            l1Status:              'Pending',
-            resumeReviewedByEmail: actorEmail,
-            resumeReviewedByUid:   user.uid,
-            resumeReviewedByName:  actorName,
+            resumeReviewStatus: 'Accepted',
+            resumeFeedback: payload.feedback || (candidate as any).resumePanelFeedback || '',
+            l1Status: 'Scheduled', l1InterviewType: 'ai',
+            l1ScheduledDate: new Date().toISOString().split('T')[0],
+            l1AIInterviewToken: token, l1AIInterviewUrl: interviewUrl,
+            l1InterviewerUid: user.uid, l1InterviewerName: actorName, l1InterviewerEmail: actorEmail,
+            resumeReviewedByEmail: actorEmail, resumeReviewedByUid: user.uid, resumeReviewedByName: actorName,
           };
           historyData.status = 'Accepted';
+          await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
+          await addDoc(collection(db, 'candidate_history'), historyData);
+          const threadId = (candidate as any).emailThreadMessageId || '';
+          await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `AI interview link: ${interviewUrl}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId: threadId });
+          const uploaderEmailForAI = candidate.createdByEmail || actorEmail;
+          await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link sent to candidate. Token: ${token}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId: threadId });
+          return;
         } else if (action === 'reject') {
-          updateData = {
-            resumeReviewStatus: 'Rejected',
-            resumeFeedback:     payload.feedback || (candidate as any).resumePanelFeedback || '',
-            finalStatus:        'Rejected',
-            l1Status:           'Locked',
-            l2Status:           'Locked',
-            hrStatus:           'Locked',
-            offerStatus:        'Locked',
-          };
+          updateData = { resumeReviewStatus: 'Rejected', resumeFeedback: payload.feedback || (candidate as any).resumePanelFeedback || '', finalStatus: 'Rejected', l1Status: 'Locked', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
         }
         break;
 
       case 'L1 Interview':
-        if (action === 'schedule') {
-          updateData = {
-            l1Status:           'Scheduled',
-            l1ScheduledDate:    payload.scheduledDate,
-            l1TimeSlot:         payload.timeSlot,
-            l1SchedulingNotes:  payload.schedulingNotes,
-            l1PanelUid:         payload.panelUid,
-            l1PanelName:        payload.panelName,
-            l1PanelEmail:       payload.panelEmail,
-            l1InterviewerUid:   user.uid,
-            l1InterviewerName:  actorName,
-            l1InterviewerEmail: actorEmail,
-          };
+        if (action === 'ai-select') {
+          updateData = { l1Status: 'Selected', l1Feedback: payload.feedback, l1AIScore: payload.aiScore, l2Status: 'Pending' };
+          historyData.status = 'Selected';
+        } else if (action === 'ai-reject') {
+          updateData = { l1Status: 'Rejected', l1Feedback: payload.feedback, l1AIScore: payload.aiScore, finalStatus: 'Rejected', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
+          historyData.status = 'Rejected';
+        } else if (action === 'ai-schedule') {
+          const token = globalThis.crypto.randomUUID();
+          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+          const interviewUrl = `${baseUrl}/interview/${token}`;
+          const resumeText = [`Name: ${candidate.candidateName}`, `Role: ${candidate.candidateDesignation}`, `Experience: ${(candidate as any).experience} years`, `Skills: ${(candidate as any).skills || ''}`, `Current Company: ${(candidate as any).currentCompany || ''}`, `Notice Period: ${(candidate as any).noticePeriod || ''}`].filter(Boolean).join('\n');
+          const jobDescription = (candidate as any).jobDescription || (candidate as any).jdText || `Role: ${candidate.candidateDesignation}`;
+          const expiresAt = Timestamp.fromMillis(Date.now() + 48 * 60 * 60 * 1000);
+          await addDoc(collection(db, 'ai_interviews'), { token, candidateId: candidate.id, candidateName: candidate.candidateName || '', candidateEmail: candidate.candidateEmail || '', jobRole: candidate.candidateDesignation || '', resumeText, jobDescription, scheduledByUid: user.uid, scheduledByName: actorName, status: 'pending', createdAt: Timestamp.now(), expiresAt, interviewUrl });
+          updateData = { l1Status: 'Scheduled', l1InterviewType: 'ai', l1ScheduledDate: payload.scheduledDate, l1SchedulingNotes: payload.schedulingNotes, l1AIInterviewToken: token, l1AIInterviewUrl: interviewUrl, l1InterviewerUid: user.uid, l1InterviewerName: actorName, l1InterviewerEmail: actorEmail };
+          historyData.status = 'Scheduled';
+          await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
+          await addDoc(collection(db, 'candidate_history'), historyData);
+          const threadMessageId = candidate.emailThreadMessageId || '';
+          const uploaderEmail = candidate.createdByEmail || '';
+          await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `Interview link: ${interviewUrl}\n\nNotes: ${payload.schedulingNotes}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId });
+          await sendEmail({ toEmail: uploaderEmail || actorEmail, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link has been sent to the candidate. Token: ${token}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId });
+          return;
+        } else if (action === 'schedule') {
+          updateData = { l1Status: 'Scheduled', l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes, l1PanelUid: payload.panelUid, l1PanelName: payload.panelName, l1PanelEmail: payload.panelEmail, l1InterviewerUid: user.uid, l1InterviewerName: actorName, l1InterviewerEmail: actorEmail };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select') {
           updateData = { l1Status: 'Selected', l1Feedback: payload.feedback, l2Status: 'Pending' };
@@ -1310,18 +1323,7 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
 
       case 'L2 Interview':
         if (action === 'schedule') {
-          updateData = {
-            l2Status:           'Scheduled',
-            l2ScheduledDate:    payload.scheduledDate,
-            l2TimeSlot:         payload.timeSlot,
-            l2SchedulingNotes:  payload.schedulingNotes,
-            l2PanelUid:         payload.panelUid,
-            l2PanelName:        payload.panelName,
-            l2PanelEmail:       payload.panelEmail,
-            l2InterviewerUid:   user.uid,
-            l2InterviewerName:  actorName,
-            l2InterviewerEmail: actorEmail,
-          };
+          updateData = { l2Status: 'Scheduled', l2ScheduledDate: payload.scheduledDate, l2TimeSlot: payload.timeSlot, l2SchedulingNotes: payload.schedulingNotes, l2PanelUid: payload.panelUid, l2PanelName: payload.panelName, l2PanelEmail: payload.panelEmail, l2InterviewerUid: user.uid, l2InterviewerName: actorName, l2InterviewerEmail: actorEmail };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select') {
           updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending' };
@@ -1334,14 +1336,7 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
 
       case 'HR Round':
         if (action === 'schedule') {
-          updateData = {
-            hrStatus:           'Scheduled',
-            hrScheduledDate:    payload.scheduledDate,
-            hrTimeSlot:         payload.timeSlot,
-            hrSchedulingNotes:  payload.schedulingNotes,
-            hrInterviewerEmail: actorEmail,
-            hrInterviewerUid:   user.uid,
-          };
+          updateData = { hrStatus: 'Scheduled', hrScheduledDate: payload.scheduledDate, hrTimeSlot: payload.timeSlot, hrSchedulingNotes: payload.schedulingNotes, hrInterviewerEmail: actorEmail, hrInterviewerUid: user.uid };
           historyData.status = 'Scheduled';
         } else if (action === 'select') {
           updateData = { hrStatus: 'Selected', hrFeedback: payload.feedback, offerStatus: 'Pending' };
@@ -1366,59 +1361,29 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
         break;
     }
 
-    // ── WRITE TO FIRESTORE ────────────────────────────────────────────────────
     try {
       await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
       await addDoc(collection(db, 'candidate_history'), historyData);
-      setHistory(prev => [...prev, {
-        stage,
-        action,
-        updatedByName: historyData.updatedByName,
-        updatedByRole: historyData.updatedByRole,
-      }]);
+      setHistory(prev => [...prev, { stage, action, updatedByName: historyData.updatedByName, updatedByRole: historyData.updatedByRole }]);
     } catch (err) {
       console.error('Firestore update failed:', err);
       return;
     }
 
-    // ── EMAIL DISPATCH ────────────────────────────────────────────────────────
-
-    // STEP 1 — Always read fresh candidate after Firestore write
     const fresh = await getFreshCandidate(candidate.id);
-    if (!fresh) {
-      console.error('[Email] ❌ Could not read fresh candidate — emails skipped for action:', action);
-      return;
-    }
+    if (!fresh) { console.error('[Email] ❌ Could not read fresh candidate — emails skipped for action:', action); return; }
 
-    // ── THREADING: read saved messageId from the fresh candidate doc ─────────
-    // If this is the first email ever for this candidate, this will be ''
-    // and the flow will save the new messageId back to Firestore for next time.
     const threadMessageId: string = fresh.emailThreadMessageId || '';
-    console.log('[Email] threadMessageId:', threadMessageId || '(first email — will save after send)');
 
-    // STEP 2 — Resolve uploader email
     let uploaderEmail: string | null = null;
     let uploaderName:  string | null = null;
-
     if (fresh.createdBy) {
       const uploaderInfo = await getUserInfo(fresh.createdBy);
       uploaderEmail = uploaderInfo.email;
       uploaderName  = uploaderInfo.name;
     }
-    if (!uploaderEmail && fresh.createdByEmail) {
-      uploaderEmail = fresh.createdByEmail;
-      console.log('[Email] Using createdByEmail fallback:', uploaderEmail);
-    }
-    if (!uploaderEmail) {
-      console.error(
-        '[Email] ❌ UPLOADER EMAIL NOT FOUND.',
-        '\ncandidate.createdBy UID:', fresh.createdBy,
-        '\nFIX OPTION A: Open Firebase console → users collection → UID above → add "email" field.',
-        '\nFIX OPTION B: In your candidate upload code, also save createdByEmail: user.email on the candidate document.'
-      );
-    }
+    if (!uploaderEmail && fresh.createdByEmail) uploaderEmail = fresh.createdByEmail;
 
-    // STEP 3 — Build base params shared across all emails
     const baseParams = {
       candidateName:     fresh.candidateName        || 'Candidate',
       jobRole:           fresh.candidateDesignation || 'Not specified',
@@ -1431,33 +1396,19 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
       interviewFeedback: payload.feedback        || '',
       interviewDate:     payload.scheduledDate   || '',
       interviewTime:     payload.timeSlot        || '',
-      // ── THREADING fields passed to every email ──────────────────────────
-      candidateId:      candidate.id,
-      threadMessageId:  threadMessageId,
+      candidateId:       candidate.id,
+      threadMessageId:   threadMessageId,
     };
 
-    // STEP 4 — Email queue (dedup by address)
     const queue = new Map<string, typeof baseParams & { toEmail: string; senderRole: string; emailType: string }>();
-
     const enqueue = (toEmail: string | null | undefined, senderRole: string, emailType: string) => {
       const raw = toEmail?.trim();
-      if (!raw || !raw.includes('@')) {
-        if (raw) console.warn('[Email] enqueue skipped — bad address:', raw, '| stage:', stage, '| action:', action);
-        return;
-      }
+      if (!raw || !raw.includes('@')) return;
       const key = raw.toLowerCase();
-      if (queue.has(key)) {
-        console.log('[Email] Deduped:', raw);
-        return;
-      }
+      if (queue.has(key)) return;
       queue.set(key, { ...baseParams, toEmail: raw, senderRole, emailType });
     };
 
-    console.log('[Email] ── Building queue for stage:', stage, '| action:', action);
-    console.log('[Email]    uploaderEmail:', uploaderEmail || '⚠️  MISSING');
-    console.log('[Email]    actorEmail:', actorEmail || '⚠️  MISSING');
-
-    // ── RESUME REVIEW ─────────────────────────────────────────────────────────
     if (stage === 'Resume Review') {
       if (action === 'assign-panel') {
         const panelEmail = payload.panelEmail || fresh.resumePanelEmail || '';
@@ -1472,9 +1423,8 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
         };
         enqueueWithFeedback(panelEmail, 'hr', 'panel_assigned');
         enqueueWithFeedback(actorEmail, 'hr', 'panel_assigned');
-      }
-       else if (action === 'panel-accept' || action === 'panel-reject') {
-        const hrEmail  = fresh.resumeAssignedByEmail || uploaderEmail;
+      } else if (action === 'panel-accept' || action === 'panel-reject') {
+        const hrEmail = fresh.resumeAssignedByEmail || uploaderEmail;
         const emailType = action === 'panel-accept' ? 'resume_accepted' : 'resume_rejected';
         enqueue(hrEmail,    'panel', emailType);
         enqueue(actorEmail, 'panel', emailType);
@@ -1483,96 +1433,47 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
         enqueue(uploaderEmail, 'hr', emailType);
         enqueue(actorEmail,    'hr', emailType);
       }
-    }
-
-    // ── L1 SCHEDULE ───────────────────────────────────────────────────────────
-    else if (action === 'schedule' && stage === 'L1 Interview') {
+    } else if (action === 'schedule' && stage === 'L1 Interview') {
       const panelEmail = fresh.l1PanelEmail || payload.panelEmail || '';
-      console.log('[Email]    l1PanelEmail:', panelEmail || '⚠️  MISSING');
       enqueue(uploaderEmail, 'hr', 'interview_scheduled');
       enqueue(actorEmail,    'hr', 'interview_scheduled');
       enqueue(panelEmail,    'hr', 'panel_assigned');
-    }
-
-    // ── L2 SCHEDULE ───────────────────────────────────────────────────────────
-    else if (action === 'schedule' && stage === 'L2 Interview') {
+    } else if (action === 'schedule' && stage === 'L2 Interview') {
       const panelEmail = fresh.l2PanelEmail || payload.panelEmail || '';
-      console.log('[Email]    l2PanelEmail:', panelEmail || '⚠️  MISSING');
       enqueue(uploaderEmail, 'hr', 'interview_scheduled');
       enqueue(actorEmail,    'hr', 'interview_scheduled');
       enqueue(panelEmail,    'hr', 'panel_assigned');
-    }
-
-    // ── HR ROUND SCHEDULE ─────────────────────────────────────────────────────
-    else if (action === 'schedule' && stage === 'HR Round') {
+    } else if (action === 'schedule' && stage === 'HR Round') {
       enqueue(uploaderEmail, 'hr', 'interview_scheduled');
       enqueue(actorEmail,    'hr', 'interview_scheduled');
-    }
-
-    // ── L1 / L2 PANEL FEEDBACK ────────────────────────────────────────────────
-    else if (
-      (stage === 'L1 Interview' || stage === 'L2 Interview') &&
-      (action === 'panel-select' || action === 'panel-reject')
-    ) {
-      const reviewerEmail =
-        fresh.resumeReviewedByEmail ||
-        (stage === 'L1 Interview' ? fresh.l1InterviewerEmail : fresh.l2InterviewerEmail) ||
-        null;
-
-      const panelMemberEmail = actorEmail;
+    } else if (stage === 'L1 Interview' && (action === 'ai-select' || action === 'ai-reject')) {
+      const emailType = action === 'ai-select' ? 'candidate_selected' : 'candidate_rejected';
+      enqueue(uploaderEmail, 'hr', emailType);
+      enqueue(actorEmail,    'hr', emailType);
+    } else if ((stage === 'L1 Interview' || stage === 'L2 Interview') && (action === 'panel-select' || action === 'panel-reject')) {
+      const reviewerEmail = fresh.resumeReviewedByEmail || (stage === 'L1 Interview' ? fresh.l1InterviewerEmail : fresh.l2InterviewerEmail) || null;
       const emailType = action === 'panel-select' ? 'candidate_selected' : 'candidate_rejected';
-
-      enqueue(uploaderEmail,    'panel', emailType);
-      enqueue(reviewerEmail,    'panel', emailType);
-      enqueue(panelMemberEmail, 'panel', emailType);
-    }
-
-    // ── HR ROUND FEEDBACK ─────────────────────────────────────────────────────
-    else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
+      enqueue(uploaderEmail, 'panel', emailType);
+      enqueue(reviewerEmail, 'panel', emailType);
+      enqueue(actorEmail,    'panel', emailType);
+    } else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
       const emailType = action === 'select' ? 'candidate_selected' : 'candidate_rejected';
       enqueue(uploaderEmail, 'hr', emailType);
       enqueue(actorEmail,    'hr', emailType);
-    }
-
-    // ── OFFER STAGE ───────────────────────────────────────────────────────────
-    else if (stage === 'Offer Stage') {
-      const emailType =
-        action === 'release-offer' ? 'offer_released'  :
-        action === 'offer-accept'  ? 'offer_accepted'  :
-                                     'offer_rejected';
+    } else if (stage === 'Offer Stage') {
+      const emailType = action === 'release-offer' ? 'offer_released' : action === 'offer-accept' ? 'offer_accepted' : 'offer_rejected';
       enqueue(uploaderEmail, 'hr', emailType);
       enqueue(actorEmail,    'hr', emailType);
     }
-
-    // ── FLUSH ─────────────────────────────────────────────────────────────────
-    const recipients = [...queue.keys()];
-    console.log(`[Email] ── Sending to ${recipients.length} recipient(s):`, recipients);
 
     for (const emailParams of queue.values()) {
       await sendEmail(emailParams);
     }
-
-    console.log('[Email] ── Dispatch complete. Stage:', stage, '| Action:', action);
   };
 
-  // ─── LOADING / NOT FOUND / ACCESS CHECK ──────────────────────────────────
-  if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>
-      Loading Candidate…
-    </div>
-  );
-  if (!candidate) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>
-      Candidate not found.
-    </div>
-  );
-  if (role === 'agency' && candidate.createdBy !== user?.uid) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>
-        You don't have access to this candidate.
-      </div>
-    );
-  }
+  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>Loading Candidate…</div>;
+  if (!candidate) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>Candidate not found.</div>;
+  if (role === 'agency' && candidate.createdBy !== user?.uid) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'Segoe UI, system-ui' }}>You don't have access to this candidate.</div>;
 
   const finalStatus = candidate.finalStatus || 'In Progress';
   const finalBadgeStyle: React.CSSProperties = {
@@ -1584,9 +1485,7 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
   return (
     <div style={{ fontFamily: 'Segoe UI, system-ui', background: '#F5F6FA', padding: '24px' }}>
       <div style={{ marginBottom: '20px' }}>
-        <Button variant="outline" onClick={() => router.back()} className="flex items-center gap-2 font-semibold">
-          ← Back to History
-        </Button>
+        <Button variant="outline" onClick={() => router.back()} className="flex items-center gap-2 font-semibold">← Back to History</Button>
       </div>
 
       {role === 'admin' && (
@@ -1615,50 +1514,34 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
                 const fileType = candidate.resumeFile.type || 'application/pdf';
                 const blob     = new Blob([arr], { type: fileType });
                 const url      = URL.createObjectURL(blob);
-                if (fileType.includes('pdf')) {
-                  window.open(url, '_blank');
-                } else {
-                  const a = document.createElement('a');
-                  a.href = url; a.download = candidate.resumeFile.name || 'resume'; a.click();
-                }
-              }}>
-                📄 View Resume
-              </Button>
+                if (fileType.includes('pdf')) { window.open(url, '_blank'); }
+                else { const a = document.createElement('a'); a.href = url; a.download = candidate.resumeFile.name || 'resume'; a.click(); }
+              }}>📄 View Resume</Button>
             ) : (
               <p style={{ color: 'gray', fontSize: '13px' }}>No resume uploaded</p>
             )}
           </div>
           <AIMatchCard candidate={candidate} />
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
-  <h2 style={{ fontWeight: 'bold', marginBottom: '16px' }}>Professional Background</h2>
-
-  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-    {[
-      ['Full Name',      candidate.candidateName],
-      ['Email',          candidate.candidateEmail],
-      ['Phone',          candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'],
-      ['Experience',     candidate.experience ? `${candidate.experience} Years` : '—'],
-      ['Current CTC',    candidate.currentCtc   || '—'],
-      ['Expected CTC',   candidate.expectedCtc  || '—'],
-      ['Notice Period',  candidate.noticePeriod  || '—'],
-      ['Onsite Comfort', candidate.isComfortableOnsite || '—'],
-    ].map(([label, value]) => (
-      <div key={label as string}>
-        
-        {/* HEADER → BOLD */}
-        <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' }}>
-          {label}
-        </p>
-
-        {/* VALUE → SMALL */}
-        <p style={{ color: 'gray', fontSize: '12px', wordBreak: 'break-all' }}>
-          {value as string}
-        </p>
-
-      </div>
-    ))}
-  </div>
-</div>
+            <h2 style={{ fontWeight: 'bold', marginBottom: '16px' }}>Professional Background</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              {[
+                ['Full Name',      candidate.candidateName],
+                ['Email',          candidate.candidateEmail],
+                ['Phone',          candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'],
+                ['Experience',     candidate.experience ? `${candidate.experience} Years` : '—'],
+                ['Current CTC',    candidate.currentCtc   || '—'],
+                ['Expected CTC',   candidate.expectedCtc  || '—'],
+                ['Notice Period',  candidate.noticePeriod  || '—'],
+                ['Onsite Comfort', candidate.isComfortableOnsite || '—'],
+              ].map(([label, value]) => (
+                <div key={label as string}>
+                  <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' }}>{label}</p>
+                  <p style={{ color: 'gray', fontSize: '12px', wordBreak: 'break-all' }}>{value as string}</p>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* ── RIGHT COLUMN ── */}
@@ -1667,33 +1550,15 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
             <h2 style={{ fontWeight: 'bold', marginBottom: '6px' }}>Interview Workflow</h2>
             <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <ResumeReviewCard
-                candidate={candidate} role={role as UserRole} user={user}
-                panelUsers={panelUsers} history={history}
-                onAction={(a, p) => handleAction('Resume Review', a, p)}
-              />
-              <InterviewStageCard
-                candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
-                stageKey="l1" title="L1 Interview" history={history}
-                onAction={(a, p) => handleAction('L1 Interview', a, p)}
-              />
-              <InterviewStageCard
-                candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers}
-                stageKey="l2" title="L2 Interview" history={history}
-                onAction={(a, p) => handleAction('L2 Interview', a, p)}
-              />
-              <HRRoundCard
-                candidate={candidate} role={role as UserRole} history={history}
-                onAction={(a, p) => handleAction('HR Round', a, p)}
-              />
-              <OfferStageCard
-                candidate={candidate} role={role as UserRole} history={history}
-                onAction={(a, p) => handleAction('Offer Stage', a, p)}
-              />
+              <ResumeReviewCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} history={history} onAction={(a, p) => handleAction('Resume Review', a, p)} />
+              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l1" title="L1 Interview" history={history} onAction={(a, p) => handleAction('L1 Interview', a, p)} />
+              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l2" title="L2 Interview" history={history} onAction={(a, p) => handleAction('L2 Interview', a, p)} />
+              <HRRoundCard candidate={candidate} role={role as UserRole} history={history} onAction={(a, p) => handleAction('HR Round', a, p)} />
+              <OfferStageCard candidate={candidate} role={role as UserRole} history={history} onAction={(a, p) => handleAction('Offer Stage', a, p)} />
             </div>
           </div>
 
-         
+
         </div>
       </div>
     </div>
