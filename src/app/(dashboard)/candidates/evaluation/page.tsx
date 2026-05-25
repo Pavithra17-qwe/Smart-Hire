@@ -38,8 +38,6 @@ async function computeMatchScore(
   }
 
   try {
-    // Check if project has any JD content at all
-    // jdFileType === 'manual' means HR typed the JD as text (stored in jdFileData)
     const hasManualText = !!project.jdFileData?.trim() && project.jdFileType === 'manual';
     const hasJdText     = !!project.jdText?.trim();
     const hasJdFile     = !!project.jdFileDataB64;
@@ -54,13 +52,11 @@ async function computeMatchScore(
 
     toast({ title: "🤖 AI Scoring", description: "Analyzing resume against job requirements…" });
 
-    // Resolve the JD text — check all possible field names and types
     const resolvedJdText =
       project.jdText?.trim() ||
       (project.jdFileType === 'manual' ? project.jdFileData?.trim() : '') ||
       '';
 
-    // Resolve the JD file — only for actual uploaded PDF/DOCX (not manual text)
     const resolvedJdFile =
       project.jdFileDataB64 ||
       (project.jdFileType !== 'manual' ? project.jdFileData : '') ||
@@ -81,6 +77,15 @@ async function computeMatchScore(
       jdFileType:        resolvedJdFile ? resolvedJdType : undefined,
       resumeFileDataB64: resumeFile.data,
       resumeFileType:    resumeFile.type,
+      candidateProfile: {
+        experience:          formData.experience          || '',
+        currentCtc:          formData.currentCtc          || '',
+        expectedCtc:         formData.expectedCtc         || '',
+        noticePeriod:        formData.noticePeriod        || '',
+        currentLocation:     formData.currentLocation     || '',
+        isComfortableOnsite: formData.isComfortableOnsite || '',
+        designation:         formData.candidateDesignation || '',
+      },
     });
 
     const score   = typeof result.matchScore === "number" ? result.matchScore : 0;
@@ -94,6 +99,7 @@ async function computeMatchScore(
       "AI scoring could not be completed because the resume or JD content exceeded the supported size limit." };
   }
 }
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function CandidateEvaluation() {
   const { user, role, name: loggedInName } = useAuth();
@@ -124,22 +130,17 @@ export default function CandidateEvaluation() {
   });
 
   // ── Fetch projects ──────────────────────────────────────────────────────────
-  // HR    → ALL active job_requisitions (admin + hr created, no filter)
-  // Admin → ALL active job_requisitions
-  // Agency→ ONLY job_requisitions where assignedAgencies contains their UID
   useEffect(() => {
     if (!role || !user) { setProjects([]); return; }
 
     let q: any;
 
     if (role === "admin" || role === "hr") {
-      // Both admin and HR see every active project regardless of who created it
       q = query(
         collection(db, "job_requisitions"),
         where("status", "==", "Active")
       );
     } else if (role === "agency") {
-      // Agency only sees projects that have been explicitly assigned to them
       q = query(
         collection(db, "job_requisitions"),
         where("status", "==", "Active"),
@@ -162,7 +163,6 @@ export default function CandidateEvaluation() {
 
     setFormData(prev => ({ ...prev, [field]: processed }));
 
-    // Auto-fill role + location when project is selected
     if (field === "projectId") {
       const project = projects.find((p: any) => p.id === value);
       if (project && value && value !== "none") {
@@ -180,16 +180,41 @@ export default function CandidateEvaluation() {
     if (errors[field]) setErrors(prev => ({ ...prev, [field]: "" }));
   };
 
-  // ── Resume upload + extraction ─────────────────────────────────────────────
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-  
+
+    // ── Size guard: 1 MB max ──────────────────────────────────────
+    if (file.size > 1 * 1024 * 1024) {
+      setErrors(prev => ({
+        ...prev,
+        resumeFile: `File too large (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maximum allowed size is 1 MB.`,
+      }));
+      e.target.value = '';
+      return;
+    }
+
+    // ── FIX 3: Block non-PDF/DOCX file types ─────────────────────
+    const allowedTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+    if (!allowedTypes.includes(file.type)) {
+      setErrors(prev => ({
+        ...prev,
+        resumeFile: 'Invalid file type. Only PDF and DOCX files are accepted.',
+      }));
+      e.target.value = '';
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────
+
     console.log("📁 File selected:", file.name, file.type, file.size);
-  
+
     setErrors(prev => ({ ...prev, resumeFile: "" }));
+
     setIsLoadingExtracting(true);
-  
+
     setFormData(prev => ({
       ...prev,
       resumeFile:     { name: file.name, type: file.type, data: "" },
@@ -202,14 +227,14 @@ export default function CandidateEvaluation() {
       noticePeriod:   "",
       currentCompany: "",
     }));
-  
+
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = (reader.result as string).split(",")[1];
       console.log("📄 Base64 length:", base64?.length);
-  
+
       setFormData(prev => ({ ...prev, resumeFile: { name: file.name, type: file.type, data: base64 } }));
-  
+
       try {
         console.log("🚀 Calling candidateResumeExtraction...");
         const extracted = await candidateResumeExtraction({
@@ -217,9 +242,9 @@ export default function CandidateEvaluation() {
           fileType: file.type,
           fileDataB64: base64,
         });
-  
-        console.log("✅ Extracted result:", JSON.stringify(extracted, null, 2));  // ← KEY LOG
-  
+
+        console.log("✅ Extracted result:", JSON.stringify(extracted, null, 2));
+
         setFormData(prev => ({
           ...prev,
           candidateName:  extracted.candidateName  ?? "",
@@ -233,10 +258,10 @@ export default function CandidateEvaluation() {
           currentLocation:   "",
           permanentLocation: "",
         }));
-  
+
         toast({ title: "Resume Parsed", description: "Details auto-filled from resume." });
       } catch (err) {
-        console.error("❌ Extraction error:", err);  // ← KEY LOG
+        console.error("❌ Extraction error:", err);
         toast({ variant: "destructive", title: "Extraction Failed", description: String(err) });
       } finally {
         setIsLoadingExtracting(false);
@@ -263,23 +288,16 @@ export default function CandidateEvaluation() {
     if (!formData.isComfortableOnsite)         e.isComfortableOnsite  = "This field is required.";
     if (!formData.resumeFile)                  e.resumeFile           = "Resume is mandatory.";
 
-    // Project is optional for all roles
-// (scoring is skipped automatically when no project is selected)
-
-   // Project, role, and location are all optional
-// Role + location are auto-filled when a project is selected
-
     return e;
   };
 
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async (ev: React.FormEvent) => {
     ev.preventDefault();
-    // ← ADD THESE 4 LINES:
-  if (isLoadingExtracting) {
-    toast({ title: "Please wait", description: "Resume is still being extracted…" });
-    return;
-  }
+    if (isLoadingExtracting) {
+      toast({ title: "Please wait", description: "Resume is still being extracted…" });
+      return;
+    }
     const formErrors = validateForm();
     if (Object.keys(formErrors).length > 0) { setErrors(formErrors); return; }
 
@@ -299,7 +317,7 @@ export default function CandidateEvaluation() {
         : null;
       let matchScore = 0;
       let matchSummary = "No project selected — AI scoring skipped.";
-      
+
       if (selectedProject) {
         const result = await computeMatchScore(
           formData.resumeFile,
@@ -315,6 +333,17 @@ export default function CandidateEvaluation() {
         toast({ title: "ℹ️ Scoring Skipped", description: "Project not selected — AI scoring not performed." });
       }
 
+      const autoAdvance = selectedProject && matchScore >= 70;
+
+      let l1Token = '';
+      let l1Url   = '';
+
+      if (autoAdvance) {
+        l1Token = globalThis.crypto.randomUUID();
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+        l1Url   = `${baseUrl}/interview/${l1Token}`;
+      }
+
       const { projectId, ...rest } = formData;
 
       const candidateData: any = {
@@ -328,14 +357,26 @@ export default function CandidateEvaluation() {
         projectLocation:      selectedProject?.location || (selectedProject?.locations || []).join(", ") || formData.location || "—",
         createdDate:          serverTimestamp(),
         createdBy:            user?.uid,
+        createdByEmail:       user?.email || '',
         createdByRole:        role,
-        resumeReviewStatus:   "Pending",
-        l1Status:             "Locked",
+        resumeReviewStatus:   autoAdvance ? "Accepted" : "Pending",
+        l1Status:             autoAdvance ? "Scheduled" : "Locked",
         l2Status:             "Locked",
         hrStatus:             "Locked",
         offerStatus:          "Locked",
         finalStatus:          "In Progress",
         status:               "Submitted",
+        ...(autoAdvance && {
+          l1InterviewType:       'ai',
+          l1ScheduledDate:       new Date().toISOString().split('T')[0],
+          l1AIInterviewToken:    l1Token,
+          l1AIInterviewUrl:      l1Url,
+          l1InterviewerName:     loggedInName || user?.displayName || '',
+          l1InterviewerEmail:    user?.email  || '',
+          resumeReviewedByEmail: user?.email  || '',
+          resumeReviewedByName:  loggedInName || user?.displayName || '',
+          resumeFeedback:        `Auto-advanced: AI match score ${matchScore}% ≥ 70%`,
+        }),
       };
 
       if (role === "agency") {
@@ -347,6 +388,77 @@ export default function CandidateEvaluation() {
 
       const newDocRef = await addDoc(collection(db, "candidates"), candidateData);
 
+      if (autoAdvance && l1Token) {
+        const resumeText = [
+          `Name: ${formData.candidateName}`,
+          `Role: ${formData.candidateDesignation}`,
+          `Experience: ${formData.experience} years`,
+          `Notice Period: ${formData.noticePeriod || ''}`,
+        ].filter(Boolean).join('\n');
+
+        const jobDescription =
+          selectedProject?.jdText?.trim() ||
+          (selectedProject?.jdFileType === 'manual' ? selectedProject?.jdFileData?.trim() : '') ||
+          `Role: ${formData.candidateDesignation}`;
+
+        const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+        await addDoc(collection(db, 'ai_interviews'), {
+          token:           l1Token,
+          candidateId:     newDocRef.id,
+          candidateName:   formData.candidateName,
+          candidateEmail:  emailLower,
+          jobRole:         formData.candidateDesignation,
+          resumeText,
+          jobDescription,
+          scheduledByUid:  user?.uid    || '',
+          scheduledByName: loggedInName || '',
+          status:          'pending',
+          createdAt:       serverTimestamp(),
+          expiresAt,
+          interviewUrl:    l1Url,
+        });
+
+        try {
+          const { sendInterviewEmail } = await import('@/ai/flows/send-interview-email-flow');
+          await sendInterviewEmail({
+            candidateName:     formData.candidateName,
+            candidateEmail:    emailLower,
+            jobRole:           formData.candidateDesignation,
+            experience:        String(formData.experience || ''),
+            location:          formData.currentLocation || '',
+            interviewerName:   loggedInName || '',
+            interviewerEmail:  user?.email  || '',
+            interviewDate:     new Date().toISOString().split('T')[0],
+            interviewTime:     '',
+            schedulingNotes:   `Your AI interview link: ${l1Url}\n\nPlease complete within 48 hours.`,
+            interviewFeedback: '',
+            stage:             'L1 Interview',
+            senderRole:        'hr',
+            emailType:         'interview_scheduled',
+            candidateId:       newDocRef.id,
+            threadMessageId:   '',
+            interviewLink:     l1Url,
+          });
+        } catch (emailErr) {
+          console.error('Auto-advance email failed:', emailErr);
+        }
+
+        toast({
+          title:       "🚀 Auto-Advanced to L1!",
+          description: `Score ${matchScore}% ≥ 70% — AI interview link sent to ${formData.candidateName}.`,
+        });
+      } else {
+        toast({
+          title:       matchScore < 70 && selectedProject
+            ? `⚠️ Score ${matchScore}% — Sent for HR Review`
+            : "✅ Candidate Submitted",
+          description: matchScore < 70 && selectedProject
+            ? "Score below 70% — HR will review and decide."
+            : "Candidate profile created successfully.",
+        });
+      }
+
       await addDoc(collection(db, "candidate_history"), {
         candidateId: newDocRef.id,
         ...candidateData,
@@ -357,15 +469,14 @@ export default function CandidateEvaluation() {
           userId:     user.uid,
           userName:   loggedInName,
           userRole:   role,
-          action:     "Candidate Uploaded",
-          stage:      "Sourcing",
+          action:     autoAdvance ? "Candidate Auto-Advanced to L1" : "Candidate Uploaded",
+          stage:      autoAdvance ? "L1 Interview" : "Sourcing",
           targetType: "Candidate",
           targetId:   newDocRef.id,
           targetName: candidateData.candidateName,
         });
       }
 
-      toast({ title: "Success", description: "Candidate profile created successfully." });
       router.push("/candidates/history");
     } catch (error: any) {
       console.error("Submission Error:", error);
@@ -383,6 +494,7 @@ export default function CandidateEvaluation() {
     selectedProject &&
     selectedProject.roles?.length &&
     selectedProject.locations?.length;
+
   return (
     <div className="max-w-3xl mx-auto py-8">
       <Card className="shadow-lg border-t-4 border-t-primary">
@@ -404,11 +516,25 @@ export default function CandidateEvaluation() {
               <Label className="font-bold flex items-center gap-2">
                 Upload Resume <Sparkles className="w-4 h-4 text-primary" />
               </Label>
-              <label className={cn(
-                "flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors",
-                errors.resumeFile    ? "border-red-500" : "",
-                formData.resumeFile  ? "bg-green-50/50 border-green-200" : "bg-muted/50 border-border hover:bg-muted"
-              )}>
+              {/* FIX 2: Added onDragOver + onDrop for drag and drop support */}
+              <label
+                className={cn(
+                  "flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors",
+                  errors.resumeFile    ? "border-red-500" : "",
+                  formData.resumeFile  ? "bg-green-50/50 border-green-200" : "bg-muted/50 border-border hover:bg-muted"
+                )}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) {
+                    const syntheticEvent = {
+                      target: { files: [file], value: '' },
+                    } as unknown as React.ChangeEvent<HTMLInputElement>;
+                    handleFileChange(syntheticEvent);
+                  }
+                }}
+              >
                 <div className="flex flex-col items-center justify-center pt-5 pb-6 px-4 text-center">
                   {isLoadingExtracting
                     ? <Loader2 className="w-10 h-10 text-primary animate-spin" />
@@ -435,7 +561,6 @@ export default function CandidateEvaluation() {
               {/* ── Project selection ──────────────────────────────────── */}
               <div className="md:col-span-2 space-y-2">
 
-                {/* Agency notice */}
                 {isAgency && (
                   <div className="flex items-start gap-2 p-3 rounded-md bg-blue-50 border border-blue-200 mb-1">
                     <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
@@ -446,7 +571,6 @@ export default function CandidateEvaluation() {
                   </div>
                 )}
 
-                {/* HR notice */}
                 {role === "hr" && (
                   <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200 mb-1">
                     <Info className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
@@ -456,24 +580,23 @@ export default function CandidateEvaluation() {
                   </div>
                 )}
 
-<Label htmlFor="project" className="font-bold">
-  Client Project
-  <span className="text-muted-foreground font-normal text-xs ml-1">(optional)</span>
-</Label>
+                <Label htmlFor="project" className="font-bold">
+                  Client Project
+                  <span className="text-muted-foreground font-normal text-xs ml-1">(optional)</span>
+                </Label>
 
                 <Select
                   value={formData.projectId}
                   onValueChange={(v: string) => handleInputChange("projectId", v)}
                 >
                   <SelectTrigger id="project" className={cn({ "border-red-500": errors.projectId })}>
-                  <SelectValue placeholder="Select a project (optional)…" />
+                    <SelectValue placeholder="Select a project (optional)…" />
                   </SelectTrigger>
                   <SelectContent>
-                  <SelectItem value="none">No project / Not sure</SelectItem>
+                    <SelectItem value="none">No project / Not sure</SelectItem>
                     {projects.map((p: any) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.projectName}
-                      
                       </SelectItem>
                     ))}
                     {projects.length === 0 && (
@@ -525,42 +648,43 @@ export default function CandidateEvaluation() {
                 {errors.phoneNumber && <p className="text-xs text-red-500">{errors.phoneNumber}</p>}
               </div>
 
-         {/* Current Location */}
-<div className="space-y-2">
-  <Label className="font-bold">Current Location</Label>
-  <Input
-    value={formData.currentLocation}
-    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-      handleInputChange("currentLocation", e.target.value)
-    }
-    className={cn({ "border-red-500": errors.currentLocation })}
-  />
-  {errors.currentLocation && (
-    <p className="text-xs text-red-500">{errors.currentLocation}</p>
-  )}
-</div>
+              {/* Current Location */}
+              <div className="space-y-2">
+                <Label className="font-bold">Current Location</Label>
+                <Input
+                  value={formData.currentLocation}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleInputChange("currentLocation", e.target.value)
+                  }
+                  className={cn({ "border-red-500": errors.currentLocation })}
+                />
+                {errors.currentLocation && (
+                  <p className="text-xs text-red-500">{errors.currentLocation}</p>
+                )}
+              </div>
 
-{/* Permanent Location */}
-<div className="space-y-2">
-  <Label className="font-bold">Permanent Location</Label>
-  <Input
-    value={formData.permanentLocation}
-    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-      handleInputChange("permanentLocation", e.target.value)
-    }
-    className={cn({ "border-red-500": errors.permanentLocation })}
-  />
-  {errors.permanentLocation && (
-    <p className="text-xs text-red-500">{errors.permanentLocation}</p>
-  )}
-</div>
+              {/* Permanent Location */}
+              <div className="space-y-2">
+                <Label className="font-bold">Permanent Location</Label>
+                <Input
+                  value={formData.permanentLocation}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    handleInputChange("permanentLocation", e.target.value)
+                  }
+                  className={cn({ "border-red-500": errors.permanentLocation })}
+                />
+                {errors.permanentLocation && (
+                  <p className="text-xs text-red-500">{errors.permanentLocation}</p>
+                )}
+              </div>
 
-              {/* Experience */}
+              {/* Experience — FIX 1: min="0" to block negative values */}
               <div className="space-y-2">
                 <Label className="font-bold">Experience (Years)</Label>
                 <Input
                   type="number"
                   step="0.1"
+                  min="0"
                   value={formData.experience}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("experience", e.target.value)}
                   className={cn({ "border-red-500": errors.experience })}
@@ -579,11 +703,12 @@ export default function CandidateEvaluation() {
                 {errors.candidateDesignation && <p className="text-xs text-red-500">{errors.candidateDesignation}</p>}
               </div>
 
-              {/* Current CTC */}
+              {/* Current CTC — FIX 1: min="0" to block negative values */}
               <div className="space-y-2">
                 <Label className="font-bold">Current CTC</Label>
                 <Input
                   type="number"
+                  min="0"
                   value={formData.currentCtc}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("currentCtc", e.target.value)}
                   className={cn({ "border-red-500": errors.currentCtc })}
@@ -591,11 +716,12 @@ export default function CandidateEvaluation() {
                 {errors.currentCtc && <p className="text-xs text-red-500">{errors.currentCtc}</p>}
               </div>
 
-              {/* Expected CTC */}
+              {/* Expected CTC — FIX 1: min="0" to block negative values */}
               <div className="space-y-2">
                 <Label className="font-bold">Expected CTC</Label>
                 <Input
                   type="number"
+                  min="0"
                   value={formData.expectedCtc}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("expectedCtc", e.target.value)}
                   className={cn({ "border-red-500": errors.expectedCtc })}
@@ -604,28 +730,28 @@ export default function CandidateEvaluation() {
               </div>
 
               {shouldShowFields && (
-  <>
-    {/* Project Role */}
-    <div className="space-y-2">
-      <Label className="font-bold">Project Role / Designation</Label>
-      <Input
-        value={formData.role}
-        disabled
-        className="bg-muted/30 cursor-not-allowed"
-      />
-    </div>
+                <>
+                  {/* Project Role */}
+                  <div className="space-y-2">
+                    <Label className="font-bold">Project Role / Designation</Label>
+                    <Input
+                      value={formData.role}
+                      disabled
+                      className="bg-muted/30 cursor-not-allowed"
+                    />
+                  </div>
 
-    {/* Project Location */}
-    <div className="space-y-2">
-      <Label className="font-bold">Project Location</Label>
-      <Input
-        value={formData.location}
-        disabled
-        className="bg-muted/30 cursor-not-allowed"
-      />
-    </div>
-  </>
-)}
+                  {/* Project Location */}
+                  <div className="space-y-2">
+                    <Label className="font-bold">Project Location</Label>
+                    <Input
+                      value={formData.location}
+                      disabled
+                      className="bg-muted/30 cursor-not-allowed"
+                    />
+                  </div>
+                </>
+              )}
 
               {/* Notice Period */}
               <div className="space-y-2">
@@ -678,6 +804,30 @@ export default function CandidateEvaluation() {
           </form>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function CheckRow({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: '10px',
+      padding: '10px 14px', borderRadius: '8px',
+      background: ok ? '#F0FDF4' : '#F9FAFB',
+      border: `1px solid ${ok ? '#86EFAC' : '#E5E7EB'}`,
+    }}>
+      <div style={{
+        width: '20px', height: '20px', borderRadius: '50%', flexShrink: 0,
+        background: ok ? '#16A34A' : '#E5E7EB',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: '11px', color: 'white', fontWeight: 700,
+      }}>
+        {ok ? '✓' : '?'}
+      </div>
+      <span style={{ fontSize: '13px', color: ok ? '#16A34A' : '#6B7280', fontWeight: ok ? 600 : 400 }}>
+        {label}
+      </span>
     </div>
   );
 }

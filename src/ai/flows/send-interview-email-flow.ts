@@ -181,7 +181,9 @@ Candidate   : ${candidateName}
 Job Role    : ${jobRole}
 Date        : ${interviewDate}
 Time Slot   : ${interviewTime}
-${schedulingNotes ? `\nNotes :\n  ${schedulingNotes}\n` : ''}
+${schedulingNotes
+  ? `\nNotes :\n  AI interview link has been sent to the candidate successfully.\n`
+  : ''}
 Handled by :
   - Name  : ${interviewerName}
   - Role  : HR

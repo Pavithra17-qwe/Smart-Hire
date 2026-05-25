@@ -432,7 +432,8 @@ const ResumeReviewCard: React.FC<{
     Rejected:         { label: 'Rejected',       bg: '#FEE2E2', color: '#991B1B' },
   };
   const badge = badgeMap[status] || { label: status, bg: '#F3F4F6', color: '#374151' };
-
+  const aiScore = (candidate as any).matchScore ?? (candidate as any).aiScore ?? null;
+  const isHighScore = typeof aiScore === 'number' && aiScore >= 70;
   return (
     <div style={{
       borderRadius: '12px',
@@ -444,180 +445,246 @@ const ResumeReviewCard: React.FC<{
         <h3 style={{ fontWeight: 'bold', fontSize: '15px', margin: 0 }}>Resume Review</h3>
         <span style={{ fontSize: '11px', fontWeight: '700', padding: '3px 10px', borderRadius: '999px', background: badge.bg, color: badge.color }}>{badge.label}</span>
       </div>
-      <div style={{ padding: '10px 16px 4px' }}>
+      <div style={{ padding: '10px 16px 14px' }}>
 
-        {/* STEP 1 */}
-        <div style={timelineRow}>
-          <div style={spineCol}>
-            <div style={dotStyle(step1Done, !step1Done, '#F59E0B')} />
-            <div style={vline} />
-          </div>
-          <div style={bodyCol}>
-            {whoLabel('HR', hrPill, step1Done ? 'Step 1 — done' : 'Step 1 — active')}
-            {step1Done && (
-              <div style={{ background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', border: '1px solid #E5E7EB', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <p style={{ fontSize: '13px', fontWeight: '600', color: '#374151', margin: 0 }}>Resume reviewed — panel assigned</p>
-                {hrFeedback && <p style={{ fontSize: '12px', color: '#6B7280', margin: 0 }}>"{hrFeedback}"</p>}
-                <p style={{ fontSize: '11px', color: '#9CA3AF', margin: 0 }}>Assigned → <strong style={{ color: '#1D4ED8' }}>{panelName || assignedPanel}</strong></p>
-                <UpdatedByBadge history={history} stage="Resume Review" actions={['assign-panel']} />
-              </div>
-            )}
-            {isHR && status === 'Pending' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ background: '#F0F9FF', borderRadius: '10px', padding: '12px 14px', border: '1px solid #BAE6FD' }}>
-                  <p style={{ fontWeight: '700', fontSize: '12px', color: '#0369A1', marginBottom: '8px' }}>Candidate Overview</p>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    {([
-                      ['Experience',    `${(candidate as any).experience || '—'} Years`],
-                      ['Notice Period', (candidate as any).noticePeriod  || '—'],
-                      ['Current CTC',  (candidate as any).currentCtc    || '—'],
-                      ['Expected CTC', (candidate as any).expectedCtc   || '—'],
-                      ['Location',     (candidate as any).currentLocation || (candidate as any).candidateLocation || '—'],
-                      ['Onsite',       (candidate as any).isComfortableOnsite || '—'],
-                    ] as [string, string][]).map(([label, value]) => (
-                      <div key={label}>
-                        <p style={{ fontSize: '11px', color: '#6B7280', margin: 0 }}>{label}</p>
-                        <p style={{ fontSize: '13px', fontWeight: '600', color: '#111827', margin: 0 }}>{value}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>HR Feedback <span style={{ color: '#DC2626' }}>*</span></p>
-                  <Textarea placeholder="Write your resume review notes…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }} style={{ resize: 'vertical', minHeight: '80px' }} />
-                </div>
-                <div>
-                  <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>Assign Panel Member <span style={{ color: '#DC2626' }}>*</span></p>
-                  <select value={panelUid} onChange={e => { setPanelUid(e.target.value); setErr(''); }} style={{ width: '100%', borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px 12px', fontSize: '13px', background: 'white' }}>
-                    <option value="">— Select panel member —</option>
-                    {panelUsers.map(p => (
-                      <option key={p.uid} value={p.uid}>{p.name ? `${p.name} (${p.email})` : p.email || `UID: ${p.uid}`}</option>
-                    ))}
-                  </select>
-                </div>
-                {err && <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><AlertCircle className="h-3 w-3" />{err}</p>}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                  <Button variant="destructive" onClick={handleHRReject}>✕ Reject</Button>
-                  <Button onClick={handleAssign} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>Assign to Panel →</Button>
-                </div>
-              </div>
-            )}
-            {!isHR && !step1Done && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for HR to review and assign panel.</p>}
-          </div>
-        </div>
-
-        {/* STEP 2 */}
-        <div style={timelineRow}>
-          <div style={spineCol}>
-            <div style={dotStyle(step2Done, status === 'Panel Assigned', '#2563EB')} />
-            <div style={vline} />
-          </div>
-          <div style={bodyCol}>
-            {whoLabel('Panel', panPill, step2Done ? 'Step 2 — done' : status === 'Panel Assigned' ? 'Step 2 — active' : 'Step 2 — waiting')}
-            {step2Done && (
-              <div style={{ background: panelDecision === 'reject' ? '#FFF8F8' : '#F6FEF9', border: `1px solid ${panelDecision === 'reject' ? '#FECACA' : '#86EFAC'}`, borderRadius: '8px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <p style={{ fontSize: '12px', color: panelDecision === 'reject' ? '#DC2626' : '#065F46', margin: 0 }}>"{panelFeedback}"</p>
-                <p style={{ fontSize: '11px', fontWeight: '700', margin: 0, color: panelDecision === 'reject' ? '#DC2626' : '#059669' }}>{panelDecision === 'reject' ? '✕ Panel: Reject' : '✓ Panel: Accept'}</p>
-                <UpdatedByBadge history={history} stage="Resume Review" actions={['panel-accept', 'panel-reject']} />
-              </div>
-            )}
-            {isAssignedPanel && status === 'Panel Assigned' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <Textarea placeholder="Enter your resume review feedback…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }} style={{ resize: 'vertical', minHeight: '90px' }} />
-                {err && <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><AlertCircle className="h-3 w-3" />{err}</p>}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                  <Button variant="destructive" onClick={() => handlePanelSubmit('panel-reject')}>✕ Reject</Button>
-                  <Button onClick={() => handlePanelSubmit('panel-accept')} style={{ background: '#059669', color: 'white' }}>✓ Accept Resume</Button>
-                </div>
-              </div>
-            )}
-            {isHR && status === 'Panel Assigned' && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for <strong style={{ color: '#374151' }}>{panelName}</strong> to submit feedback.</p>}
-            {isPanel && !isAssignedPanel && status === 'Panel Assigned' && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>You are not assigned to this resume.</p>}
-            {status === 'Pending' && <p style={{ fontSize: '12px', color: '#D1D5DB' }}>Waiting for HR to assign a panel member.</p>}
-          </div>
-        </div>
-
-        {/* STEP 3 */}
-        <div style={timelineRow}>
-          <div style={spineCol}>
-            <div style={dotStyle(isDone, step3Active, '#F59E0B')} />
-          </div>
-          <div style={{ ...bodyCol, paddingBottom: '6px' }}>
-            {whoLabel('HR', hrPill, isDone ? 'Step 3 — done' : step3Active ? 'Step 3 — active' : 'Step 3 — waiting')}
-            {isDone && (
-              <div style={{ background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9', border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#86EFAC'}`, borderRadius: '8px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <p style={{ fontSize: '12px', fontWeight: '700', margin: 0, color: status === 'Rejected' ? '#DC2626' : '#059669' }}>{status === 'Rejected' ? '✕ Resume Rejected' : '✓ Moved to L1 Interview'}</p>
-                <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
-              </div>
-            )}
-            {isHR && step3Active && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <p style={{ fontSize: '12px', color: '#6B7280' }}>Panel has reviewed the resume.</p>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                  <Button variant="destructive" onClick={() => onAction('reject', {})}>✕ Reject</Button>
-                  <Button onClick={() => onAction('accept', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L1</Button>
-                </div>
-              </div>
-            )}
-            {!isHR && !isDone && <p style={{ fontSize: '12px', color: '#D1D5DB' }}>{step3Active ? 'Waiting for HR to make final call.' : 'Pending previous steps.'}</p>}
-            {(role === 'admin' || role === 'agency') && step3Active && <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Only HR can make the final call.</p>}
-          </div>
-        </div>
-
+{/* ── HIGH SCORE PATH (≥ 70): auto-advanced, show result only ── */}
+{/* ── HIGH SCORE PATH (≥ 70): auto-advanced, show result only ── */}
+{isHighScore && status === 'Accepted' && (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+    <div style={{
+      background: aiScore >= 90 ? '#ECFDF5' : '#F0FDF4',
+      border: `1.5px solid ${aiScore >= 90 ? '#6EE7B7' : '#86EFAC'}`,
+      borderRadius: '10px', padding: '14px 16px',
+      display: 'flex', alignItems: 'center', gap: '14px',
+    }}>
+      <div style={{
+        width: '64px', height: '64px', borderRadius: '50%',
+        border: `4px solid ${aiScore >= 90 ? '#059669' : '#16A34A'}`,
+        background: 'white', display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        <span style={{ fontSize: '18px', fontWeight: '900', color: aiScore >= 90 ? '#059669' : '#16A34A', lineHeight: 1 }}>{aiScore}%</span>
+        <span style={{ fontSize: '9px', color: '#6B7280', fontWeight: '600' }}>score</span>
+      </div>
+      <div>
+        <p style={{ fontSize: '14px', fontWeight: '700', color: aiScore >= 90 ? '#059669' : '#16A34A', margin: '0 0 3px' }}>
+          {aiScore >= 90 ? '🌟 Excellent Match — Auto Advanced' : '✅ Good Match — Auto Advanced'}
+        </p>
+        <p style={{ fontSize: '12px', color: '#6B7280', margin: 0 }}>
+          AI interview link has been automatically sent to the candidate.
+        </p>
       </div>
     </div>
-  );
-};
+    <UpdatedByBadge history={history} stage="Resume Review" actions={['accept']} />
+  </div>
+)}
 
+{/* ── HIGH SCORE but still Pending (edge case: page loaded before auto-advance completed) ── */}
+{isHighScore && status === 'Pending' && (
+  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#ECFDF5', border: '1px solid #6EE7B7', borderRadius: '8px', padding: '12px 14px' }}>
+    <span style={{ fontSize: '20px' }}>⏳</span>
+    <p style={{ fontSize: '13px', color: '#059669', fontWeight: '600', margin: 0 }}>
+      Score {aiScore}% — Auto-advancing to L1. Please wait or refresh.
+    </p>
+  </div>
+)}
+
+{/* ── LOW SCORE PATH (< 70): manual HR review ── */}
+{!isHighScore && (
+  <>
+    {/* STEP 1 */}
+    <div style={timelineRow}>
+      <div style={spineCol}>
+        <div style={dotStyle(isDone, !isDone && status === 'Pending', '#F59E0B')} />
+        <div style={vline} />
+      </div>
+      <div style={bodyCol}>
+        {whoLabel('HR', hrPill, isDone ? 'Step 1 — done' : 'Step 1 — active')}
+
+        {/* Score banner for low scorers */}
+        {aiScore !== null && status === 'Pending' && isHR && (
+          <div style={{
+            background: '#FEF9C3', border: '1px solid #FDE68A',
+            borderRadius: '8px', padding: '10px 14px', marginBottom: '8px',
+            display: 'flex', alignItems: 'center', gap: '12px',
+          }}>
+            <div style={{
+              width: '48px', height: '48px', borderRadius: '50%',
+              border: '3px solid #D97706', background: 'white',
+              display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              <span style={{ fontSize: '14px', fontWeight: '900', color: '#D97706', lineHeight: 1 }}>{aiScore}%</span>
+            </div>
+            <div>
+              <p style={{ fontSize: '12px', fontWeight: '700', color: '#92400E', margin: '0 0 2px' }}>⚠️ Below Threshold</p>
+              <p style={{ fontSize: '11px', color: '#78350F', margin: 0 }}>Score &lt; 70% — HR review required before sending interview link.</p>
+            </div>
+          </div>
+        )}
+
+        {isDone && (
+          <div style={{ background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', border: '1px solid #E5E7EB', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <p style={{ fontSize: '13px', fontWeight: '600', color: '#374151', margin: 0 }}>
+              {status === 'Rejected' ? '✕ Resume Rejected' : '✓ Moved to L1 Interview'}
+            </p>
+            {hrFeedback && <p style={{ fontSize: '12px', color: '#6B7280', margin: 0 }}>"{hrFeedback}"</p>}
+            <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
+          </div>
+        )}
+
+        {isHR && status === 'Pending' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div>
+              <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>HR Feedback <span style={{ color: '#DC2626' }}>*</span></p>
+              <Textarea
+                placeholder="Write your resume review notes…"
+                value={feedback}
+                onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setErr(''); }}
+                style={{ resize: 'vertical', minHeight: '80px' }}
+              />
+            </div>
+            {err && <p style={{ color: '#DC2626', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><AlertCircle className="h-3 w-3" />{err}</p>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <Button variant="destructive" onClick={handleHRReject}>✕ Reject</Button>
+              <Button
+                onClick={() => {
+                  if (!feedback.trim()) { setErr('HR feedback is required.'); return; }
+                  setErr('');
+                  onAction('accept', { feedback: feedback.trim() });
+                }}
+                style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}
+              >
+                ✓ Move to L1
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {!isHR && status === 'Pending' && (
+          <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for HR to review the resume.</p>
+        )}
+      </div>
+    </div>
+  </>
+)}
+
+</div>
+</div>
+);
+}; 
+
+// ─── AI SCORE REPORT (shown inline inside L1 card once interview completes) ──
 // ─── AI SCORE REPORT (shown inline inside L1 card once interview completes) ──
 const AIScoreReport: React.FC<{
   candidate: Candidate;
   role: UserRole | null;
   status: string;
   savedFeedback: string | undefined;
+  history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
-}> = ({ candidate, role, status, savedFeedback, onAction }) => {
-  const [hrNotes, setHrNotes] = React.useState('');
-  const [hrErr,   setHrErr]   = React.useState('');
+}> = ({ candidate, role, status, savedFeedback, history, onAction }) => {
+  const [hrNotes,   setHrNotes]   = React.useState('');
+  const [hrErr,     setHrErr]     = React.useState('');
+  const [reScoring, setReScoring] = React.useState(false);
 
-  const overallScore  = (candidate as any).l1AIScore              ?? null;
-  const techScore     = (candidate as any).l1AITechnicalScore     ?? null;
-  const commScore     = (candidate as any).l1AICommunicationScore ?? null;
-  const bodyScore     = (candidate as any).l1AIBodyLanguageScore  ?? null;
-  const eyeScore      = (candidate as any).l1AIEyeContactScore    ?? null;
-  const summary       = (candidate as any).l1AISummary            || '';
-  const rec           = (candidate as any).l1AIRecommendation     || '';
-  const strengths     = (candidate as any).l1AIStrengths          || [];
-  const improvements  = (candidate as any).l1AIImprovements       || [];
+  const overallScore = (candidate as any).l1AIScore              ?? null;
+  const techScore    = (candidate as any).l1AITechnicalScore     ?? null;
+  const commScore    = (candidate as any).l1AICommunicationScore ?? null;
+  const bodyScore    = (candidate as any).l1AIBodyLanguageScore  ?? null;
+  const eyeScore     = (candidate as any).l1AIEyeContactScore    ?? null;
+  const summary      = (candidate as any).l1AISummary            || '';
+  const rec          = (candidate as any).l1AIRecommendation     || '';
+  const strengths    = (candidate as any).l1AIStrengths          || [];
+  const improvements = (candidate as any).l1AIImprovements       || [];
 
-  // Detect failed evaluation: all scores are 0 or null
-  const hasMeaningfulScores = [techScore, commScore, bodyScore, eyeScore].some(s => s !== null && s > 0);
-  const evaluationFailed    = !hasMeaningfulScores;
-  const isDone              = status === 'Selected' || status === 'Rejected';
+  const isDone = status === 'Selected' || status === 'Rejected';
 
-  // Colour helpers
-  const scoreColor = (s: number | null) =>
-    s === null ? '#9CA3AF' : s >= 80 ? '#059669' : s >= 60 ? '#D97706' : s >= 40 ? '#F59E0B' : '#DC2626';
-  const scoreBg = (s: number | null) =>
-    s === null ? '#F3F4F6' : s >= 80 ? '#D1FAE5' : s >= 60 ? '#FEF3C7' : s >= 40 ? '#FEF9C3' : '#FEE2E2';
-  const scoreBorder = (s: number | null) =>
-    s === null ? '#E5E7EB' : s >= 80 ? '#86EFAC' : s >= 60 ? '#FCD34D' : s >= 40 ? '#FDE68A' : '#FECACA';
+  // Only show "failed" when score is genuinely 0 AND summary says it failed
+  const evaluationFailed =
+    overallScore === 0 &&
+    (summary.toLowerCase().includes('failed') ||
+     summary.toLowerCase().includes('could not') ||
+     summary.toLowerCase().includes('manual review') ||
+     summary === '');
+
+  // ── Colour helpers ──────────────────────────────────────────────────────────
+  const scoreColor = (s: number | null) => {
+    if (s === null) return '#9CA3AF';
+    if (s >= 80) return '#059669';
+    if (s >= 65) return '#16A34A';
+    if (s >= 50) return '#D97706';
+    if (s >= 35) return '#F59E0B';
+    return '#DC2626';
+  };
+  const scoreBg = (s: number | null) => {
+    if (s === null) return '#F3F4F6';
+    if (s >= 80) return '#D1FAE5';
+    if (s >= 65) return '#ECFDF5';
+    if (s >= 50) return '#FEF3C7';
+    if (s >= 35) return '#FEF9C3';
+    return '#FEE2E2';
+  };
+  const scoreBorder = (s: number | null) => {
+    if (s === null) return '#E5E7EB';
+    if (s >= 80) return '#6EE7B7';
+    if (s >= 65) return '#86EFAC';
+    if (s >= 50) return '#FCD34D';
+    if (s >= 35) return '#FDE68A';
+    return '#FECACA';
+  };
+  const scoreLabel = (s: number | null) => {
+    if (s === null) return 'Pending';
+    if (s >= 80) return 'Excellent';
+    if (s >= 65) return 'Good';
+    if (s >= 50) return 'Average';
+    if (s >= 35) return 'Below Avg';
+    return 'Needs Work';
+  };
 
   const recBg    = rec === 'Strong Yes' ? '#DCFCE7' : rec === 'Yes' ? '#EFF6FF' : rec === 'Maybe' ? '#FFFBEB' : '#FEE2E2';
-  const recColor = rec === 'Strong Yes' ? '#15803D' : rec === 'Yes' ? '#1D4ED8' : rec === 'Maybe' ? '#92400E' : '#991B1B';
+  const recColor = rec === 'Strong Yes' ? '#15803D' : rec === 'Yes' ? '#1D4ED8' : rec === 'Maybe' ? '#92400E'  : '#991B1B';
+  const recIcon  = rec === 'Strong Yes' ? '🌟'      : rec === 'Yes' ? '✅'      : rec === 'Maybe' ? '🤔'       : '❌';
 
-  // Overall score ring — large prominent display
   const oColor  = scoreColor(overallScore);
   const oBg     = scoreBg(overallScore);
   const oBorder = scoreBorder(overallScore);
 
-  // Sub-scores — only rendered when evaluation succeeded
-  const subScores = [
-    { label: 'Technical',     icon: '💻', score: techScore  },
-    { label: 'Communication', icon: '🗣️', score: commScore  },
-    { label: 'Body Language', icon: '🧍', score: bodyScore  },
-    { label: 'Eye Contact',   icon: '👁️', score: eyeScore   },
+  const categories = [
+    { label: 'Technical',     icon: '💻', score: techScore },
+    { label: 'Communication', icon: '🗣️', score: commScore },
+    { label: 'Body Language', icon: '🧍', score: bodyScore },
+    { label: 'Eye Contact',   icon: '👁️', score: eyeScore  },
   ];
+
+  // ── Re-score handler ────────────────────────────────────────────────────────
+  const handleReScore = async () => {
+    setReScoring(true);
+    try {
+      const token = (candidate as any).l1AIInterviewToken;
+      if (!token) { alert('No interview token found.'); setReScoring(false); return; }
+      const res  = await fetch('/api/interview/score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          candidateId: candidate.id,
+          questions:   [],
+          jobRole:     (candidate as any).candidateDesignation || '',
+          videoUrls:   [],
+          codeAnswer:  '',
+        }),
+      });
+      const data = await res.json();
+      console.log('[ReScore] Result:', data);
+      alert(`Re-scoring complete! Score: ${data.score}. The page will update automatically.`);
+    } catch (err) {
+      console.error('[ReScore] Failed:', err);
+      alert('Re-scoring failed. Check the console.');
+    } finally {
+      setReScoring(false);
+    }
+  };
 
   return (
     <div style={{ border: '1.5px solid #E5E7EB', borderRadius: '14px', overflow: 'hidden', background: 'white' }}>
@@ -629,77 +696,98 @@ const AIScoreReport: React.FC<{
           <span style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>AI Interview Report</span>
         </div>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          {rec && (
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px', background: recBg, color: recColor }}>
-              {rec}
-            </span>
-          )}
-          <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px', background: '#D1FAE5', color: '#065F46' }}>
-            ✓ Completed
+          <span style={{
+            fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px',
+            background: evaluationFailed ? '#FEF3C7' : '#D1FAE5',
+            color:      evaluationFailed ? '#92400E'  : '#065F46',
+          }}>
+            {evaluationFailed ? '⚠ Needs Manual Review' : '✓ Interview Completed'}
           </span>
         </div>
       </div>
 
       {/* ── Score section ── */}
       <div style={{ padding: '20px 16px 16px' }}>
-
         {evaluationFailed ? (
-          /* Failed evaluation — show warning, no scores */
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#FEF9C3', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px 16px' }}>
-            <span style={{ fontSize: '24px', flexShrink: 0 }}>⚠️</span>
-            <div>
-              <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: '0 0 3px' }}>AI Evaluation Could Not Be Completed</p>
-              <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>
-                {summary || 'The interview recording could not be processed. Please review the recording manually and make your decision below.'}
-              </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#FEF9C3', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px 16px' }}>
+              <span style={{ fontSize: '24px', flexShrink: 0 }}>⚠️</span>
+              <div>
+                <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: '0 0 3px' }}>AI Evaluation Could Not Be Completed</p>
+                <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>
+                  {summary || 'The interview could not be processed. Please review the recording manually or try re-scoring.'}
+                </p>
+              </div>
             </div>
+            {role === 'hr' && (candidate as any).l1AIInterviewToken && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={handleReScore}
+                  disabled={reScoring}
+                  style={{ background: '#7C3AED', color: 'white', border: 'none', borderRadius: '8px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: reScoring ? 'not-allowed' : 'pointer', opacity: reScoring ? 0.7 : 1 }}
+                >
+                  {reScoring ? '⏳ Re-scoring...' : '🔄 Re-score Interview'}
+                </button>
+              </div>
+            )}
           </div>
         ) : (
-          /* Successful evaluation — Overall + sub-scores */
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-            {/* Overall score — large ring */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', minWidth: '100px' }}>
-              <div style={{
-                width: '90px', height: '90px', borderRadius: '50%',
-                border: `5px solid ${oColor}`, background: oBg,
-                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                boxShadow: `0 0 0 3px ${oBorder}`,
-              }}>
-                <span style={{ fontSize: '28px', fontWeight: 900, color: oColor, lineHeight: 1 }}>
-                  {overallScore ?? '—'}
-                </span>
-                <span style={{ fontSize: '10px', color: oColor, fontWeight: 600, opacity: 0.8 }}>/100</span>
-              </div>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textAlign: 'center' }}>Overall Score</span>
-              <div style={{ background: oColor, color: 'white', fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px' }}>
-                {(overallScore ?? 0) >= 80 ? 'Excellent' : (overallScore ?? 0) >= 60 ? 'Good' : (overallScore ?? 0) >= 40 ? 'Average' : 'Needs Work'}
-              </div>
-            </div>
+            {/* Overall ring + category bars */}
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
 
-            {/* Sub-scores — vertical bars */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '10px', justifyContent: 'center', paddingTop: '4px' }}>
-              {subScores.map(({ label, icon, score }) => {
-                const c = scoreColor(score);
-                const pct = score ?? 0;
-                return (
-                  <div key={label}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '12px', color: '#374151', fontWeight: 500 }}>{icon} {label}</span>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: c }}>{score ?? '—'}<span style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 400 }}>/100</span></span>
+              {/* Overall score ring */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', minWidth: '110px' }}>
+                <div style={{
+                  width: '96px', height: '96px', borderRadius: '50%',
+                  border: `5px solid ${oColor}`, background: oBg,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: `0 0 0 3px ${oBorder}`,
+                }}>
+                  <span style={{ fontSize: '30px', fontWeight: 900, color: oColor, lineHeight: 1 }}>{overallScore ?? '—'}</span>
+                  <span style={{ fontSize: '10px', color: oColor, fontWeight: 600, opacity: 0.8 }}>/100</span>
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textAlign: 'center' }}>Overall Score</span>
+                <div style={{ background: oColor, color: 'white', fontSize: '10px', fontWeight: 700, padding: '2px 10px', borderRadius: '999px' }}>
+                  {scoreLabel(overallScore)}
+                </div>
+              </div>
+
+              {/* Category bars */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', justifyContent: 'center', paddingTop: '4px' }}>
+                {categories.map(({ label, icon, score }) => {
+                  const c   = scoreColor(score);
+                  const pct = score ?? 0;
+                  return (
+                    <div key={label}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '13px' }}>{icon}</span>
+                          <span style={{ fontSize: '12px', color: '#374151', fontWeight: 500 }}>{label}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: c }}>
+                            {score ?? '—'}<span style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 400 }}>/100</span>
+                          </span>
+                          <span style={{ fontSize: '10px', fontWeight: 600, padding: '1px 6px', borderRadius: '999px', background: scoreBg(score), color: c }}>
+                            {scoreLabel(score)}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ height: '8px', background: '#F3F4F6', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: c, borderRadius: '4px', transition: 'width 0.6s ease' }} />
+                      </div>
                     </div>
-                    <div style={{ height: '7px', background: '#F3F4F6', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: c, borderRadius: '4px', transition: 'width 0.6s ease' }} />
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* ── AI Summary (only when eval succeeded) ── */}
+      {/* ── AI Summary ── */}
       {!evaluationFailed && summary && (
         <div style={{ margin: '0 16px 14px', background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '8px', padding: '10px 14px' }}>
           <p style={{ fontSize: '11px', fontWeight: 700, color: '#0369A1', margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>📋 AI Summary</p>
@@ -708,7 +796,7 @@ const AIScoreReport: React.FC<{
       )}
 
       {/* ── Strengths + Improvements ── */}
-      {(strengths.length > 0 || improvements.length > 0) && (
+      {!evaluationFailed && (strengths.length > 0 || improvements.length > 0) && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', padding: '0 16px 14px' }}>
           {strengths.length > 0 && (
             <div style={{ background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: '8px', padding: '10px 12px' }}>
@@ -739,14 +827,12 @@ const AIScoreReport: React.FC<{
         </div>
       )}
 
-      {/* ── HR Decision panel ── */}
-      {role === 'hr' && !isDone && (
+      {/* ── HR Decision panel (scores available) ── */}
+      {role === 'hr' && !isDone && !evaluationFailed && (
         <div style={{ margin: '0 16px 16px', background: '#F8F7FF', borderRadius: '10px', padding: '14px', border: '1px solid #DDD6FE' }}>
           <p style={{ fontSize: '13px', fontWeight: 700, color: '#4C1D95', margin: '0 0 4px' }}>👤 Your Decision</p>
           <p style={{ fontSize: '12px', color: '#6B7280', margin: '0 0 10px' }}>
-            {evaluationFailed
-              ? 'AI evaluation failed — review the recording manually, then decide.'
-              : 'Review the AI scores above, then move the candidate forward or reject.'}
+            Review the AI scores above, then move the candidate forward or reject.
           </p>
           <p style={{ fontSize: '11px', fontWeight: 600, color: '#374151', margin: '0 0 5px' }}>
             HR Notes <span style={{ color: '#DC2626' }}>*</span>
@@ -775,13 +861,48 @@ const AIScoreReport: React.FC<{
         </div>
       )}
 
+      {/* ── HR Decision panel (evaluation failed) ── */}
+      {role === 'hr' && !isDone && evaluationFailed && (
+        <div style={{ margin: '0 16px 16px', background: '#FFF8F8', borderRadius: '10px', padding: '14px', border: '1px solid #FECACA' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#991B1B', margin: '0 0 4px' }}>👤 Manual Decision Required</p>
+          <p style={{ fontSize: '12px', color: '#6B7280', margin: '0 0 10px' }}>
+            AI evaluation failed — review the recording manually, then decide.
+          </p>
+          <p style={{ fontSize: '11px', fontWeight: 600, color: '#374151', margin: '0 0 5px' }}>
+            HR Notes <span style={{ color: '#DC2626' }}>*</span>
+          </p>
+          <Textarea
+            placeholder="Add your review notes after watching the recording (required)…"
+            value={hrNotes}
+            onChange={e => { setHrNotes(e.target.value); if (e.target.value.trim()) setHrErr(''); }}
+            style={{ resize: 'vertical', minHeight: '80px', marginBottom: '10px', background: 'white' }}
+          />
+          {hrErr && (
+            <p style={{ color: '#DC2626', fontSize: '12px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <AlertCircle className="h-3 w-3" />{hrErr}
+            </p>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <Button variant="destructive" onClick={() => {
+              if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
+              onAction('ai-reject', { feedback: hrNotes.trim(), aiScore: 0 });
+            }}>✕ Reject</Button>
+            <Button onClick={() => {
+              if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
+              onAction('ai-select', { feedback: hrNotes.trim(), aiScore: 0 });
+            }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L2</Button>
+          </div>
+        </div>
+      )}
+
       {/* ── Final decision (already made) ── */}
       {isDone && savedFeedback && (
-        <div style={{ margin: '0 16px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F0FDF9', border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#6EE7B7'}`, borderRadius: '8px', padding: '10px 14px' }}>
-          <p style={{ fontSize: '12px', fontWeight: 700, margin: '0 0 4px', color: status === 'Rejected' ? '#DC2626' : '#059669' }}>
+        <div style={{ margin: '0 16px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F0FDF9', border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#6EE7B7'}`, borderRadius: '8px', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <p style={{ fontSize: '12px', fontWeight: 700, margin: 0, color: status === 'Rejected' ? '#DC2626' : '#059669' }}>
             {status === 'Rejected' ? '✕ Rejected by HR' : '✓ Moved to L2 by HR'}
           </p>
           <p style={{ fontSize: '12px', color: '#374151', margin: 0 }}>{savedFeedback}</p>
+          <UpdatedByBadge history={history} stage="L1 Interview" actions={['ai-select', 'ai-reject']} />
         </div>
       )}
 
@@ -832,8 +953,7 @@ const InterviewStageCard: React.FC<{
   const canPanelFeedback = isAssignedPanel && status === 'Scheduled';
 
   const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && savedDate;
-  const showFeedback     = ['Selected', 'Rejected'].includes(status) && savedFeedback;
-
+  const showFeedback = ['Selected', 'Rejected'].includes(status) && savedFeedback && (candidate as any)[`${stageKey}InterviewType`] !== 'ai';
   const handleSchedule = () => {
     if (!panelUid)      { setSchedErr('Please select a panel member.'); return; }
     if (!date || !slot) { setSchedErr('Please select date and time.'); return; }
@@ -929,12 +1049,13 @@ const InterviewStageCard: React.FC<{
        (candidate as any).l1InterviewType === 'ai' &&
        (candidate as any).l1AIStatus === 'completed' && (
         <AIScoreReport
-          candidate={candidate}
-          role={role}
-          status={status}
-          savedFeedback={savedFeedback}
-          onAction={onAction}
-        />
+        candidate={candidate}
+        role={role}
+        status={status}
+        savedFeedback={savedFeedback}
+        history={history}
+        onAction={onAction}
+      />
       )}
 
       {canHRSchedule && stageKey === 'l2' && (
@@ -1551,8 +1672,8 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
             <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <ResumeReviewCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} history={history} onAction={(a, p) => handleAction('Resume Review', a, p)} />
-              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l1" title="L1 Interview" history={history} onAction={(a, p) => handleAction('L1 Interview', a, p)} />
-              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l2" title="L2 Interview" history={history} onAction={(a, p) => handleAction('L2 Interview', a, p)} />
+              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l1" title="L1 Interview (AI Screening Round)" history={history} onAction={(a, p) => handleAction('L1 Interview', a, p)} />
+              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l2" title="L2 Interview (Technical Panel Round)" history={history} onAction={(a, p) => handleAction('L2 Interview', a, p)} />
               <HRRoundCard candidate={candidate} role={role as UserRole} history={history} onAction={(a, p) => handleAction('HR Round', a, p)} />
               <OfferStageCard candidate={candidate} role={role as UserRole} history={history} onAction={(a, p) => handleAction('Offer Stage', a, p)} />
             </div>

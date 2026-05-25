@@ -3,6 +3,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
+import { useMediaPipeAnalysis } from '@/hooks/useMediaPipeAnalysis';
+import { useSoloWindow } from '@/hooks/useSoloWindow';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 interface CandidateInfo {
@@ -40,7 +42,7 @@ interface Question {
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function InterviewClient({ candidate }: InterviewClientProps) {
-
+  useSoloWindow(); 
   // ── Core state ──────────────────────────────────────────────────────────────
   const [stage,             setStage]             = useState<Stage>('landing');
   const [nameInput,         setNameInput]         = useState('');
@@ -58,6 +60,8 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
   const [uploadedVideoUrls, setUploadedVideoUrls] = useState<string[]>([]);
   const [submittedAt,       setSubmittedAt]       = useState<string>('');
   const [codeAnswer, setCodeAnswer] = useState('');
+  const { startCapture, stopCapture } = useMediaPipeAnalysis();
+const mediaPipeResultRef = useRef<any>(null);
 
   // ── Mic/Camera check state ──────────────────────────────────────────────────
   const [micLevel,          setMicLevel]          = useState(0);
@@ -179,6 +183,31 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
   useEffect(() => {
     return () => { stopAllMedia(); };
   }, []);
+  // ══════════════════════════════════════════════════════════════════════════════
+// CLOSE ALL OTHER TABS WHEN THIS INTERVIEW TAB OPENS
+// ══════════════════════════════════════════════════════════════════════════════
+const tabIdRef = useRef<string>(
+  `tab_${Date.now()}_${Math.random().toString(36).slice(2)}`
+);
+const channelRef = useRef<BroadcastChannel | null>(null);
+
+useEffect(() => {
+  const channel = new BroadcastChannel('smarthire_interview');
+  channelRef.current = channel;
+
+  channel.onmessage = (e) => {
+    if (e.data?.type === 'interview-open' && e.data?.tabId !== tabIdRef.current) {
+      channel.close();
+      window.close();
+    }
+  };
+
+  channel.postMessage({ type: 'interview-open', tabId: tabIdRef.current });
+
+  return () => {
+    channel.close();
+  };
+}, []);
 
   // ══════════════════════════════════════════════════════════════════════════════
   // STEP 1 — LANDING: validate name + request permissions
@@ -462,8 +491,14 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
     startCameraCheck(true);
 
     setStage('interview');
-  };
 
+    // Start frame analysis after stage change
+    setTimeout(() => {
+      if (videoRef.current) {
+        startCapture(videoRef.current);
+      }
+    }, 500);
+  };
   // ══════════════════════════════════════════════════════════════════════════════
   // STEP 3 — PER-QUESTION RECORDING
   // ══════════════════════════════════════════════════════════════════════════════
@@ -541,6 +576,10 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
     setQuestions(prev => prev.map((q, i) =>
       i === currentQIdx && !q.recorded ? { ...q, recorded: true, blob: lastBlob } : q,
     ));
+    // Stop MediaPipe and capture scores BEFORE stopAllMedia kills the stream
+const mediaPipeResult = stopCapture();
+mediaPipeResultRef.current = mediaPipeResult;
+console.log('[Submit] MediaPipe scores:', mediaPipeResult);
 
     setIsSubmitting(true);
     sessionLockRef.current = true;
@@ -563,6 +602,9 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
       formData.append('token',       candidate.token);
       formData.append('candidateId', candidate.candidateId);
       formData.append('questionIdx', String(i));
+      formData.append('candidateName',  candidate.candidateName);
+formData.append('candidateEmail', candidate.candidateEmail);
+formData.append('questionText',   allQs[i].text);
 
       setSubmitStep(`Uploading answer ${i + 1} of ${allQs.length}...`);
 
@@ -579,18 +621,24 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
     setSubmittedAt(new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }));
     setSubmitStep('AI is evaluating your interview...');
     try {
-      const scoreRes = await fetch('/api/interview/score', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token:       candidate.token,
-          candidateId: candidate.candidateId,
-          questions:   allQs.map(q => q.text),
-          jobRole:     candidate.jobRole,
-          videoUrls:   uploadedUrls,
-          codeAnswer:  codeAnswer,
-        }),
-      });
+      console.log('[Submit] uploadedUrls before scoring:', uploadedUrls);
+console.log('[Submit] questions:', allQs.map(q => q.text));
+console.log('[Submit] candidateId:', candidate.candidateId);
+const scoreRes = await fetch('/api/interview/score', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    token:             candidate.token,
+    candidateId:       candidate.candidateId,
+    questions:         allQs.map(q => q.text),
+    jobRole:           candidate.jobRole,
+    videoUrls:         uploadedUrls,
+    codeAnswer:        codeAnswer,
+    eyeContactScore:   mediaPipeResultRef.current?.eyeContactScore   ?? null,
+    bodyLanguageScore: mediaPipeResultRef.current?.bodyLanguageScore ?? null,
+    faceVisiblePct:    mediaPipeResultRef.current?.faceVisiblePct    ?? null,
+  }),
+});
       const scoreData = await scoreRes.json();
       setFinalScore(scoreData.score);
     } catch (err) {
