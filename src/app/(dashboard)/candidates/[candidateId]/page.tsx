@@ -75,7 +75,7 @@ import { Candidate } from '@/types/candidate';
 import { normalizeStatus } from '@/lib/normalizeStatus';
 import { sendInterviewEmail } from '@/ai/flows/send-interview-email-flow';
 import { AIInterviewStatusCard } from '@/components/AIInterviewStatus/AIInterviewStatusCard';
-
+import ExportInterviewButton from '@/components/ExportInterviewButton';
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 type EmailType =
   | 'resume_accepted'
@@ -202,7 +202,136 @@ async function sendEmail(params: {
     console.error('[sendEmail] ❌ Failed for', email, err);
   }
 }
+function useInterviewCountdown(linkSentAt: string | number, completed?: boolean) {
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [isExpired, setIsExpired] = useState(false);
 
+  useEffect(() => {
+    if (!linkSentAt || completed) return;
+
+    const sentMs =
+      typeof linkSentAt === 'string'
+        ? new Date(linkSentAt).getTime()
+        : Number(linkSentAt);
+
+        const expiryMs =
+        (linkSentAt as any)?.seconds
+          ? (linkSentAt as any).seconds * 1000 + (48 * 60 * 60 * 1000)
+          : new Date(linkSentAt).getTime() + (48 * 60 * 60 * 1000);
+
+    const update = () => {
+      const remain = Math.max(
+        0,
+        Math.floor((expiryMs - Date.now()) / 1000)
+      );
+
+      setSecondsLeft(remain);
+
+      if (remain <= 0) {
+        setIsExpired(true);
+      }
+    };
+
+    update();
+
+    const timer = setInterval(update, 1000);
+
+    return () => clearInterval(timer);
+  }, [linkSentAt, completed]);
+
+  return { secondsLeft, isExpired };
+}
+// ─── AI INTERVIEW LIVE COUNTDOWN ─────────────────────────────────────────────
+ 
+const AIInterviewCountdown: React.FC<{
+  sentAt: any;
+  isCompleted: boolean;
+}> = ({ sentAt, isCompleted }) => {
+
+  type Display = { text: string; color: string; bg: string; border: string; icon: string };
+
+  const [display, setDisplay] = React.useState<Display | null>(null);
+
+  React.useEffect(() => {
+    if (isCompleted) {
+      setDisplay({
+        text: 'Interview Completed',
+        color: '#059669', bg: '#ECFDF5', border: '#6EE7B7', icon: '✅',
+      });
+      return;
+    }
+
+    if (!sentAt) {
+      setDisplay(null);
+      return;
+    }
+
+    // Parse Firestore Timestamp correctly
+    const sentMs: number =
+      sentAt?.seconds        ? sentAt.seconds * 1000
+      : sentAt?.toMillis     ? sentAt.toMillis()
+      : typeof sentAt === 'number' ? sentAt
+      : new Date(sentAt).getTime();
+
+    if (!sentMs || isNaN(sentMs)) {
+      setDisplay(null);
+      return;
+    }
+
+    const expiryMs = sentMs + 48 * 60 * 60 * 1000;
+
+    const tick = () => {
+      const remaining = expiryMs - Date.now();
+
+      if (remaining <= 0) {
+        setDisplay({
+          text: 'Link expired',
+          color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', icon: '❌',
+        });
+        return;
+      }
+
+      const totalSecs = Math.floor(remaining / 1000);
+      const hrs  = Math.floor(totalSecs / 3600);
+      const mins = Math.floor((totalSecs % 3600) / 60);
+      const secs = totalSecs % 60;
+      const pad  = (n: number) => String(n).padStart(2, '0');
+
+      const isUrgent  = totalSecs < 3600;
+      const isWarning = totalSecs < 7200;
+
+      setDisplay({
+        text:   `${pad(hrs)}:${pad(mins)}:${pad(secs)} remaining`,
+        color:  isUrgent ? '#DC2626' : isWarning ? '#D97706' : '#059669',
+        bg:     isUrgent ? '#FEF2F2' : isWarning ? '#FFFBEB' : '#F0FDF4',
+        border: isUrgent ? '#FECACA' : isWarning ? '#FDE68A' : '#86EFAC',
+        icon:   isUrgent ? '🔴'      : isWarning ? '⚠️'      : '⏳',
+      });
+    };
+
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+
+  }, [sentAt, isCompleted]);
+
+  if (!display) return null;
+
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      fontSize: '13px', fontWeight: 600,
+      color: display.color, background: display.bg,
+      border: `1px solid ${display.border}`,
+      borderRadius: '6px', padding: '3px 10px',
+      fontVariantNumeric: 'tabular-nums',
+      whiteSpace: 'nowrap',
+    }}>
+      {display.icon} {display.text}
+    </span>
+  );
+};
+ 
 // ─── AI SCORE DISPLAY HELPER ─────────────────────────────────────────────────
 function getScoreDisplay(score: number | undefined | null): {
   color: string; bg: string; border: string; label: string; icon: React.ReactNode; textColor: string;
@@ -333,11 +462,22 @@ const ReadOnlyNote: React.FC<{ msg: string }> = ({ msg }) => (
 const StageShell: React.FC<{ title: string; status: string; isLocked: boolean; children: React.ReactNode }> = ({ title, status, isLocked, children }) => {
   const normalized = normalizeStatus(status as any);
   const isActive   = !isLocked && ['Pending', 'Scheduled', 'Released'].includes(normalized.name);
+
+  // Map 'Expired' to a red badge manually since normalizeStatus may not know it
+  const displayBadge = status === 'Expired'
+    ? <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px', background: '#FEE2E2', color: '#991B1B' }}>Expired</span>
+    : <Badge className={normalized.color}>{isLocked ? 'Locked' : normalized.name}</Badge>;
+
   return (
-    <div style={{ borderRadius: '12px', border: `1.5px solid ${isActive ? '#7C3AED' : '#E5E7EB'}`, boxShadow: isActive ? '0 2px 10px rgba(124,58,237,0.08)' : 'none', background: 'white' }}>
+    <div style={{
+      borderRadius: '12px',
+      border: `1.5px solid ${status === 'Expired' ? '#FECACA' : isActive ? '#7C3AED' : '#E5E7EB'}`,
+      boxShadow: isActive ? '0 2px 10px rgba(124,58,237,0.08)' : 'none',
+      background: 'white',
+    }}>
       <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #F3F4F6' }}>
         <h3 style={{ fontWeight: 'bold', fontSize: '15px', margin: 0 }}>{title}</h3>
-        <Badge className={normalized.color}>{isLocked ? 'Locked' : normalized.name}</Badge>
+        {displayBadge}
       </div>
       <div style={{ padding: '14px 16px' }}>
         {isLocked ? (
@@ -573,8 +713,87 @@ const ResumeReviewCard: React.FC<{
 </div>
 );
 }; 
+function ScoreRing({ score, size, strokeWidth }: { score: number | null; size: number; strokeWidth: number }) {
+  const r = (size / 2) - (strokeWidth / 2) - 2;
+  const circumference = 2 * Math.PI * r;
+  const pct = typeof score === 'number' ? Math.min(Math.max(score, 0), 100) : 0;
+  const dash = (pct / 100) * circumference;
+  const c = score === null || score === 0 ? { fill:'#FCEBEB', stroke:'#F7C1C1', arc:'#E24B4A', num:'#A32D2D', sub:'#791F1F' }
+    : score <= 30 ? { fill:'#FCEBEB', stroke:'#F7C1C1', arc:'#E24B4A', num:'#A32D2D', sub:'#791F1F' }
+    : score <= 50 ? { fill:'#FAEEDA', stroke:'#FAC775', arc:'#EF9F27', num:'#854F0B', sub:'#633806' }
+    : score <= 65 ? { fill:'#FEF3C7', stroke:'#FDE68A', arc:'#F59E0B', num:'#78350F', sub:'#451A03' }
+    : score <= 80 ? { fill:'#D1FAE5', stroke:'#6EE7B7', arc:'#10B981', num:'#065F46', sub:'#064E3B' }
+    : { fill:'#ECFDF5', stroke:'#6EE7B7', arc:'#059669', num:'#064E3B', sub:'#022C22' };
+  const cx = size / 2, cy = size / 2;
+  const numSize = size >= 90 ? 22 : 15;
+  const subSize = size >= 90 ? 11 : 9;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={cx} cy={cy} r={r} fill={c.fill} stroke={c.stroke} strokeWidth="1" />
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#F1EFE8" strokeWidth={strokeWidth} />
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={c.arc} strokeWidth={strokeWidth}
+        strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round"
+        transform={`rotate(-90 ${cx} ${cy})`} />
+      <text x={cx} y={size >= 90 ? cy - 4 : cy - 5} dominantBaseline="middle"
+        textAnchor="middle" fontSize={numSize} fontWeight="600" fill={c.num}>{score ?? '—'}</text>
+      <text x={cx} y={size >= 90 ? cy + 10 : cy + 7} dominantBaseline="middle"
+        textAnchor="middle" fontSize={subSize} fill={c.sub}>/100</text>
+    </svg>
+  );
+}
+const AIInterviewCountdownWithFallback: React.FC<{
+  candidate: Candidate;
+  isCompleted: boolean;
+}> = ({ candidate, isCompleted }) => {
+  const [sentAt, setSentAt] = React.useState<any>(
+    (candidate as any).l1AIInterviewSentAt ?? null
+  );
 
-// ─── AI SCORE REPORT (shown inline inside L1 card once interview completes) ──
+  React.useEffect(() => {
+    // If sentAt already exists on the candidate doc, use it directly
+    if ((candidate as any).l1AIInterviewSentAt) {
+      setSentAt((candidate as any).l1AIInterviewSentAt);
+      return;
+    }
+
+    // Fallback: read createdAt from ai_interviews collection
+    const token = (candidate as any).l1AIInterviewToken;
+    if (!token) return;
+
+    getDoc(doc(db, 'ai_interviews', token))
+      .then(snap => {
+        // token is a field, not the doc ID — so query by field
+        return getDocs(
+          query(
+            collection(db, 'ai_interviews'),
+            where('token', '==', token)
+          )
+        );
+      })
+      .then(snap => {
+        if (!snap.empty) {
+          const data = snap.docs[0].data();
+          const ts = data.l1AIInterviewSentAt || data.createdAt;
+          if (ts) {
+            setSentAt(ts);
+            // Also patch the candidate doc so future loads don't need this fallback
+            updateDoc(doc(db, 'candidates', (candidate as any).id), {
+              l1AIInterviewSentAt: ts,
+            }).catch(() => {});
+          }
+        }
+      })
+      .catch(() => {});
+  }, [(candidate as any).l1AIInterviewToken]);
+
+  return (
+    <AIInterviewCountdown
+      sentAt={sentAt}
+      isCompleted={isCompleted}
+    />
+  );
+};
+
 // ─── AI SCORE REPORT (shown inline inside L1 card once interview completes) ──
 const AIScoreReport: React.FC<{
   candidate: Candidate;
@@ -585,6 +804,7 @@ const AIScoreReport: React.FC<{
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, status, savedFeedback, history, onAction }) => {
   const [hrNotes,   setHrNotes]   = React.useState('');
+  const [videoOpen, setVideoOpen] = React.useState(false);
   const [hrErr,     setHrErr]     = React.useState('');
   const [reScoring, setReScoring] = React.useState(false);
 
@@ -695,15 +915,24 @@ const AIScoreReport: React.FC<{
           <span style={{ fontSize: '18px' }}>🤖</span>
           <span style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>AI Interview Report</span>
         </div>
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <span style={{
-            fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px',
-            background: evaluationFailed ? '#FEF3C7' : '#D1FAE5',
-            color:      evaluationFailed ? '#92400E'  : '#065F46',
-          }}>
-            {evaluationFailed ? '⚠ Needs Manual Review' : '✓ Interview Completed'}
-          </span>
-        </div>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+
+{/* Status Badge */}
+<span style={{
+  fontSize: '11px',
+  fontWeight: 700,
+  padding: '3px 10px',
+  borderRadius: '999px',
+  background: evaluationFailed ? '#FEF3C7' : '#D1FAE5',
+  color: evaluationFailed ? '#92400E' : '#065F46',
+}}>
+  {evaluationFailed ? '⚠ Needs Manual Review' : '✓ Interview Completed'}
+</span>
+
+{/* Export Button */}
+<ExportInterviewButton candidateDoc={candidate} />
+
+</div>
       </div>
 
       {/* ── Score section ── */}
@@ -734,55 +963,39 @@ const AIScoreReport: React.FC<{
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-            {/* Overall ring + category bars */}
-            <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            {/* Overall ring*/}
+            <div style={{
+  display: 'flex', alignItems: 'center', gap: '24px',
+  background: '#F9FAFB', borderRadius: '12px',
+  padding: '20px 24px', border: '1px solid #F1F5F9', flexWrap: 'wrap',
+}}>
+  {/* Overall — large */}
+  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+    <ScoreRing score={overallScore} size={96} strokeWidth={6} />
+    <span style={{ fontSize: '12px', fontWeight: 600, color: '#374151' }}>Overall</span>
+    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '999px', fontWeight: 600,
+      background: scoreBg(overallScore), color: scoreColor(overallScore), border: `1px solid ${scoreBorder(overallScore)}` }}>
+      {scoreLabel(overallScore)}
+    </span>
+  </div>
 
-              {/* Overall score ring */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', minWidth: '110px' }}>
-                <div style={{
-                  width: '96px', height: '96px', borderRadius: '50%',
-                  border: `5px solid ${oColor}`, background: oBg,
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: `0 0 0 3px ${oBorder}`,
-                }}>
-                  <span style={{ fontSize: '30px', fontWeight: 900, color: oColor, lineHeight: 1 }}>{overallScore ?? '—'}</span>
-                  <span style={{ fontSize: '10px', color: oColor, fontWeight: 600, opacity: 0.8 }}>/100</span>
-                </div>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textAlign: 'center' }}>Overall Score</span>
-                <div style={{ background: oColor, color: 'white', fontSize: '10px', fontWeight: 700, padding: '2px 10px', borderRadius: '999px' }}>
-                  {scoreLabel(overallScore)}
-                </div>
-              </div>
+  {/* Divider */}
+  <div style={{ width: '1px', height: '80px', background: '#E5E7EB', flexShrink: 0 }} />
 
-              {/* Category bars */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', justifyContent: 'center', paddingTop: '4px' }}>
-                {categories.map(({ label, icon, score }) => {
-                  const c   = scoreColor(score);
-                  const pct = score ?? 0;
-                  return (
-                    <div key={label}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '13px' }}>{icon}</span>
-                          <span style={{ fontSize: '12px', color: '#374151', fontWeight: 500 }}>{label}</span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '12px', fontWeight: 700, color: c }}>
-                            {score ?? '—'}<span style={{ fontSize: '10px', color: '#9CA3AF', fontWeight: 400 }}>/100</span>
-                          </span>
-                          <span style={{ fontSize: '10px', fontWeight: 600, padding: '1px 6px', borderRadius: '999px', background: scoreBg(score), color: c }}>
-                            {scoreLabel(score)}
-                          </span>
-                        </div>
-                      </div>
-                      <div style={{ height: '8px', background: '#F3F4F6', borderRadius: '4px', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: c, borderRadius: '4px', transition: 'width 0.6s ease' }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+  {/* 4 categories — same smaller size */}
+  <div style={{ display: 'flex', gap: '0px', flex: 1, alignItems: 'flex-start', justifyContent: 'space-evenly' }}>    {[
+      { label: 'Technical',     score: techScore },
+      { label: 'Communication', score: commScore },
+      { label: 'Body language', score: bodyScore },
+      { label: 'Eye contact',   score: eyeScore  },
+    ].map(({ label, score }) => (
+      <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+        <ScoreRing score={score} size={64} strokeWidth={5} />
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#6B7280', textAlign: 'center' }}>{label}</span>
+      </div>
+    ))}
+  </div>
+</div>
           </div>
         )}
       </div>
@@ -794,38 +1007,174 @@ const AIScoreReport: React.FC<{
           <p style={{ fontSize: '12px', color: '#374151', margin: 0, lineHeight: 1.7 }}>{summary}</p>
         </div>
       )}
+{/* ── Strengths + Improvements + Video ── */}
+{/* ── Strengths + Improvements ── */}
+{!evaluationFailed && (strengths.length > 0 || improvements.length > 0) && (
+  <div
+    style={{
+      padding: '0 16px 14px',
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '14px',
+      alignItems: 'stretch',
+    }}
+  >
 
-      {/* ── Strengths + Improvements ── */}
-      {!evaluationFailed && (strengths.length > 0 || improvements.length > 0) && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', padding: '0 16px 14px' }}>
-          {strengths.length > 0 && (
-            <div style={{ background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: '8px', padding: '10px 12px' }}>
-              <p style={{ fontSize: '11px', fontWeight: 700, color: '#15803D', margin: '0 0 6px', textTransform: 'uppercase' }}>✓ Strengths</p>
-              {(strengths as string[]).map((s: string, i: number) => (
-                <p key={i} style={{ fontSize: '12px', color: '#374151', margin: '0 0 4px', lineHeight: 1.5 }}>• {s}</p>
-              ))}
-            </div>
-          )}
-          {improvements.length > 0 && (
-            <div style={{ background: '#FFFBEB', border: '1px solid #FCD34D', borderRadius: '8px', padding: '10px 12px' }}>
-              <p style={{ fontSize: '11px', fontWeight: 700, color: '#92400E', margin: '0 0 6px', textTransform: 'uppercase' }}>↑ To Improve</p>
-              {(improvements as string[]).map((s: string, i: number) => (
-                <p key={i} style={{ fontSize: '12px', color: '#374151', margin: '0 0 4px', lineHeight: 1.5 }}>• {s}</p>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+    {/* LEFT — Strengths */}
+    {strengths.length > 0 && (
+      <div
+        style={{
+          background: '#F0FDF4',
+          border: '1px solid #86EFAC',
+          borderRadius: '12px',
+          padding: '14px 16px',
+          height: '100%',
+        }}
+      >
+        <p
+          style={{
+            fontSize: '11px',
+            fontWeight: 700,
+            color: '#15803D',
+            margin: '0 0 10px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+          }}
+        >
+          ✓ Strengths
+        </p>
 
-      {/* ── Video recording link ── */}
-      {(candidate as any).l1AIVideoUrl && (
-        <div style={{ padding: '0 16px 14px' }}>
-          <a href={(candidate as any).l1AIVideoUrl} target="_blank" rel="noreferrer"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#7C3AED', fontWeight: 600, padding: '7px 14px', background: '#F5F3FF', border: '1px solid #DDD6FE', borderRadius: '8px', textDecoration: 'none' }}>
-            ▶ Watch Recording
-          </a>
-        </div>
-      )}
+        {(strengths as string[]).map((s: string, i: number) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '8px',
+              marginBottom: i < strengths.length - 1 ? '8px' : 0,
+            }}
+          >
+            <span
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                background: '#16A34A',
+                flexShrink: 0,
+                marginTop: '6px',
+              }}
+            />
+            <p
+              style={{
+                fontSize: '13px',
+                color: '#374151',
+                margin: 0,
+                lineHeight: 1.6,
+              }}
+            >
+              {s}
+            </p>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* RIGHT — To Improve */}
+    {improvements.length > 0 && (
+      <div
+        style={{
+          background: '#FFFBEB',
+          border: '1px solid #FCD34D',
+          borderRadius: '12px',
+          padding: '14px 16px',
+          height: '100%',
+        }}
+      >
+        <p
+          style={{
+            fontSize: '11px',
+            fontWeight: 700,
+            color: '#92400E',
+            margin: '0 0 10px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+          }}
+        >
+          ↑ To Improve
+        </p>
+
+        {(improvements as string[]).map((s: string, i: number) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '8px',
+              marginBottom: i < improvements.length - 1 ? '8px' : 0,
+            }}
+          >
+            <span
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                background: '#D97706',
+                flexShrink: 0,
+                marginTop: '6px',
+              }}
+            />
+            <p
+              style={{
+                fontSize: '13px',
+                color: '#374151',
+                margin: 0,
+                lineHeight: 1.6,
+              }}
+            >
+              {s}
+            </p>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+)}
+    {/* Watch Recording */}
+   {((candidate as any).l1AIVideoUrl || (candidate as any).l1VideoUrl || ((candidate as any).l1VideoUrls && (candidate as any).l1VideoUrls[0])) && (
+      <div>
+        <button
+          onClick={() => {
+            const url = (candidate as any).l1AIVideoUrl;
+            setVideoOpen(prev => !prev);
+          }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: '7px',
+            fontSize: '13px', fontWeight: 600, padding: '8px 16px',
+            background: '#F5F3FF', border: '1px solid #DDD6FE',
+            borderRadius: '8px', color: '#6D28D9', cursor: 'pointer',
+          }}
+        >
+          ▶ Watch Recording
+          <span style={{ fontSize: '11px', color: '#9CA3AF', fontWeight: 400 }}>5 questions · ~12 min</span>
+        </button>
+
+        {videoOpen && (
+          <div style={{
+            marginTop: '10px', borderRadius: '10px', overflow: 'hidden',
+            border: '1px solid #E5E7EB', background: '#000',
+            aspectRatio: '16/9', width: '100%',
+          }}>
+            <video
+              src={(candidate as any).l1AIVideoUrl}
+              controls
+              style={{ width: '100%', height: '100%', display: 'block' }}
+            />
+          </div>
+        )}
+      </div>
+    )}
+
+  
 
       {/* ── HR Decision panel (scores available) ── */}
       {role === 'hr' && !isDone && !evaluationFailed && (
@@ -952,7 +1301,7 @@ const InterviewStageCard: React.FC<{
   const canHRSchedule    = isHR && status === 'Pending';
   const canPanelFeedback = isAssignedPanel && status === 'Scheduled';
 
-  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && savedDate;
+  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected', 'Expired'].includes(status) && savedDate;
   const showFeedback = ['Selected', 'Rejected'].includes(status) && savedFeedback && (candidate as any)[`${stageKey}InterviewType`] !== 'ai';
   const handleSchedule = () => {
     if (!panelUid)      { setSchedErr('Please select a panel member.'); return; }
@@ -973,7 +1322,7 @@ const InterviewStageCard: React.FC<{
     setSchedErr('');
     setAiLinkLoading(true);
     try {
-      await onAction('ai-schedule', { scheduledDate: date, schedulingNotes: notes.trim(), interviewType: 'ai' });
+      await onAction('ai-schedule', { scheduledDate: date, schedulingNotes: notes.trim(), interviewType: 'ai'});
       setAiLinkSent(true);
     } catch (err) {
       console.error('AI schedule failed:', err);
@@ -999,20 +1348,23 @@ const InterviewStageCard: React.FC<{
             <p style={{ fontSize: '13px', fontWeight: '700', color: '#374151', margin: 0 }}>📅 Schedule Information</p>
             <div>
               <p style={lbl}>Date & Time</p>
-              <p style={{ ...saved, fontWeight: '600', color: '#374151', margin: 0 }}>
-  {new Date(savedDate).toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  })}
-
-  {savedSlot
-    ? ` at ${savedSlot}`
-    : (candidate as any).l1InterviewType === 'ai'
-      ? ' — Candidate has 48 hours to complete'
-      : ''}
-</p>
-            </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+  <p style={{ fontSize: '14px', color: '#111827', margin: 0 }}>
+    {new Date(savedDate).toLocaleDateString('en-GB', {
+       day: '2-digit', month: 'short', year: 'numeric',
+    })}
+  </p>
+  {(candidate as any).l1InterviewType === 'ai' && stageKey === 'l1' && (
+    <>
+      <span style={{ color: '#9CA3AF' }}>—</span>
+      <AIInterviewCountdownWithFallback
+  candidate={candidate}
+  isCompleted={(candidate as any).l1AIStatus === 'completed'}
+/>
+    </>
+  )}
+</div>
+</div>
             {savedNotes && <div><p style={lbl}>📝 Scheduling Notes</p><p style={{ ...saved, color: '#374151', margin: 0 }}>{savedNotes}</p></div>}
             {panelName && <div><p style={lbl}>👤 Assigned Panel</p><p style={{ ...saved, color: '#1D4ED8', fontWeight: '600', margin: 0 }}>{panelName}</p></div>}
             <UpdatedByBadge history={history} stage={title} actions={['schedule']} />
@@ -1024,18 +1376,113 @@ const InterviewStageCard: React.FC<{
               </div>
               <div style={{ padding: '14px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F6FEF9', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <p style={{ ...saved, color: status === 'Rejected' ? '#DC2626' : '#065F46', margin: 0 }}>{savedFeedback}</p>
-                <UpdatedByBadge history={history} stage={title} actions={['panel-select', 'panel-reject']} />
+                <UpdatedByBadge
+  history={history}
+  stage={stageKey === 'l2' ? 'L2 Interview' : title}
+  actions={['panel-select', 'panel-reject']}
+/>
               </div>
             </>
           )}
         </div>
       )}
+{/* ── AI Interview: session expired/ended early ── */}
+{stageKey === 'l1' &&
+ (status === 'Expired' || (candidate as any).l1AIStatus === 'expired') &&
+ (candidate as any).l1InterviewType === 'ai' && (
+  <div style={{
+    background: '#FFF8F8', border: '1.5px solid #FECACA',
+    borderRadius: '12px', padding: '16px',
+    display: 'flex', flexDirection: 'column', gap: '12px',
+  }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{
+        width: '48px', height: '48px', borderRadius: '50%',
+        background: '#FEE2E2', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', fontSize: '22px', flexShrink: 0,
+      }}>
+        {(candidate as any).l1AIExpiredReason === 'candidate_ended' ? '⚠️' : '🔒'}
+      </div>
+      <div>
+        <p style={{ fontSize: '14px', fontWeight: 700, color: '#991B1B', margin: '0 0 3px' }}>
+          {(candidate as any).l1AIExpiredReason === 'candidate_ended'
+            ? 'Candidate Ended Session Early'
+            : (candidate as any).l1AIExpiredReason === 'tab_switch'
+            ? 'Session Terminated — Tab Switch'
+            : (candidate as any).l1AIExpiredReason === 'app_switch'
+            ? 'Session Terminated — App Switch'
+            : (candidate as any).l1AIExpiredReason === 'closed'
+            ? 'Session Terminated — Browser Closed'
+            : 'Interview Session Expired'}
+        </p>
+        <p style={{ fontSize: '12px', color: '#DC2626', margin: 0 }}>
+          {(candidate as any).l1AIExpiredReason === 'candidate_ended'
+            ? 'The candidate manually ended the session before completing all questions.'
+            : 'The session was automatically terminated due to a security violation.'}
+        </p>
+      </div>
+    </div>
 
+    {/* Show partial answers if any were recorded */}
+    {(candidate as any).l1AIExpiredAt && (
+      <div style={{
+        background: '#F9FAFB', border: '1px solid #E5E7EB',
+        borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: '#6B7280',
+      }}>
+        Session ended at:{' '}
+        {new Date(
+          (candidate as any).l1AIExpiredAt?.seconds * 1000
+        ).toLocaleString('en-IN', {
+          day: '2-digit', month: 'short', year: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+        })}
+      </div>
+    )}
+
+    {/* HR actions */}
+    {role === 'hr' && (
+      <div style={{
+        background: '#F8F7FF', borderRadius: '10px', padding: '14px',
+        border: '1px solid #DDD6FE',
+      }}>
+        <p style={{ fontSize: '13px', fontWeight: 700, color: '#4C1D95', margin: '0 0 10px' }}>
+          What would you like to do?
+        </p>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => onAction('resend-ai-link', {})}
+            style={{
+              background: '#7C3AED', color: 'white', border: 'none',
+              borderRadius: '8px', padding: '8px 16px', fontSize: '13px',
+              fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            🔄 Resend Interview Link
+          </button>
+          <button
+            onClick={() => onAction('ai-reject', {
+              feedback: `Session terminated: ${(candidate as any).l1AIExpiredReason || 'expired'}`,
+              aiScore: 0,
+            })}
+            style={{
+              background: 'white', color: '#DC2626',
+              border: '1px solid #FECACA',
+              borderRadius: '8px', padding: '8px 16px', fontSize: '13px',
+              fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            ✕ Reject Candidate
+          </button>
+        </div>
+      </div>
+    )}
+  </div>
+)}
       {/* ── AI Interview: waiting for candidate ── */}
       {stageKey === 'l1' &&
-       status === 'Scheduled' &&
-       (candidate as any).l1InterviewType === 'ai' &&
-       (candidate as any).l1AIStatus !== 'completed' && (
+ ['Scheduled', 'Expired'].includes(status) &&
+ (candidate as any).l1InterviewType === 'ai' &&
+ !['completed', 'expired'].includes((candidate as any).l1AIStatus) && (
         <AIInterviewStatusCard
           candidateId={candidate.id}
           candidateName={candidate.candidateName || ''}
@@ -1376,12 +1823,17 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
             `Notice Period: ${(candidate as any).noticePeriod || ''}`,
           ].filter(Boolean).join('\n');
           const jobDescription = (candidate as any).jobDescription || (candidate as any).jdText || `Role: ${candidate.candidateDesignation}`;
-          const expiresAt = Timestamp.fromMillis(Date.now() + 48 * 60 * 60 * 1000);
+          
+          // ← Compute ONCE, reuse in both writes
+          const sentAt = Timestamp.now();
+          const expiresAt = Timestamp.fromMillis(sentAt.toMillis() + 48 * 60 * 60 * 1000);
+          
           await addDoc(collection(db, 'ai_interviews'), {
-            token, candidateId: candidate.id, candidateName: candidate.candidateName || '',
+            token, candidateId: candidateId, candidateName: candidate.candidateName || '',
             candidateEmail: candidate.candidateEmail || '', jobRole: candidate.candidateDesignation || '',
             resumeText, jobDescription, scheduledByUid: user.uid, scheduledByName: actorName,
-            status: 'pending', createdAt: Timestamp.now(), expiresAt, interviewUrl,
+            status: 'pending', createdAt: sentAt, expiresAt, interviewUrl,
+            l1AIInterviewSentAt: sentAt, // ← also save here for page.tsx fallback
           });
           updateData = {
             resumeReviewStatus: 'Accepted',
@@ -1389,16 +1841,17 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
             l1Status: 'Scheduled', l1InterviewType: 'ai',
             l1ScheduledDate: new Date().toISOString().split('T')[0],
             l1AIInterviewToken: token, l1AIInterviewUrl: interviewUrl,
+            l1AIInterviewSentAt: sentAt, // ← same timestamp object
             l1InterviewerUid: user.uid, l1InterviewerName: actorName, l1InterviewerEmail: actorEmail,
             resumeReviewedByEmail: actorEmail, resumeReviewedByUid: user.uid, resumeReviewedByName: actorName,
           };
           historyData.status = 'Accepted';
-          await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
-          await addDoc(collection(db, 'candidate_history'), historyData);
-          const threadId = (candidate as any).emailThreadMessageId || '';
-          await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `AI interview link: ${interviewUrl}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId: threadId });
-          const uploaderEmailForAI = candidate.createdByEmail || actorEmail;
-          await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link sent to candidate. Token: ${token}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId: threadId });
+          await updateDoc(doc(db, 'candidates', candidateId), { ...updateData, lastUpdated: Timestamp.now() });
+await addDoc(collection(db, 'candidate_history'), historyData);
+const threadId = (candidate as any).emailThreadMessageId || '';
+await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `AI interview link: ${interviewUrl}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId: threadId });
+const uploaderEmailForAI = candidate.createdByEmail || actorEmail;
+await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link sent to candidate. Token: ${token}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId: threadId });
           return;
         } else if (action === 'reject') {
           updateData = { resumeReviewStatus: 'Rejected', resumeFeedback: payload.feedback || (candidate as any).resumePanelFeedback || '', finalStatus: 'Rejected', l1Status: 'Locked', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
@@ -1419,17 +1872,86 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
           const interviewUrl = `${baseUrl}/interview/${token}`;
           const resumeText = [`Name: ${candidate.candidateName}`, `Role: ${candidate.candidateDesignation}`, `Experience: ${(candidate as any).experience} years`, `Skills: ${(candidate as any).skills || ''}`, `Current Company: ${(candidate as any).currentCompany || ''}`, `Notice Period: ${(candidate as any).noticePeriod || ''}`].filter(Boolean).join('\n');
           const jobDescription = (candidate as any).jobDescription || (candidate as any).jdText || `Role: ${candidate.candidateDesignation}`;
-          const expiresAt = Timestamp.fromMillis(Date.now() + 48 * 60 * 60 * 1000);
-          await addDoc(collection(db, 'ai_interviews'), { token, candidateId: candidate.id, candidateName: candidate.candidateName || '', candidateEmail: candidate.candidateEmail || '', jobRole: candidate.candidateDesignation || '', resumeText, jobDescription, scheduledByUid: user.uid, scheduledByName: actorName, status: 'pending', createdAt: Timestamp.now(), expiresAt, interviewUrl });
-          updateData = { l1Status: 'Scheduled', l1InterviewType: 'ai', l1ScheduledDate: payload.scheduledDate, l1SchedulingNotes: payload.schedulingNotes, l1AIInterviewToken: token, l1AIInterviewUrl: interviewUrl, l1InterviewerUid: user.uid, l1InterviewerName: actorName, l1InterviewerEmail: actorEmail };
+          
+          // ← Compute ONCE, reuse in both writes so timestamps match exactly
+          const sentAt = Timestamp.now();
+          const expiresAt = Timestamp.fromMillis(sentAt.toMillis() + 48 * 60 * 60 * 1000);
+          
+          await addDoc(collection(db, 'ai_interviews'), { token, candidateId: candidateId, candidateName: candidate.candidateName || '', candidateEmail: candidate.candidateEmail || '', jobRole: candidate.candidateDesignation || '', resumeText, jobDescription, scheduledByUid: user.uid, scheduledByName: actorName, status: 'pending', createdAt: sentAt, expiresAt, interviewUrl, l1AIInterviewSentAt: sentAt });
+          
+          updateData = { l1Status: 'Scheduled', l1InterviewType: 'ai', l1ScheduledDate: payload.scheduledDate, l1SchedulingNotes: payload.schedulingNotes, l1AIInterviewToken: token, l1AIInterviewUrl: interviewUrl, l1InterviewerUid: user.uid, l1InterviewerName: actorName, l1InterviewerEmail: actorEmail, l1AIInterviewSentAt: sentAt };
+          
           historyData.status = 'Scheduled';
-          await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
+          await updateDoc(doc(db, 'candidates', candidateId), { ...updateData, lastUpdated: Timestamp.now() });
           await addDoc(collection(db, 'candidate_history'), historyData);
           const threadMessageId = candidate.emailThreadMessageId || '';
           const uploaderEmail = candidate.createdByEmail || '';
-          await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `Interview link: ${interviewUrl}\n\nNotes: ${payload.schedulingNotes}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId });
-          await sendEmail({ toEmail: uploaderEmail || actorEmail, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link has been sent to the candidate. Token: ${token}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidate.id, threadMessageId });
+          await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `Interview link: ${interviewUrl}\n\nNotes: ${payload.schedulingNotes}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId });
+          await sendEmail({ toEmail: uploaderEmail || actorEmail, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link has been sent to the candidate. Token: ${token}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId });
           return;
+
+  } else if (action === 'resend-ai-link') {   // ← ADD FROM HERE
+    const token = globalThis.crypto.randomUUID();
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+    const interviewUrl = `${baseUrl}/interview/${token}`;
+    const sentAt = Timestamp.now();
+    const expiresAt = Timestamp.fromMillis(sentAt.toMillis() + 48 * 60 * 60 * 1000);
+
+    const resumeText = [
+      `Name: ${candidate.candidateName}`,
+      `Role: ${candidate.candidateDesignation}`,
+      `Experience: ${(candidate as any).experience} years`,
+      `Skills: ${(candidate as any).skills || ''}`,
+    ].filter(Boolean).join('\n');
+    const jobDescription = (candidate as any).jobDescription || (candidate as any).jdText || `Role: ${candidate.candidateDesignation}`;
+
+    await addDoc(collection(db, 'ai_interviews'), {
+      token, candidateId: candidateId,
+      candidateName:  candidate.candidateName  || '',
+      candidateEmail: candidate.candidateEmail || '',
+      jobRole:        candidate.candidateDesignation || '',
+      resumeText, jobDescription,
+      scheduledByUid:  user.uid,
+      scheduledByName: actorName,
+      status: 'pending', createdAt: sentAt, expiresAt,
+      interviewUrl, l1AIInterviewSentAt: sentAt,
+    });
+
+    updateData = {
+      l1Status:            'Scheduled',
+      l1AIStatus:          'pending',
+      l1AIExpiredReason:   null,
+      l1AIExpiredAt:       null,
+      l1AIInterviewToken:  token,
+      l1AIInterviewUrl:    interviewUrl,
+      l1AIInterviewSentAt: sentAt,
+    };
+    historyData.status = 'Scheduled';
+
+    await updateDoc(doc(db, 'candidates',candidateId), { ...updateData, lastUpdated: Timestamp.now() });
+    await addDoc(collection(db, 'candidate_history'), historyData);
+
+    const threadMessageId = candidate.emailThreadMessageId || '';
+    await sendEmail({
+      toEmail:           candidate.candidateEmail || '',
+      candidateName:     candidate.candidateName  || '',
+      jobRole:           candidate.candidateDesignation || '',
+      interviewerName:   actorName,
+      interviewerEmail:  actorEmail,
+      experience:        String((candidate as any).experience || ''),
+      location:          String((candidate as any).location   || ''),
+      stage:             'L1 Interview',
+      schedulingNotes:   `Your new interview link: ${interviewUrl}`,
+      interviewFeedback: '',
+      interviewDate:     new Date().toISOString().split('T')[0],
+      interviewTime:     '',
+      senderRole:        'hr',
+      emailType:         'interview_scheduled',
+      candidateId:       candidateId,
+      threadMessageId,
+    });
+    return;         
+
         } else if (action === 'schedule') {
           updateData = { l1Status: 'Scheduled', l1ScheduledDate: payload.scheduledDate, l1TimeSlot: payload.timeSlot, l1SchedulingNotes: payload.schedulingNotes, l1PanelUid: payload.panelUid, l1PanelName: payload.panelName, l1PanelEmail: payload.panelEmail, l1InterviewerUid: user.uid, l1InterviewerName: actorName, l1InterviewerEmail: actorEmail };
           historyData.status = 'Scheduled';
@@ -1483,7 +2005,7 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
     }
 
     try {
-      await updateDoc(doc(db, 'candidates', candidate.id), { ...updateData, lastUpdated: Timestamp.now() });
+      await updateDoc(doc(db, 'candidates', candidateId), { ...updateData, lastUpdated: Timestamp.now() });
       await addDoc(collection(db, 'candidate_history'), historyData);
       setHistory(prev => [...prev, { stage, action, updatedByName: historyData.updatedByName, updatedByRole: historyData.updatedByRole }]);
     } catch (err) {
@@ -1491,7 +2013,7 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
       return;
     }
 
-    const fresh = await getFreshCandidate(candidate.id);
+    const fresh = await getFreshCandidate(candidateId);
     if (!fresh) { console.error('[Email] ❌ Could not read fresh candidate — emails skipped for action:', action); return; }
 
     const threadMessageId: string = fresh.emailThreadMessageId || '';
@@ -1517,7 +2039,7 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
       interviewFeedback: payload.feedback        || '',
       interviewDate:     payload.scheduledDate   || '',
       interviewTime:     payload.timeSlot        || '',
-      candidateId:       candidate.id,
+      candidateId:       candidateId,
       threadMessageId:   threadMessageId,
     };
 
@@ -1615,8 +2137,7 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '35% 70%', gap: '24px' }}>
-
+<div style={{ display: 'grid', gridTemplateColumns: '500px 1fr', gap: '24px' }}>
         {/* ── LEFT COLUMN ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center' }}>

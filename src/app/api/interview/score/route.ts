@@ -1,4 +1,7 @@
-// app/api/interview/score/route.ts
+// app/api/interview/score/route.ts — UPDATED VERSION
+// KEY CHANGE: Calls /api/interview/analyze-video FIRST to get real eye/body scores from video
+// Falls back to client MediaPipe data if video analysis fails
+// Groq only scores technical + communication (no eye/body)
 
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebaseAdmin';
@@ -13,8 +16,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       token, questions, jobRole, codeAnswer, codeLanguage, videoUrls,
-      eyeContactScore, bodyLanguageScore, faceVisiblePct,
+      eyeContactScore:   clientEyeScore,
+      bodyLanguageScore: clientBodyScore,
+      faceVisiblePct:    clientFacePct,
+      timings,
     } = body;
+
     candidateId = body.candidateId || '';
 
     if (!token) {
@@ -39,51 +46,158 @@ export async function POST(req: NextRequest) {
       ? questions
       : (docData.questions || []);
 
-    const hasVideos = Array.isArray(videoUrls) && videoUrls.length > 0;
+    // ── Extract MediaPipe + integrity data from client ────────────────────
+    const clientSuspicionFlags: string[] = Array.isArray(body.suspicionFlags)
+      ? body.suspicionFlags : [];
 
-   // ── STEP 1: Use already saved transcripts ─────────────────────
-const existingAnswers = docData.answers || [];
+    const clientGazeBreakdown: {
+      center: number; down: number; side: number; absent: number;
+    } = body.gazeBreakdown ?? { center: 0, down: 0, side: 0, absent: 0 };
 
-const transcripts = existingAnswers.map(
-  (a: any) => a?.transcript || ''
-);
+   // ── STEP 1: Server-side video analysis (Claude Vision via direct frames) ──
+let videoEyeScore:   number  = -1;
+let videoBodyScore:  number  = -1;
+let videoFacePct:    number  = -1;
+let videoGaze       = { center: 0, down: 0, side: 0, absent: 0 };
+let videoSuspicion: string[] = [];
+let videoAnalysisMethod      = 'none';
+ 
+// videoFrames sent directly from client (base64 JPEG array)
+const videoFrames: string[] = Array.isArray(body.videoFrames) ? body.videoFrames : [];
+ 
+if (videoFrames.length >= 2) {
+  try {
+    console.log(`[Score] Sending ${videoFrames.length} frames to analyze-video...`);
+    const baseUrl     = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const analysisRes = await fetch(`${baseUrl}/api/interview/analyze-video`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ frames: videoFrames }),
+      signal:  AbortSignal.timeout(60000), // 60s timeout
+    });
+ 
+    if (analysisRes.ok) {
+      const analysisData = await analysisRes.json();
+      if (typeof analysisData.eyeContactScore === 'number' && analysisData.eyeContactScore >= 0) {
+        videoEyeScore       = analysisData.eyeContactScore;
+        videoBodyScore      = analysisData.bodyLanguageScore;
+        videoFacePct        = analysisData.faceVisiblePct;
+        videoGaze           = analysisData.gazeBreakdown;
+        videoSuspicion      = analysisData.suspicionFlags || [];
+        videoAnalysisMethod = analysisData.method;
+        console.log('[Score] Video analysis succeeded:', { eye: videoEyeScore, body: videoBodyScore });
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Score] Video analysis failed (non-fatal):', err.message);
+  }
+} else {
+  console.log('[Score] No frames received — skipping video analysis');
+}
+    // ── STEP 2: Pick best available eye/body data ─────────────────────────
+    // Priority: (1) Server Claude Vision, (2) Client MediaPipe, (3) Neutral default
+    let finalEyeContact:   number;
+    let finalBodyLanguage: number;
+    let finalFacePct:      number;
+    let finalGaze         = { center: 0, down: 0, side: 0, absent: 0 };
+    let finalSuspicion:    string[];
+    let dataSource:        string;
 
-console.log('Saved transcripts:', transcripts);
-    // ── STEP 2: Classify each answer ──────────────────────────────────────────
+    const hasVideoData  = videoEyeScore >= 0 && videoBodyScore >= 0;
+    const hasClientData = typeof clientEyeScore === 'number' && clientEyeScore >= 0 &&
+                          typeof clientBodyScore === 'number' && clientBodyScore >= 0;
 
+    if (hasVideoData) {
+      // Best: server-side Claude Vision analysis of actual video frames
+      finalEyeContact   = videoEyeScore;
+      finalBodyLanguage = videoBodyScore;
+      finalFacePct      = videoFacePct;
+      finalGaze         = videoGaze;
+      finalSuspicion    = [...new Set([...videoSuspicion, ...clientSuspicionFlags])];
+      dataSource        = `claude_vision_${videoAnalysisMethod}`;
+      console.log('[Score] Using server video analysis scores');
+    } else if (hasClientData) {
+      // Fallback: MediaPipe from client (when video analysis fails)
+      finalEyeContact   = clientEyeScore;
+      finalBodyLanguage = clientBodyScore;
+      finalFacePct      = typeof clientFacePct === 'number' ? clientFacePct : 50;
+      finalGaze         = clientGazeBreakdown;
+      finalSuspicion    = clientSuspicionFlags;
+      dataSource        = 'client_mediapipe';
+      console.log('[Score] Using client MediaPipe scores');
+    } else {
+      // No data available — use neutral 50 with a note
+      finalEyeContact   = 50;
+      finalBodyLanguage = 50;
+      finalFacePct      = 50;
+      finalGaze         = { center: 50, down: 0, side: 0, absent: 50 };
+      finalSuspicion    = [];
+      dataSource        = 'default_no_data';
+      console.log('[Score] No video or MediaPipe data — using defaults');
+    }
+
+    // ── STEP 3: Get transcripts ───────────────────────────────────────────
+    const clientTranscripts: string[] = Array.isArray(body.transcripts)
+      ? body.transcripts : [];
+
+    let transcripts: string[]   = [];
+    let existingAnswers: any[]  = [];
+
+    if (Array.isArray(clientTranscripts) && clientTranscripts.length > 0) {
+      console.log('[Score] Using client transcripts');
+      transcripts     = questionList.map((_, i) => (clientTranscripts[i] || '').trim());
+      existingAnswers = questionList.map((_, i) => ({
+        videoUrl:   videoUrls?.[i] || '',
+        transcript: clientTranscripts[i] || '',
+      }));
+    } else {
+      console.log('[Score] Using client transcripts');
+      transcripts     = questionList.map((_, i) => clientTranscripts[i] || '');
+      existingAnswers = questionList.map((_, i) => ({
+        videoUrl:   videoUrls?.[i] || '',
+        transcript: clientTranscripts[i] || '',
+      }));
+      console.log('[Score] Falling back to Firestore answers_map');
+      await new Promise(r => setTimeout(r, 12000));
+
+      const freshSnap  = await adminDb.collection('ai_interviews')
+        .where('token', '==', token).limit(1).get();
+      const freshData  = freshSnap.empty ? docData : freshSnap.docs[0].data();
+      const answersMap = freshData.answers_map || {};
+
+      console.log('[Score] answers_map keys:', Object.keys(answersMap));
+      transcripts     = questionList.map((_, i) => answersMap[`q${i}`]?.transcript || '');
+      existingAnswers = questionList.map((_, i) => answersMap[`q${i}`] || null);
+    }
+
+    console.log('[Score] Transcripts:', transcripts.map((t, i) =>
+      `Q${i+1}: "${t.substring(0, 50)}"`));
+
+    // ── STEP 4: Classify answers ──────────────────────────────────────────
     const isRealAnswer = (t: string) =>
-      t &&
-      t.trim().length >= 3 &&
-      t.trim().split(/\s+/).length >= 2;
+      t?.trim().length >= 3 && t.trim().split(/\s+/).filter(Boolean).length >= 1;
 
     const answerMap = questionList.map((q, i) => ({
       question:   q,
       transcript: transcripts[i]?.trim() || '',
-      hasVideo:   !!videoUrls?.[i],
-      answered:   isRealAnswer(transcripts[i] || ''),
+      hasVideo:   !!existingAnswers?.[i]?.videoUrl,
+      // Count as answered if there's a transcript OR a video recording
+      answered:   isRealAnswer(transcripts[i] || '') || !!existingAnswers?.[i]?.videoUrl,
     }));
 
     const answeredCount  = answerMap.filter(a => a.answered).length;
     const totalQuestions = questionList.length;
-    const answerRate     = totalQuestions > 0 ? answeredCount / totalQuestions : 0;
 
-    // ✅ FIX 2: Added debug log so you can see exactly what happened
-    // in Vercel logs if scoring gives 0 again in future.
-    console.log('[Score] Transcription results:', transcripts.map((t: string, i: number) => ({      q: i + 1,
-      videoUrl: !!videoUrls?.[i],
-      words: t?.trim().split(/\s+/).filter(Boolean).length || 0,
-      preview: t?.substring(0, 60) || 'EMPTY',
-    })));
-    console.log(`[Score] Answered ${answeredCount}/${totalQuestions} (${Math.round(answerRate * 100)}%)`);
+    console.log(`[Score] Answered ${answeredCount}/${totalQuestions}`);
 
-    // ── STEP 3: Build per-question context for AI ─────────────────────────────
+    // ── STEP 5: Build answers text ────────────────────────────────────────
     const answersText = answerMap.map((a, i) => {
       if (a.answered) {
-        return `Q${i + 1}: ${a.question}\nAnswer: ${a.transcript}\nStatus: ANSWERED`;
+        return `Q${i+1}: ${a.question}\nAnswer: ${a.transcript}\nStatus: ANSWERED`;
       } else if (a.hasVideo) {
-        return `Q${i + 1}: ${a.question}\nAnswer: [Video recorded but candidate did not speak / spoke too briefly]\nStatus: NOT_ANSWERED`;
+        return `Q${i+1}: ${a.question}\nAnswer: [Recorded but no speech detected]\nStatus: NOT_ANSWERED`;
       } else {
-        return `Q${i + 1}: ${a.question}\nAnswer: [No recording]\nStatus: SKIPPED`;
+        return `Q${i+1}: ${a.question}\nAnswer: [No recording]\nStatus: SKIPPED`;
       }
     }).join('\n\n');
 
@@ -91,16 +205,17 @@ console.log('Saved transcripts:', transcripts);
       ? `\nCODING SUBMISSION (${codeLanguage || 'unknown'}):\n${codeAnswer.trim()}`
       : '';
 
-    const mediaSection = `
-MEDIAPIPE PHYSICAL SCORES (from actual face tracking during interview):
-- Eye Contact detected: ${typeof eyeContactScore === 'number' ? eyeContactScore : 'N/A'}
-- Body Language detected: ${typeof bodyLanguageScore === 'number' ? bodyLanguageScore : 'N/A'}
-- Face visible percentage: ${typeof faceVisiblePct === 'number' ? faceVisiblePct + '%' : 'N/A'}
-- Candidate answered ${answeredCount} of ${totalQuestions} questions
-`;
+    const timingsSection = Array.isArray(timings) && timings.length > 0
+      ? `\nTIME TAKEN PER QUESTION (seconds): ${timings.map((t: number, i: number) => `Q${i+1}: ${t}s`).join(', ')}\nNote: very short answers (under 15s) likely lack depth.`
+      : '';
 
-    // ── STEP 4: Build strict AI scoring prompt ────────────────────────────────
-    const prompt = `You are a strict technical interviewer scoring a ${jobRole} candidate.
+   // ── STEP 6: Groq prompt — ONLY technical + communication ─────────────
+const prompt = `You are a fair and balanced interviewer scoring a ${jobRole} candidate.
+
+IMPORTANT CONTEXT: Answers are captured via speech-to-text which introduces transcription errors
+(mishearing words, run-on sentences, missing punctuation). Judge the SUBSTANCE and INTENT of
+what was said, not the transcription quality. "sanitary testing" means "sanity testing".
+"jeera" means "Jira". Overlook phonetic errors and incomplete sentences caused by STT.
 
 RESUME:
 ${resumeText || 'Not provided.'}
@@ -108,72 +223,57 @@ ${resumeText || 'Not provided.'}
 JOB DESCRIPTION:
 ${jd || 'Not provided.'}
 
-INTERVIEW TRANSCRIPT (${answeredCount} of ${totalQuestions} questions answered):
+INTERVIEW ANSWERS (${answeredCount} of ${totalQuestions} questions answered):
 ${answersText}
 ${codeSection}
-${mediaSection}  
+${timingsSection}
 
-SCORING RULES — follow these exactly:
+SCORING RULES:
 
 1. technicalScore (0-100):
-   - Score ONLY based on correctness and depth of answers given
-   - If 0 questions answered: give 0
-   - If 1-2 questions answered: max score is 40, based on quality
-   - If 3-4 questions answered: max score is 70, based on quality
-   - If all 5 answered correctly and well: can score up to 100
-   - Deduct heavily for wrong answers, vague answers, or no answers
+   - Score on correctness, depth, and relevance of answers to the job role
+   - A candidate who speaks for 60–90 seconds per question and covers key concepts deserves 55–75
+   - Correct concepts with some gaps → 55–65
+   - Good coverage with examples → 65–80
+   - Excellent depth, specific tools, clear reasoning → 80–95
+   - 0 questions answered → 0. Partial answers still show knowledge — don't penalise heavily.
 
 2. communicationScore (0-100):
-   - Score based on clarity, structure, and articulation of spoken answers
-   - If 0 questions answered: give 0
-   - If answers are present: score based on how clearly they communicated
+   - Score on how clearly the candidate conveyed their ideas (NOT transcription quality)
+   - A candidate who spoke for 60–90 seconds per question and stayed on topic deserves at least 55
+   - Structured, coherent verbal answers → 60–75
+   - Well-articulated with clear examples → 75–90
+   - Penalise only genuine lack of coherence, not STT artifacts
 
-3. bodyLanguageScore (0-100):
-   - Use the MediaPipe body language score provided above as your primary source
-   - If answeredCount is 0: give exactly 0 — no exceptions
-   - If face visible % is below 15: give exactly 0
-   - Otherwise use the MediaPipe score directly
+3. recommendation:
+   - "Strong Yes" if technicalScore >= 72 AND answeredCount >= 4
+   - "Yes" if technicalScore >= 58 AND answeredCount >= 3
+   - "Maybe" if technicalScore >= 40 AND answeredCount >= 2
+   - "No" for everything else
 
-4. eyeContactScore (0-100):
-   - Use the MediaPipe eye contact score provided above as your primary source
-   - If answeredCount is 0: give exactly 0 — no exceptions
-   - If face visible % is below 15: give exactly 0
-   - Otherwise use the MediaPipe score directly
+4. summary: 2–3 balanced sentences. Mention what they did well AND where to improve.
 
-5. overallScore: compute as weighted average:
-   - technical: 50%
-   - communication: 35%
-   - bodyLanguage: 7.5%
-   - eyeContact: 7.5%
+5. strengths: list at least 1–2 genuine strengths if the candidate answered any questions.
 
-6. recommendation:
-   - "Strong Yes" only if overallScore >= 80 AND answeredCount >= 4
-   - "Yes" if overallScore >= 65 AND answeredCount >= 3
-   - "Maybe" if overallScore >= 45 AND answeredCount >= 2
-   - "No" for everything else — especially if answeredCount < 2
+6. improvements: 2 specific, actionable gaps.
 
-7. summary: be brutally honest — mention exactly how many questions were answered
-   and whether answers were correct, vague, or absent.
+Score reference: 30–45 = weak, 46–60 = average, 61–75 = good, 76–90 = very good, 91–100 = exceptional.
+A candidate who answered all 5 questions with relevant content should score at least 55–65 overall.
 
-8. strengths: only list GENUINE strengths based on actual answers. Empty array if none.
-
-Respond with ONLY raw JSON, no markdown, no backticks:
+Output ONLY raw JSON, no markdown, no backticks:
 {
-  "overallScore": <integer 0-100>,
   "technicalScore": <integer 0-100>,
   "communicationScore": <integer 0-100>,
-  "bodyLanguageScore": <integer 0-100>,
-  "eyeContactScore": <integer 0-100>,
-  "summary": "<2-3 honest sentences>",
+  "summary": "<2-3 sentences>",
   "technicalFeedback": "<1-2 sentences>",
   "communicationFeedback": "<1-2 sentences>",
-  "bodyLanguageFeedback": "<1-2 sentences>",
   "recommendation": "<Strong Yes | Yes | Maybe | No>",
-  "strengths": [],
+  "strengths": ["<strength 1>", "<strength 2>"],
   "improvements": ["<gap 1>", "<gap 2>"]
 }`;
 
-    // ── STEP 5: Call Groq ─────────────────────────────────────────────────────
+    // ── STEP 7: Call Groq ─────────────────────────────────────────────────
+    
     const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method:  'POST',
       headers: {
@@ -181,19 +281,16 @@ Respond with ONLY raw JSON, no markdown, no backticks:
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model:    'llama-3.3-70b-versatile',
+        model:       'llama-3.3-70b-versatile',
         messages: [
           {
             role:    'system',
-            content: `You are a strict, honest technical interviewer. 
-You score ONLY based on what the candidate actually said.
-If they did not answer, they score low — period.
-Do not give benefit of the doubt. Output ONLY raw JSON.`,
+            content:  'You are a fair technical interviewer. Answers come from speech-to-text — judge the substance and intent, not transcription artifacts. Be encouraging where merit exists. Output ONLY raw JSON.',
           },
           { role: 'user', content: prompt },
         ],
-        temperature: 0.1,
-        max_tokens:  900,
+        temperature: 0.2,
+        max_tokens:  1000,
       }),
     });
 
@@ -203,47 +300,52 @@ Do not give benefit of the doubt. Output ONLY raw JSON.`,
 
     const groqData = await groqRes.json();
     const content  = groqData.choices?.[0]?.message?.content || '';
-    console.log('[Score] Groq raw:', content.substring(0, 400));
+    console.log('[Score] Groq raw:', content.substring(0, 300));
 
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON in Groq response');
 
     const ev = JSON.parse(jsonMatch[0]);
 
-    // ── STEP 6: Apply MediaPipe ONLY if candidate actually spoke ──────────────
-    const mediaPipeReliable =
-      typeof eyeContactScore   === 'number' &&
-      typeof bodyLanguageScore === 'number' &&
-      typeof faceVisiblePct    === 'number' &&
-      faceVisiblePct > 30 &&
-      eyeContactScore < 98 &&
-      answeredCount > 0;
-
+    // ── STEP 8: Clamp all scores ──────────────────────────────────────────
     const clamp = (val: unknown, min = 0, max = 100) =>
       Math.round(Math.max(min, Math.min(max, Number(val) || 0)));
 
     const tech = clamp(ev.technicalScore);
     const comm = clamp(ev.communicationScore);
 
-    const faceWasHidden = typeof faceVisiblePct === 'number' && faceVisiblePct < 20;
-    const physCap =
-      answeredCount === 0 ? 0 :
-      faceWasHidden       ? 5 :
-      answeredCount === 1 ? 50 : 100;
+    // ── STEP 9: Build body language feedback string ───────────────────────
+    let bodyLanguageFeedback: string;
 
-    const finalEyeContact = Math.min(physCap,
-      mediaPipeReliable
-        ? Math.round(eyeContactScore! * 0.4 + clamp(ev.eyeContactScore) * 0.6)
-        : clamp(ev.eyeContactScore)
-    );
+    if (answeredCount === 0) {
+      bodyLanguageFeedback = 'Candidate did not answer any questions verbally.';
+      // Don't override finalEyeContact / finalBodyLanguage — camera data is still valid
+    } else if (dataSource === 'default_no_data') {
+      bodyLanguageFeedback = 'Camera tracking data was not available for this session.';
+    } else if (finalFacePct < 20) {
+      finalEyeContact      = 5;
+      finalBodyLanguage    = 5;
+      bodyLanguageFeedback = 'Face was not visible for most of the interview.';
+    } else if (finalGaze.down > 25) {
+      bodyLanguageFeedback = `Candidate looked down ${finalGaze.down}% of the time — possible phone or notes use.`;
+    } else if (finalGaze.side > 25) {
+      bodyLanguageFeedback = `Candidate looked sideways ${finalGaze.side}% of the time — possible reference material.`;
+    } else if (finalGaze.absent > 20) {
+      bodyLanguageFeedback = `Face was absent from frame ${finalGaze.absent}% of the time.`;
+    } else if (finalEyeContact >= 70) {
+      bodyLanguageFeedback = `Good eye contact maintained ${finalGaze.center}% of the time.`;
+    } else {
+      bodyLanguageFeedback = `Eye contact was ${finalGaze.center}% — candidate should look more directly at the camera.`;
+    }
 
-    const finalBodyLanguage = Math.min(physCap,
-      mediaPipeReliable
-        ? Math.round(bodyLanguageScore! * 0.4 + clamp(ev.bodyLanguageScore) * 0.6)
-        : clamp(ev.bodyLanguageScore)
-    );
+    console.log('[Score] Final eye/body scores:', {
+      eyeContact:   finalEyeContact,
+      bodyLanguage: finalBodyLanguage,
+      source:       dataSource,
+      gaze:         finalGaze,
+    });
 
-    // ── STEP 7: Compute final overall + apply hard caps ───────────────────────
+    // ── STEP 10: Overall score (weighted) + caps ──────────────────────────
     const computedOverall = Math.round(
       tech              * 0.50 +
       comm              * 0.35 +
@@ -251,46 +353,50 @@ Do not give benefit of the doubt. Output ONLY raw JSON.`,
       finalEyeContact   * 0.075,
     );
 
-    // ✅ FIX 3: overallCap now uses answeredCount which comes from real
-    // transcripts only — silent videos correctly stay as NOT_ANSWERED.
-    // This is correct behaviour: only actual spoken answers raise the cap.
     const overallCap =
-      answeredCount === 0 ? 0 :
-      answeredCount === 1 ? 40 :
-      answeredCount === 2 ? 60 :
-      answeredCount === 3 ? 75 : 100;
+  answeredCount === 0 ? 0  :
+  answeredCount === 1 ? 45 :
+  answeredCount === 2 ? 65 :
+  answeredCount === 3 ? 80 :
+  answeredCount === 4 ? 90 : 100;
 
     const finalOverall = Math.min(computedOverall, overallCap);
 
+    // Override recommendation based on integrity flags
     let recommendation = String(ev.recommendation ?? 'No');
-    if (answeredCount === 0)                              recommendation = 'No';
-    else if (answeredCount === 1 && finalOverall < 50)   recommendation = 'No';
-    else if (answeredCount <= 2 && finalOverall < 60)    recommendation = 'Maybe';
+    if (answeredCount === 0)                            recommendation = 'No';
+    else if (answeredCount === 1 && finalOverall < 50)  recommendation = 'No';
+    else if (answeredCount <= 2 && finalOverall < 60)   recommendation = 'Maybe';
+    if (finalSuspicion.length >= 2 && recommendation === 'Strong Yes') recommendation = 'Yes';
+    if (finalSuspicion.length >= 3)                                     recommendation = 'Maybe';
 
     const result = {
       score:                 finalOverall,
       technicalScore:        tech,
       communicationScore:    comm,
-      bodyLanguageScore:     finalBodyLanguage,
-      eyeContactScore:       finalEyeContact,
+      bodyLanguageScore:     clamp(finalBodyLanguage),
+      eyeContactScore:       clamp(finalEyeContact),
       summary:               String(ev.summary              ?? ''),
-      technicalFeedback:     String(ev.technicalFeedback     ?? ''),
+      technicalFeedback:     String(ev.technicalFeedback    ?? ''),
       communicationFeedback: String(ev.communicationFeedback ?? ''),
-      bodyLanguageFeedback:  String(ev.bodyLanguageFeedback  ?? ''),
+      bodyLanguageFeedback,
       recommendation,
       strengths:             Array.isArray(ev.strengths)    ? ev.strengths    : [],
       improvements:          Array.isArray(ev.improvements) ? ev.improvements : [],
     };
 
-    console.log('[Score] Final:', {
-      overall:      result.score,
-      technical:    result.technicalScore,
-      comm:         result.communicationScore,
-      answered:     `${answeredCount}/${totalQuestions}`,
-      cap:          overallCap,
+    console.log('[Score] Final result:', {
+      overall:   result.score,
+      technical: result.technicalScore,
+      comm:      result.communicationScore,
+      eye:       result.eyeContactScore,
+      body:      result.bodyLanguageScore,
+      answered:  `${answeredCount}/${totalQuestions}`,
+      source:    dataSource,
+      integrity: finalSuspicion.length > 0 ? finalSuspicion : 'clean',
     });
 
-    // ── STEP 8: Save to Firestore ─────────────────────────────────────────────
+    // ── STEP 11: Save to Firestore ────────────────────────────────────────
     await snap.docs[0].ref.update({
       status:                  'completed',
       aiScore:                 result.score,
@@ -309,12 +415,17 @@ Do not give benefit of the doubt. Output ONLY raw JSON.`,
       answeredQuestions:       answeredCount,
       totalQuestions,
       scoredAt:                FieldValue.serverTimestamp(),
+      suspicionFlags:          finalSuspicion,
+      gazeBreakdown:           finalGaze,
+      integrityStatus:         finalSuspicion.length > 0 ? 'flagged' : 'clean',
+      videoAnalysisSource:     dataSource,
     });
 
     if (candidateId) {
       await adminDb.doc(`candidates/${candidateId}`).update({
         l1AIStatus:              'completed',
         l1AIScore:               result.score,
+        l1AIVideoUrl:            videoUrls?.[0] || '',
         l1AICodeAnswer:          codeAnswer || '',
         l1AITechnicalScore:      result.technicalScore,
         l1AICommunicationScore:  result.communicationScore,
@@ -329,6 +440,13 @@ Do not give benefit of the doubt. Output ONLY raw JSON.`,
         l1AITotalQuestions:      totalQuestions,
         l1AICompletedAt:         FieldValue.serverTimestamp(),
         lastUpdated:             FieldValue.serverTimestamp(),
+        l1AISuspicionFlags:      finalSuspicion,
+        l1AIGazeBreakdown:       finalGaze,
+        l1AIIntegrityStatus:     finalSuspicion.length > 0 ? 'flagged' : 'clean',
+        l1AIQuestions:           questionList,
+        l1AITranscripts:         transcripts,
+        l1AITimings:             Array.isArray(timings) ? timings : [],
+        l1AIVideoAnalysisSource: dataSource,
       });
     }
 
@@ -341,26 +459,30 @@ Do not give benefit of the doubt. Output ONLY raw JSON.`,
       score: 0, technicalScore: 0, communicationScore: 0,
       bodyLanguageScore: 0, eyeContactScore: 0,
       summary: 'AI evaluation could not be completed. Please review manually.',
-      technicalFeedback: '', communicationFeedback: '', bodyLanguageFeedback: '',
+      technicalFeedback: '', communicationFeedback: '',
+      bodyLanguageFeedback: '',
       recommendation: 'Manual Review', strengths: [], improvements: [],
     };
 
     try {
       if (candidateId) {
         await adminDb.doc(`candidates/${candidateId}`).update({
-          l1AIStatus: 'completed', l1AIScore: 0,
-          l1AISummary: fallback.summary,
-          l1AIRecommendation: 'Manual Review',
-          l1AIStrengths: [], l1AIImprovements: [],
-          l1AICompletedAt: FieldValue.serverTimestamp(),
-          lastUpdated:     FieldValue.serverTimestamp(),
+          l1AIStatus:          'completed',
+          l1AIScore:           0,
+          l1AISummary:         fallback.summary,
+          l1AIRecommendation:  'Manual Review',
+          l1AIStrengths:       [],
+          l1AIImprovements:    [],
+          l1AICompletedAt:     FieldValue.serverTimestamp(),
+          lastUpdated:         FieldValue.serverTimestamp(),
         });
       }
       if (snap && !snap.empty) {
         await snap.docs[0].ref.update({
-          status: 'completed', aiScore: 0,
+          status:    'completed',
+          aiScore:   0,
           aiSummary: 'AI evaluation failed. Manual review required.',
-          scoredAt: FieldValue.serverTimestamp(),
+          scoredAt:  FieldValue.serverTimestamp(),
         });
       }
     } catch (_) {}

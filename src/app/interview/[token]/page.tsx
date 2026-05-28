@@ -29,41 +29,60 @@ export default async function InterviewPage({ params }: PageProps) {
       const data = docSnap.data();
 
       // ── STEP 2: Check 48-hour expiry ──
-      // expiresAt is saved as Firestore Timestamp — convert correctly
-      const expiresAtMs = data.expiresAt?.toMillis?.() ?? 0;
-      if (Date.now() > expiresAtMs) {
-        expiredReason = 'expired';
-        // Also update status in Firestore
-        await docSnap.ref.update({ status: 'expired' });
-      }
+const expiresAtMs = data.expiresAt?.toMillis?.() ?? 0;
+if (Date.now() > expiresAtMs) {
+  expiredReason = 'expired';
+  await docSnap.ref.update({ status: 'expired' });
+}
 
-      // ── STEP 3: Check if already completed ──
-      else if (data.status === 'completed') {
-        expiredReason = 'completed';
-      }
+// ── STEP 3: Check if already completed ──
+else if (data.status === 'completed') {
+  expiredReason = 'completed';
+}
 
-      // ── STEP 4: Check if session already started in another tab ──
-      else if (data.status === 'in_progress') {
-        expiredReason = 'session_ended';
-      }
+// ── STEP 4: Check if session was terminated server-side ──
+else if (data.status === 'expired') {
+  expiredReason = 'session_ended';
+}
 
       // ── STEP 5: All good — pass data to client ──
-      else {
-        candidateData = {
-          token,
-          docId:         docSnap.id,
-          candidateId:   data.candidateId   || '',
-          candidateName: data.candidateName  || '',
-          candidateEmail:data.candidateEmail || '',
-          jobRole:       data.jobRole        || '',
-          resumeText:    data.resumeText     || '',
-          jobDescription:data.jobDescription || '',
-          experience:    data.experience     || '',
-          location:      data.location       || '',
-          interviewerName: data.scheduledByName || 'HR',
-          stage:         'L1 Interview',
-        };
+     else {
+      // Read l1AIInterviewSentAt from the candidate doc (accurate send time)
+      let linkSentAtMs = data.createdAt?.toMillis?.() ?? 0; // fallback
+
+      if (data.candidateId) {
+        try {
+          const candSnap = await adminDb
+            .collection('candidates')
+            .doc(data.candidateId)
+            .get();
+          if (candSnap.exists) {
+            const sentAt = candSnap.data()?.l1AIInterviewSentAt;
+            if (sentAt?.toMillis) {
+              linkSentAtMs = sentAt.toMillis();
+            }
+          }
+        } catch (err) {
+          console.warn('[InterviewPage] Could not read l1AIInterviewSentAt, falling back to createdAt:', err);
+        }
       }
+
+      candidateData = {
+        token,
+        docId: docSnap.id,
+        candidateId: data.candidateId || '',
+        candidateName: data.candidateName || '',
+        candidateEmail: data.candidateEmail || '',
+        jobRole: data.jobRole || '',
+        resumeText: data.resumeText || '',
+        jobDescription: data.jobDescription || '',
+        experience: data.experience || '',
+        location: data.location || '',
+        interviewerName: data.scheduledByName || 'HR',
+        stage: 'L1 Interview',
+        linkSentAt: linkSentAtMs,
+      };
+    }
     }
   } catch (err) {
     console.error('[InterviewPage] Error loading token:', err);

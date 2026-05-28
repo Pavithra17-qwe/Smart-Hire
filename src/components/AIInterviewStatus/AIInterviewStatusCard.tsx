@@ -129,6 +129,50 @@ export const AIInterviewStatusCard: React.FC<Props> = ({
       </div>
     );
   }
+  if (aiStatus === 'expired') {
+    return (
+      <div style={{
+        background: '#FFF8F8', borderRadius: '12px', padding: '16px',
+        border: '1.5px solid #FECACA', display: 'flex', flexDirection: 'column', gap: '8px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '18px' }}>⚠️</span>
+            <span style={{ fontSize: '13px', fontWeight: 700, color: '#991B1B' }}>Session Ended</span>
+          </div>
+          <span style={{
+            fontSize: '10px', fontWeight: 700, padding: '3px 10px',
+            borderRadius: '999px', background: '#FEE2E2',
+            color: '#991B1B', border: '1px solid #FECACA',
+          }}>● Expired</span>
+        </div>
+        {[
+          { icon: '✉️', text: 'Link sent to candidate',           done: true,  warn: false },
+          { icon: '🎙', text: 'Candidate started interview',      done: true,  warn: false },
+          { icon: '⚠️', text: 'Session ended before completion',  done: true,  warn: true  },
+          { icon: '👤', text: 'HR decision required',             done: false, warn: false },
+        ].map((step, i) => (
+          <div key={i} style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '7px 10px', borderRadius: '8px',
+            background: step.warn ? '#FFF8F8' : step.done ? '#FFF1F2' : '#F9FAFB',
+            border: `1px solid ${step.warn ? '#FECACA' : step.done ? '#FECACA' : '#E5E7EB'}`,
+          }}>
+            <span style={{ fontSize: '13px' }}>{step.icon}</span>
+            <span style={{
+              fontSize: '12px', flex: 1,
+              color: step.done ? '#991B1B' : '#9CA3AF',
+              fontWeight: step.done ? 600 : 400,
+            }}>{step.text}</span>
+            {step.done && <span style={{ fontSize: '11px', color: '#DC2626' }}>✓</span>}
+          </div>
+        ))}
+        <p style={{ fontSize: '11px', color: '#9CA3AF', margin: 0, textAlign: 'center' }}>
+          Use the options below to resend the link or reject the candidate.
+        </p>
+      </div>
+    );
+  }
 
   // ── STATE 3: COMPLETED ────────────────────────────────────────────────────
   if (aiStatus === 'completed') {

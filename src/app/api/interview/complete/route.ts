@@ -44,19 +44,31 @@ function toSlug(str: string, maxLen = 40): string {
 // ─── Groq Whisper transcription ──────────────────────────────────────────────
 async function transcribeAudio(buffer: Buffer, questionIdx: number): Promise<string> {
   try {
+    // ✅ Skip if file too large for Whisper (25MB limit)
+    if (buffer.length > 24 * 1024 * 1024) {
+      console.warn(`[Whisper] Q${questionIdx + 1} too large (${Math.round(buffer.length / 1024 / 1024)}MB), skipping`);
+      return '';
+    }
+
     const whisperForm = new FormData();
     const audioFile   = new File([buffer], `q${questionIdx + 1}.webm`, { type: 'audio/webm' });
 
     whisperForm.append('file',            audioFile);
-    whisperForm.append('model',           'whisper-large-v3-turbo');
+    whisperForm.append('model',           'whisper-large-v3');
     whisperForm.append('response_format', 'text');
     whisperForm.append('language',        'en');
+
+    // ✅ 30s timeout so Whisper never hangs the whole function
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method:  'POST',
       headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
       body:    whisperForm,
+      signal:  controller.signal,
     });
+    clearTimeout(timeout);
 
     if (!res.ok) {
       const errText = await res.text();
@@ -65,6 +77,7 @@ async function transcribeAudio(buffer: Buffer, questionIdx: number): Promise<str
     }
 
     const transcript = await res.text();
+    console.log('WHISPER RAW RESPONSE:', transcript);
     console.log(`[Whisper] Q${questionIdx + 1} transcript:`, transcript.substring(0, 120));
     return transcript.trim();
 
@@ -73,20 +86,29 @@ async function transcribeAudio(buffer: Buffer, questionIdx: number): Promise<str
     return '';
   }
 }
+export const maxDuration = 300; // ← Fix timeout
 
-// ─── POST handler ────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
 
-    // ── Read all fields from formData ────────────────────────────────────
-    const videoFile      = formData.get('video')          as File   | null;
-    const token          = formData.get('token')          as string | null;
-    const candidateId    = formData.get('candidateId')    as string | null;
-    const candidateName  = formData.get('candidateName')  as string | null;  // ← NEW
-    const candidateEmail = formData.get('candidateEmail') as string | null;  // ← NEW
-    const questionText   = formData.get('questionText')   as string | null;  // ← NEW
-    const questionIdx    = formData.get('questionIdx')    as string | null;
+    const videoFile         = formData.get('video')              as File   | null;
+    const token             = formData.get('token')              as string | null;
+    const candidateId       = formData.get('candidateId')        as string | null;
+    const candidateName     = formData.get('candidateName')      as string | null;
+    const candidateEmail    = formData.get('candidateEmail')     as string | null;
+    const questionText      = formData.get('questionText')       as string | null;
+    const questionIdx       = formData.get('questionIdx')        as string | null;
+    const isMerged          = formData.get('isMerged') === 'true';
+    // ← NEW: accept client-side speech transcript per question
+    const clientTranscripts = formData.get('transcripts');
+const transcriptsMap: Record<number, string> = {};
+if (clientTranscripts) {
+  const parsed = JSON.parse(clientTranscripts as string);
+  Object.entries(parsed).forEach(([k, v]) => {
+    transcriptsMap[Number(k)] = String(v || '');
+  });
+}
 
     if (!videoFile || !token || !candidateId || questionIdx === null) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -95,27 +117,29 @@ export async function POST(req: NextRequest) {
     const qIdx   = parseInt(questionIdx, 10);
     const buffer = Buffer.from(await videoFile.arrayBuffer());
 
+    console.log(`[complete] ${Math.round(buffer.length / 1024 / 1024 * 10) / 10}MB | isMerged=${isMerged} | qIdx=${qIdx}`);
+
     // ── Build Cloudinary folder & file names ─────────────────────────────
-    // Folder:  smarthire/interviews/priya_sharma_priya@gmail.com
-    // File:    tell_me_about_yourself  (instead of q1)
     const folderName   = toSlug(`${candidateName ?? candidateId}_${candidateEmail ?? ''}`, 60);
-    const publicIdName = toSlug(questionText ?? `q${qIdx + 1}`, 50);
+    const publicIdName = isMerged
+      ? 'full_interview'
+      : toSlug(questionText ?? `q${qIdx + 1}`, 50);
 
     // ── 1. Upload to Cloudinary ──────────────────────────────────────────
     const uploadResult = await new Promise<any>((resolve, reject) => {
       cloudinary.uploader.upload_stream(
         {
           resource_type: 'video',
-          folder:        `smarthire/interviews/${folderName}`,  // ← FIXED
-          public_id:     publicIdName,                          // ← FIXED
+          folder:        `smarthire/interviews/${folderName}`,
+          public_id:     publicIdName,
           overwrite:     true,
           tags:          ['interview', `candidate_${candidateId}`, `token_${token}`],
           video_codec:   'auto',
           eager: [
             { width: 400, height: 300, crop: 'fill', format: 'jpg', start_offset: '2' },
           ],
-          eager_async: true,
-          context:     `candidate_id=${candidateId}|question_index=${qIdx}|token=${token}`,
+          eager_async:   true,
+          context:       `candidate_id=${candidateId}|question_index=${qIdx}|token=${token}`,
         },
         (error, result) => { if (error) reject(error); else resolve(result); },
       ).end(buffer);
@@ -126,11 +150,38 @@ export async function POST(req: NextRequest) {
     const publicId     = uploadResult.public_id              as string;
     const duration     = uploadResult.duration               as number | null;
 
-    // ── 2. Transcribe with Groq Whisper ──────────────────────────────────
-    const transcript = await transcribeAudio(buffer, qIdx);
+    console.log(`[complete] Cloudinary upload done: ${videoUrl}`);
 
-    // ── 3. Save to ai_interviews (answers array) ─────────────────────────
-    const db        = getFirestore();
+    // ── 2. Transcript logic ──────────────────────────────────────────────
+    // For merged uploads: iterate all questions using client-side transcripts
+    // For individual uploads: try client transcript first, Whisper as fallback
+    let transcript = '';
+
+    if (isMerged) {
+      // Merged blob = full interview. Individual transcripts come from the
+      // client speech API — already reliable. No point sending 100MB+ to Whisper.
+      // transcriptsMap has all per-Q transcripts; join them for the merged record.
+      transcript = Object.entries(transcriptsMap)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([i, t]) => `Q${Number(i) + 1}: ${t}`)
+      .join('\n\n');
+      console.log(`[complete] Merged transcript from client (${transcript.length} chars)`);
+    } else {
+      // Individual question upload
+      const clientTranscript = (transcriptsMap[qIdx] || '').trim();
+      if (clientTranscript.length > 20) {
+        // Client speech API captured something useful — use it
+        transcript = clientTranscript;
+        console.log(`[complete] Q${qIdx + 1} using client transcript (${transcript.length} chars)`);
+      } else {
+        // Client got nothing — fall back to Whisper (only works if < 25MB)
+        console.log(`[complete] Q${qIdx + 1} client transcript empty, trying Whisper...`);
+        transcript = await transcribeAudio(buffer, qIdx);
+      }
+    }
+
+    // ── 3. Save to ai_interviews ─────────────────────────────────────────
+    const db = getFirestore();
     const interSnap = await db
       .collection('ai_interviews')
       .where('token', '==', token)
@@ -138,19 +189,36 @@ export async function POST(req: NextRequest) {
       .get();
 
     if (!interSnap.empty) {
-      const interDoc     = interSnap.docs[0];
-      const existingData = interDoc.data();
-      const answers: any[] = existingData.answers || [];
-
-      while (answers.length <= qIdx) {
-        answers.push({ videoUrl: '', transcript: '' });
+      if (isMerged) {
+        // Save the video URL + full transcript on the top-level doc
+        await interSnap.docs[0].ref.update({
+          mergedVideoUrl:  videoUrl,
+          fullTranscript:  transcript,
+          // Also write per-question transcripts into answers_map
+          ...Object.fromEntries(
+            Object.entries(transcriptsMap).map(([i, t]) => [
+              `answers_map.q${i}`,
+              {
+                transcript:  t,
+                questionIdx: Number(i),
+                savedAt:     new Date().toISOString(),
+              },
+            ])
+          ),
+        });
+      } else {
+        await interSnap.docs[0].ref.update({
+          [`answers_map.q${qIdx}`]: {
+            videoUrl,
+            transcript,
+            questionIdx: qIdx,
+            savedAt:     new Date().toISOString(),
+          },
+        });
       }
-      answers[qIdx] = { videoUrl, transcript };
-
-      await interDoc.ref.update({ answers });
-      console.log(`[complete] Saved Q${qIdx + 1} transcript to ai_interviews`);
+      console.log(`[complete] Firebase updated. transcript length: ${transcript.length}`);
     } else {
-      console.warn('[complete] ai_interviews doc not found for token:', token);
+      console.error('[complete] No ai_interviews doc found for token:', token);
     }
 
     // ── 4. Save to candidates doc ─────────────────────────────────────────
@@ -165,6 +233,7 @@ export async function POST(req: NextRequest) {
           duration:     duration ?? null,
           transcript,
           uploadedAt:   new Date().toISOString(),
+          isMerged,
         }),
         interviewStatus:      'submitted',
         interviewSubmittedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -173,8 +242,7 @@ export async function POST(req: NextRequest) {
       { merge: true },
     );
 
-    console.log(`[complete] Q${qIdx + 1} done for ${candidateId} | transcript: ${transcript ? 'yes' : 'no'}`);
-
+    console.log(`[complete] Done for ${candidateId} | Q${qIdx + 1} | transcript: ${transcript.length} chars`);
     return NextResponse.json({ success: true, videoUrl, thumbnailUrl, publicId, questionIdx: qIdx, transcript });
 
   } catch (err: any) {

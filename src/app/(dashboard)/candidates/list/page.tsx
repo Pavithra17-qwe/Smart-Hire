@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useEffect } from 'react';
 import { getDoc, doc } from 'firebase/firestore';
-import { db } from '@/lib/firebase'; // adjust if path differs
+import { db } from '@/lib/firebase';
 import { useCandidate } from '@/hooks/useCandidate';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Search } from 'lucide-react';
@@ -17,115 +17,108 @@ import { getFinalStatusBadge } from '@/components/common/FinalStatusBadge';
 import { Candidate } from '@/types/candidate';
 import { Timestamp } from 'firebase/firestore';
 
+// ── ADD: import the export button ────────────────────────────────────────────
+import ExportInterviewButton from '@/components/ExportInterviewButton';
+
 const formatFirestoreTimestamp = (timestamp: Timestamp | undefined): string => {
-    if (!timestamp || typeof timestamp.seconds !== 'number') {
-        return 'N/A';
-    }
+    if (!timestamp || typeof timestamp.seconds !== 'number') return 'N/A';
     try {
-        const date = new Date(timestamp.seconds * 1000);
-        return date.toLocaleDateString('en-CA'); // Format: YYYY-MM-DD
-    } catch (error) {
-        console.error('Invalid timestamp:', error);
+        return new Date(timestamp.seconds * 1000).toLocaleDateString('en-CA');
+    } catch {
         return 'Invalid Date';
     }
 };
 
 const FINAL_STATUSES = ['In Progress', 'Completed', 'Rejected'];
-
-const INITIAL_FILTERS = {
-    name: '',
-    role: '',
-    status: '',
-    experience: '',
-};
+const INITIAL_FILTERS = { name: '', role: '', status: '', experience: '' };
 
 export default function CandidateListPage() {
     const { candidates, loading, error } = useCandidate();
-    const [filters, setFilters] = useState(INITIAL_FILTERS);
-    const [page, setPage] = useState(0);
+    const [filters, setFilters]       = useState(INITIAL_FILTERS);
+    const [page, setPage]             = useState(0);
     const [rowsPerPage, setRowsPerPage] = useState(10);
     const [creatorMap, setCreatorMap] = useState<Record<string, string>>({});
-    const [dateSort, setDateSort] = useState<'asc' | 'desc'>('desc');
+    const [dateSort, setDateSort]     = useState<'asc' | 'desc'>('desc');
 
     const handleFilterChange = (filterName: string, value: string) => {
         setFilters(prev => ({ ...prev, [filterName]: value }));
         setPage(0);
     };
 
-    const clearFilters = () => {
-        setFilters(INITIAL_FILTERS);
-        setPage(0);
-    };
+    const clearFilters = () => { setFilters(INITIAL_FILTERS); setPage(0); };
 
     const filteredCandidates = useMemo(() => {
         if (!Array.isArray(candidates)) return [];
-    
-        // ✅ Step 1: Filter
         const filtered = (candidates as Candidate[]).filter(candidate => {
-            const nameMatch   = !filters.name   || (candidate.candidateName || '').toLowerCase().includes(filters.name.toLowerCase());
-            const roleMatch   = !filters.role   || (candidate.createdByRole || '').toLowerCase() === filters.role.toLowerCase();
-            const statusMatch = !filters.status || (candidate.finalStatus || '').toLowerCase() === filters.status.toLowerCase();
-            const expMatch =
-                !filters.experience ||
-                String(candidate.experience || '').includes(filters.experience);
-    
+            const nameMatch   = !filters.name       || (candidate.candidateName  || '').toLowerCase().includes(filters.name.toLowerCase());
+            const roleMatch   = !filters.role       || (candidate.createdByRole  || '').toLowerCase() === filters.role.toLowerCase();
+            const statusMatch = !filters.status     || (candidate.finalStatus    || '').toLowerCase() === filters.status.toLowerCase();
+            const expMatch    = !filters.experience || String(candidate.experience || '').includes(filters.experience);
             return nameMatch && roleMatch && statusMatch && expMatch;
         });
-    
-        // ✅ Step 2: Sort
         return filtered.sort((a, b) => {
             const dateA = a.createdDate ? a.createdDate.toMillis() : 0;
             const dateB = b.createdDate ? b.createdDate.toMillis() : 0;
-    
-            return dateSort === 'asc'
-                ? dateA - dateB
-                : dateB - dateA;
+            return dateSort === 'asc' ? dateA - dateB : dateB - dateA;
         });
-    
     }, [candidates, filters, dateSort]);
 
-    const start = page * rowsPerPage;
-    const end = start + rowsPerPage;
+    const start               = page * rowsPerPage;
+    const end                 = start + rowsPerPage;
     const paginatedCandidates = filteredCandidates.slice(start, end);
-    const totalPages = Math.ceil(filteredCandidates.length / rowsPerPage);
+    const totalPages          = Math.ceil(filteredCandidates.length / rowsPerPage);
 
     const handleChangePage = (newPage: number) => setPage(newPage);
-
     const handleChangeRowsPerPage = (event: React.ChangeEvent<HTMLSelectElement>) => {
         setRowsPerPage(parseInt(event.target.value, 10));
         setPage(0);
     };
 
     const isFiltered = Object.values(filters).some(v => v !== '');
-
     const roles = useMemo(
         () => Array.from(new Set((candidates as Candidate[]).map(c => c.createdByRole).filter(Boolean))),
         [candidates]
     );
-    const toggleDateSort = () => {
-        setDateSort(prev => (prev === 'asc' ? 'desc' : 'asc'));
-    };
+    const toggleDateSort = () => setDateSort(prev => prev === 'asc' ? 'desc' : 'asc');
+
     useEffect(() => {
         const fetchNames = async () => {
             const map: Record<string, string> = {};
             for (const c of candidates || []) {
                 if (c.createdBy && !map[c.createdBy]) {
-                    const snap = await getDoc(doc(db, "users", c.createdBy));
+                    const snap = await getDoc(doc(db, 'users', c.createdBy));
                     if (snap.exists()) {
                         const data = snap.data();
-                        map[c.createdBy] = data.name || data.displayName || "N/A";
+                        map[c.createdBy] = data.name || data.displayName || 'N/A';
                     }
                 }
             }
-    
             setCreatorMap(map);
         };
-    
         fetchNames();
     }, [candidates]);
+
+    // ── Only export candidates who have completed the AI interview ────────────
+    const completedInterviewCandidates = useMemo(
+        () => (candidates as Candidate[]).filter(c => (c as any).l1AIStatus === 'completed'),
+        [candidates]
+    );
+
     return (
         <div className="p-4 md:p-8 space-y-6">
-            <h1 className="text-2xl font-bold">Candidate List</h1>
+
+            {/* ── PAGE HEADER — title + Export All button side by side ── */}
+            <div className="flex items-center justify-between">
+                <h1 className="text-2xl font-bold">Candidate List</h1>
+
+                {/* ▼▼▼ ADD 1: "Export All" button — top-right of the page ▼▼▼ */}
+                {completedInterviewCandidates.length > 0 && (
+                    <ExportInterviewButton
+                        allCandidateDocs={completedInterviewCandidates as unknown as Record<string, any>[]}
+                    />
+                )}
+                {/* ▲▲▲ END ADD 1 ▲▲▲ */}
+            </div>
 
             {/* Filters */}
             <Card>
@@ -140,7 +133,6 @@ export default function CandidateListPage() {
                                 onChange={e => handleFilterChange('name', e.target.value)}
                             />
                         </div>
-
                         <div className="space-y-1">
                             <Label htmlFor="filter-role">Role</Label>
                             <Select value={filters.role} onValueChange={value => handleFilterChange('role', value)}>
@@ -155,15 +147,14 @@ export default function CandidateListPage() {
                             </Select>
                         </div>
                         <div className="space-y-1">
-    <Label htmlFor="filter-exp">Experience</Label>
-    <Input
-        id="filter-exp"
-        placeholder="e.g. 3"
-        value={filters.experience}
-        onChange={e => handleFilterChange('experience', e.target.value)}
-    />
-</div>
-
+                            <Label htmlFor="filter-exp">Experience</Label>
+                            <Input
+                                id="filter-exp"
+                                placeholder="e.g. 3"
+                                value={filters.experience}
+                                onChange={e => handleFilterChange('experience', e.target.value)}
+                            />
+                        </div>
                         <div className="space-y-1">
                             <Label htmlFor="filter-status">Final Status</Label>
                             <Select value={filters.status} onValueChange={value => handleFilterChange('status', value)}>
@@ -177,7 +168,6 @@ export default function CandidateListPage() {
                                 </SelectContent>
                             </Select>
                         </div>
-
                         <div className="flex h-full items-end">
                             {isFiltered && (
                                 <Button variant="ghost" onClick={clearFilters} className="w-full">
@@ -200,20 +190,21 @@ export default function CandidateListPage() {
                                 <TableHead className="w-[120px]">Experience</TableHead>
                                 <TableHead className="w-[160px]">Location</TableHead>
                                 <TableHead className="w-[160px]">Created By</TableHead>
-                               <TableHead
-    className="w-[130px] cursor-pointer"
-    onClick={toggleDateSort}
->
-    <div className="flex items-center gap-1">
-        Created Date
-        {dateSort === 'asc' && '↑'}
-        {dateSort === 'desc' && '↓'}
-    </div>
-</TableHead>
-<TableHead className="w-[120px]">AI Score</TableHead>
-
-
+                                <TableHead
+                                    className="w-[130px] cursor-pointer"
+                                    onClick={toggleDateSort}
+                                >
+                                    <div className="flex items-center gap-1">
+                                        Created Date
+                                        {dateSort === 'asc' ? '↑' : '↓'}
+                                    </div>
+                                </TableHead>
+                                <TableHead className="w-[120px]">AI Score</TableHead>
                                 <TableHead>Final Status</TableHead>
+
+                                {/* ▼▼▼ ADD 2: new column header for the per-row export icon ▼▼▼ */}
+                                <TableHead className="w-[60px] text-center">Export</TableHead>
+                                {/* ▲▲▲ END ADD 2 ▲▲▲ */}
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -221,37 +212,36 @@ export default function CandidateListPage() {
                                 <CandidateSkeleton />
                             ) : error ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="h-60 text-center text-red-500">
+                                    <TableCell colSpan={9} className="h-60 text-center text-red-500">
                                         {(error as Error).message}
                                     </TableCell>
                                 </TableRow>
                             ) : paginatedCandidates.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="h-60 text-center text-gray-500">
+                                    <TableCell colSpan={9} className="h-60 text-center text-gray-500">
                                         <Search className="mx-auto h-12 w-12 text-gray-300" />
                                         <p className="mt-3 font-medium">No candidates found</p>
-                                        <p className="mt-1 text-sm text-gray-400">
-                                            {isFiltered ? 'Try adjusting your filters.' : ''}
-                                        </p>
+                                        {isFiltered && (
+                                            <p className="mt-1 text-sm text-gray-400">Try adjusting your filters.</p>
+                                        )}
                                     </TableCell>
                                 </TableRow>
                             ) : (
                                 paginatedCandidates.map(candidate => (
                                     <TableRow key={candidate.id}>
+
                                         {/* Candidate */}
                                         <TableCell className="align-top">
-                                        <div className="font-bold">
-    {candidate.candidateName || 'N/A'}
-</div>
+                                            <div className="font-bold">{candidate.candidateName || 'N/A'}</div>
                                             <div className="text-sm text-muted-foreground">
                                                 {candidate.candidateDesignation || '-'}
                                             </div>
-        
                                         </TableCell>
+
                                         {/* Email */}
-<TableCell className="text-sm text-muted-foreground align-top">
-    {candidate.candidateEmail || 'N/A'}
-</TableCell>
+                                        <TableCell className="text-sm text-muted-foreground align-top">
+                                            {candidate.candidateEmail || 'N/A'}
+                                        </TableCell>
 
                                         {/* Experience */}
                                         <TableCell className="text-sm text-muted-foreground align-top">
@@ -263,31 +253,52 @@ export default function CandidateListPage() {
                                             {candidate.location || 'N/A'}
                                         </TableCell>
 
-                                        {/* Created By — name + role only, no date */}
+                                        {/* Created By */}
                                         <TableCell className="align-top">
-                                        <div className="font-medium">
-    {creatorMap[candidate.createdBy] || 'N/A'}
-</div>
+                                            <div className="font-medium">
+                                                {creatorMap[candidate.createdBy] || 'N/A'}
+                                            </div>
                                             <div className="text-sm text-muted-foreground capitalize">
                                                 {candidate.createdByRole || '-'}
                                             </div>
                                         </TableCell>
 
-                                        {/* Created Date — separate column */}
+                                        {/* Created Date */}
                                         <TableCell className="text-sm text-muted-foreground align-top">
                                             {formatFirestoreTimestamp(candidate.createdDate)}
                                         </TableCell>
 
+                                        {/* AI Score */}
                                         <TableCell className="text-sm font-semibold align-top">
-  {typeof candidate.aiScore === "number"
-    ? `${candidate.aiScore}%`
-    : "N/A"}
-</TableCell>
+                                            {typeof candidate.aiScore === 'number'
+                                                ? `${candidate.aiScore}%`
+                                                : 'N/A'}
+                                        </TableCell>
 
-                                        {/* Final Status — use full candidate object, not candidate.FinalStatus */}
+                                        {/* Final Status */}
                                         <TableCell className="align-top">
                                             {getFinalStatusBadge(candidate)}
                                         </TableCell>
+
+                                        {/* ▼▼▼ ADD 3: per-row export icon button ▼▼▼ */}
+                                        <TableCell className="align-top text-center">
+                                            {(candidate as any).l1AIStatus === 'completed' ? (
+                                                <ExportInterviewButton
+                                                    candidateDoc={candidate as unknown as Record<string, any>}
+                                                    variant="icon"
+                                                />
+                                            ) : (
+                                                // grey dash — interview not yet done
+                                                <span
+                                                    title="AI interview not completed"
+                                                    style={{ color: '#D1D5DB', fontSize: '18px', lineHeight: 1 }}
+                                                >
+                                                    —
+                                                </span>
+                                            )}
+                                        </TableCell>
+                                        {/* ▲▲▲ END ADD 3 ▲▲▲ */}
+
                                     </TableRow>
                                 ))
                             )}
@@ -314,9 +325,9 @@ export default function CandidateListPage() {
                             {`${start + 1}–${Math.min(end, filteredCandidates.length)} of ${filteredCandidates.length}`}
                         </div>
                         <div className="flex space-x-2">
-                            <Button variant="outline" onClick={() => handleChangePage(0)} disabled={page === 0}>&lt;&lt;</Button>
-                            <Button variant="outline" onClick={() => handleChangePage(page - 1)} disabled={page === 0}>&lt;</Button>
-                            <Button variant="outline" onClick={() => handleChangePage(page + 1)} disabled={end >= filteredCandidates.length}>&gt;</Button>
+                            <Button variant="outline" onClick={() => handleChangePage(0)}            disabled={page === 0}>&lt;&lt;</Button>
+                            <Button variant="outline" onClick={() => handleChangePage(page - 1)}     disabled={page === 0}>&lt;</Button>
+                            <Button variant="outline" onClick={() => handleChangePage(page + 1)}     disabled={end >= filteredCandidates.length}>&gt;</Button>
                             <Button variant="outline" onClick={() => handleChangePage(totalPages - 1)} disabled={end >= filteredCandidates.length}>&gt;&gt;</Button>
                         </div>
                     </div>
