@@ -117,8 +117,21 @@ if (clientTranscripts) {
     const qIdx   = parseInt(questionIdx, 10);
     const buffer = Buffer.from(await videoFile.arrayBuffer());
 
-    console.log(`[complete] ${Math.round(buffer.length / 1024 / 1024 * 10) / 10}MB | isMerged=${isMerged} | qIdx=${qIdx}`);
+    const sizeMB = buffer.length / 1024 / 1024;
 
+    console.log(
+      `[UPLOAD START] Candidate=${candidateEmail}`
+    );
+    
+    console.log(
+      `[UPLOAD SIZE] ${sizeMB.toFixed(2)} MB`
+    );
+    
+    if (sizeMB > 100) {
+      throw new Error(
+        `Video too large: ${sizeMB.toFixed(2)} MB`
+      );
+    }
     // ── Build Cloudinary folder & file names ─────────────────────────────
     const folderName   = toSlug(`${candidateName ?? candidateId}_${candidateEmail ?? ''}`, 60);
     const publicIdName = isMerged
@@ -130,6 +143,7 @@ if (clientTranscripts) {
       cloudinary.uploader.upload_stream(
         {
           resource_type: 'video',
+          timeout: 300000, // 5 min
           folder:        `smarthire/interviews/${folderName}`,
           public_id:     publicIdName,
           overwrite:     true,
@@ -150,7 +164,9 @@ if (clientTranscripts) {
     const publicId     = uploadResult.public_id              as string;
     const duration     = uploadResult.duration               as number | null;
 
-    console.log(`[complete] Cloudinary upload done: ${videoUrl}`);
+    console.log(
+      `[UPLOAD SUCCESS] ${uploadResult.secure_url}`
+  );
 
     // ── 2. Transcript logic ──────────────────────────────────────────────
     // For merged uploads: iterate all questions using client-side transcripts
@@ -243,10 +259,12 @@ if (clientTranscripts) {
     );
 
     console.log(`[complete] Done for ${candidateId} | Q${qIdx + 1} | transcript: ${transcript.length} chars`);
-    return NextResponse.json({ success: true, videoUrl, thumbnailUrl, publicId, questionIdx: qIdx, transcript });
+    return NextResponse.json({ success: true, videoUrl, thumbnailUrl, publicId, questionIdx: qIdx, transcript,uploadSizeMB: sizeMB });
 
   } catch (err: any) {
-    console.error('[complete] Error:', err);
-    return NextResponse.json({ error: 'Upload failed', detail: err.message }, { status: 500 });
+    console.error(
+      '[UPLOAD FAILED]',
+      err
+    );    return NextResponse.json({ error: 'Upload failed', detail: err.message }, { status: 500 });
   }
 }

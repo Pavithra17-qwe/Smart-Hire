@@ -6,21 +6,23 @@ export async function POST(req: NextRequest) {
   try {
     // sendBeacon sends Content-Type: text/plain, not application/json
     // req.json() fails silently on text/plain — handle both
-    const contentType = req.headers.get('content-type') || '';
-    let token: string;
-    let reason: string;
+  // In /api/interview/expire/route.ts
+// Make sure this block exists — sendBeacon sends text/plain not application/json:
+const contentType = req.headers.get('content-type') || '';
+let token: string;
+let reason: string;
 
-    if (contentType.includes('application/json')) {
-      const body = await req.json();
-      token  = body.token;
-      reason = body.reason;
-    } else {
-      // sendBeacon path
-      const text = await req.text();
-      const body = JSON.parse(text);
-      token  = body.token;
-      reason = body.reason;
-    }
+if (contentType.includes('application/json')) {
+  const body = await req.json();
+  token  = body.token;
+  reason = body.reason;
+} else {
+  // sendBeacon sends text/plain
+  const text = await req.text();
+  const body = JSON.parse(text);
+  token  = body.token;
+  reason = body.reason;
+}
 
     console.log('[expire] Called with token:', token, 'reason:', reason);
 
@@ -53,6 +55,8 @@ export async function POST(req: NextRequest) {
         l1AIStatus:        'expired',
         l1AIExpiredAt:     FieldValue.serverTimestamp(),
         l1AIExpiredReason: reason || 'unknown',
+         l1AIInterviewStartedAt: null,
+  l1AISessionActive:      false,
       });
       console.log('[expire] ✅ candidates doc updated:', data.candidateId);
     } else {

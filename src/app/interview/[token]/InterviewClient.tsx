@@ -6,6 +6,7 @@ import Editor from '@monaco-editor/react';
 import { useMediaPipeAnalysis } from '@/hooks/useMediaPipeAnalysis';
 import { useSoloWindow } from '@/hooks/useSoloWindow';
 import { extractFramesFromBlob } from '@/utils/extractVideoFrames';
+let _sessionEnded = false;
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 interface CandidateInfo {
@@ -22,6 +23,15 @@ interface CandidateInfo {
   resumeText: string;
   jobDescription: string;
   linkSentAt: string | number;
+  
+
+  interviewMode?: 'ai' | 'manual';
+  projectQuestions?: Array<{
+    type: 'theory' | 'coding';
+    text: string;
+    languages?: string[];
+    timerMinutes?: number;
+  }>;
 }
 
 interface InterviewClientProps {
@@ -40,6 +50,9 @@ interface Question {
   text: string;
   recorded: boolean;
   blob: Blob | null;
+  timerSeconds?: number;
+  type?: 'theory' | 'coding';          // ← ADD
+  languages?: string[]; 
 }
 
 // ─── COUNTDOWN HOOK ───────────────────────────────────────────────────────────
@@ -113,11 +126,13 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
   const NORMAL_Q_LIMIT = 90;
   const CODING_Q_LIMIT = 300;
 
-  const isCodingQuestion = (text: string) =>
-    /\bwrite\b|\bimplement\b|\bpseudocode\b/i.test(text);
+  const isCodingQuestion = (text: string, qType?: string) =>
+    qType === 'coding' || /\bwrite\b|\bimplement\b|\bpseudocode\b/i.test(text);
 
-  const getTimeLimit = (qText: string) =>
-    isCodingQuestion(qText) ? CODING_Q_LIMIT : NORMAL_Q_LIMIT;
+  const getTimeLimit = (qText: string, timerSeconds?: number) => {
+    if (timerSeconds && timerSeconds > 0) return timerSeconds;
+    return isCodingQuestion(qText) ? CODING_Q_LIMIT : NORMAL_Q_LIMIT;
+  };
 
   const [timeLeft,    setTimeLeft]    = useState<number>(NORMAL_Q_LIMIT);
   const [timerActive, setTimerActive] = useState(false);
@@ -166,27 +181,76 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
   };
   // ── End Session handler ──────────────────────────────────────────────────────
   const handleEndSession = async () => {
-    if (sessionLockRef.current) return;
-    sessionLockRef.current = true;
-  
-    try {
-      const recorder = recorderRef.current;
-      if (recorder && recorder.state !== 'inactive') recorder.stop();
-    } catch (_) {}
-  
-    stopAllMedia();
-    stopSpeechRecognition();
-    
-    // sendBeacon guarantees delivery even during page unload/navigation
-    navigator.sendBeacon(
-      '/api/interview/expire',
-      JSON.stringify({ token: candidate.token, reason: 'candidate_ended' })
-    );
-  
-    setExpiredReason('candidate_ended');
-    setSessionExpired(true);
-  };
+  if (sessionLockRef.current) return;
+  sessionLockRef.current = true;
+  _sessionEnded = true;
 
+  if (countdownRef.current) clearInterval(countdownRef.current);
+  if (recTimerRef.current) clearInterval(recTimerRef.current);
+
+  try {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+  } catch (_) {}
+
+  stopAllMedia();
+  stopSpeechRecognition();
+
+  // ── Direct Firestore write ──────────────────────────────────────────
+  try {
+    const { db } = await import('@/lib/firebase');
+    const { doc, updateDoc, collection, query, where, getDocs, Timestamp } = await import('firebase/firestore');
+
+    console.log('[EndSession] Searching for token:', candidate.token);
+
+    const q = query(
+      collection(db, 'ai_interviews'),
+      where('token', '==', candidate.token)
+    );
+    const snap = await getDocs(q);
+
+    console.log('[EndSession] Docs found:', snap.size);
+
+    if (!snap.empty) {
+      const interviewDoc = snap.docs[0];
+      const data = interviewDoc.data();
+      console.log('[EndSession] Doc data:', data);
+      const candidateId = data.candidateId;
+
+      await updateDoc(interviewDoc.ref, {
+        status:        'expired',
+        expiredReason: 'candidate_ended',
+        expiredAt:     Timestamp.now(),
+      });
+      console.log('[EndSession] ✅ ai_interviews updated');
+
+      if (candidateId) {
+        await updateDoc(doc(db, 'candidates', candidateId), {
+          l1Status:          'Expired',
+          l1AIStatus:        'expired',
+          l1AIExpiredAt:     Timestamp.now(),
+          l1AIExpiredReason: 'candidate_ended',
+        });
+        console.log('[EndSession] ✅ candidates updated:', candidateId);
+      } else {
+        console.error('[EndSession] ❌ No candidateId in doc!');
+      }
+    } else {
+      console.error('[EndSession] ❌ No doc found for token:', candidate.token);
+      // Token not found — try API as absolute fallback
+      const payload = JSON.stringify({ token: candidate.token, reason: 'candidate_ended' });
+      navigator.sendBeacon('/api/interview/expire', new Blob([payload], { type: 'application/json' }));
+    }
+  } catch (err) {
+    console.error('[EndSession] ❌ Firestore write error:', err);
+    // API fallback
+    const payload = JSON.stringify({ token: candidate.token, reason: 'candidate_ended' });
+    try { navigator.sendBeacon('/api/interview/expire', new Blob([payload], { type: 'application/json' })); } catch (_) {}
+  }
+
+  setExpiredReason('candidate_ended');
+  setSessionExpired(true);
+};
   // ── FIX 2: Complete rewrite of startSpeechRecognition ───────────────────────
   // OLD: Created one instance, no restart on stop/error → Q2-Q5 got nothing
   //      because webkitSpeechRecognition auto-stops after ~7s silence.
@@ -332,6 +396,7 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
   const micAnimFrameRef   = useRef<number | null>(null);
   const cameraIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recTimerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasInteractionRef = useRef(false);
 
   useEffect(() => {
     if (isExpired && (stage === 'landing' || stage === 'mic_camera')) {}
@@ -377,11 +442,13 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
   }, [currentQIdx]);
 
   useEffect(() => {
-    if (stage !== 'interview' && stage !== 'mic_camera') return;
+    if (stage !== 'interview' || !hasInteractionRef.current) return;
 
     const expireSession = async (reason: string) => {
       if (sessionLockRef.current) return;
       sessionLockRef.current = true;
+    
+      // Stop recorder and get last blob
       let lastBlob: Blob | null = null;
       try {
         const recorder = recorderRef.current;
@@ -393,65 +460,61 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
         }
       } catch (_) {}
       streamRef.current?.getTracks().forEach(t => t.stop());
-      const allQs = questionsRef.current.map((q, i) => {
-        if (i === currentQIdxRef.current && lastBlob && !q.recorded) {
-          return { ...q, recorded: true, blob: lastBlob };
+    
+      // ── Write directly to Firestore ───────────────────────────────────
+      try {
+        const { db } = await import('@/lib/firebase');
+        const { doc, updateDoc, collection, query, where, getDocs, Timestamp } = await import('firebase/firestore');
+    
+        const q = query(
+          collection(db, 'ai_interviews'),
+          where('token', '==', candidate.token)
+        );
+        const snap = await getDocs(q);
+    
+        if (!snap.empty) {
+          const interviewDoc = snap.docs[0];
+          const candidateId = interviewDoc.data().candidateId;
+    
+          await updateDoc(interviewDoc.ref, {
+            status:        'expired',
+            expiredReason: reason,
+            expiredAt:     Timestamp.now(),
+          });
+    
+          if (candidateId) {
+            await updateDoc(doc(db, 'candidates', candidateId), {
+              l1Status:          'Expired',
+              l1AIStatus:        'expired',
+              l1AIExpiredAt:     Timestamp.now(),
+              l1AIExpiredReason: reason,
+            });
+          }
+    
+          console.log('[expireSession] ✅ Firestore updated:', reason);
         }
-        return q;
-      });
-      try {
-        const validBlobs = allQs
-          .map((q, i) => ({ blob: q.blob, i }))
-          .filter(x => x.blob !== null)
-          .sort((a, b) => a.i - b.i)
-          .map(x => x.blob as Blob);
-
-        const mergedBlob = new Blob(validBlobs, { type: 'video/webm' });
-        let singleVideoUrl = '';
+      } catch (err) {
+        console.error('[expireSession] Direct write failed, trying API:', err);
+        
+        // Fallback to API
+        const expirePayload = JSON.stringify({ token: candidate.token, reason });
         try {
-          const formData = new FormData();
-          formData.append('video',          mergedBlob, 'full-interview.webm');
-          formData.append('token',          candidate.token);
-          formData.append('candidateId',    candidate.candidateId);
-          formData.append('questionIdx',    '0');
-          formData.append('candidateName',  candidate.candidateName);
-          formData.append('candidateEmail', candidate.candidateEmail);
-          formData.append('questionText',   'Full Interview Recording');
-          formData.append('isMerged',       'true');
-          const res  = await fetch('/api/interview/complete', { method: 'POST', body: formData });
-          const data = await res.json();
-          singleVideoUrl = data.videoUrl || '';
-        } catch { singleVideoUrl = ''; }
-
-        const expireUploadedUrls = allQs.map(() => singleVideoUrl);
-        await fetch('/api/interview/score', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            token:             candidate.token,
-            candidateId:       candidate.candidateId,
-            questions:         allQs.map(q => q.text),
-            jobRole:           candidate.jobRole,
-            videoUrls:         expireUploadedUrls,
-            codeAnswer,
-            codeLanguage,
-            eyeContactScore:   mediaPipeResultRef.current?.eyeContactScore   ?? -1,
-            bodyLanguageScore: mediaPipeResultRef.current?.bodyLanguageScore ?? -1,
-            faceVisiblePct:    mediaPipeResultRef.current?.faceVisiblePct    ?? -1,
-          }),
-        });
-      } catch (_) {}
-      try {
-        await fetch('/api/interview/expire', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: candidate.token, reason }),
-        });
-      } catch (_) {}
+          const blob = new Blob([expirePayload], { type: 'application/json' });
+          navigator.sendBeacon('/api/interview/expire', blob);
+        } catch (_) {}
+        try {
+          await fetch('/api/interview/expire', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: expirePayload,
+            keepalive: true,
+          });
+        } catch (_) {}
+      }
+    
       setExpiredReason(reason);
       setSessionExpired(true);
     };
-
     const onHide = () => { if (document.hidden) expireSession('tab_switch'); };
     const blurTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
     const onWindowBlur = () => {
@@ -464,17 +527,38 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
       if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
       setWindowHiddenWarning(false);
     };
-    const onUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault(); e.returnValue = '';
-      if (!sessionLockRef.current) {
-        navigator.sendBeacon('/api/interview/expire', JSON.stringify({ token: candidate.token, reason: 'closed' }));
-      }
-    };
+    
+const onUnload = (e: BeforeUnloadEvent) => {
+  if (sessionLockRef.current || _sessionEnded) return;
+ 
+  const payload = JSON.stringify({ token: candidate.token, reason: 'closed' });
+ 
+  // Method 1: sendBeacon (most reliable for page close)
+  try {
+    navigator.sendBeacon(
+      '/api/interview/expire',
+      new Blob([payload], { type: 'application/json' })
+    );
+  } catch (_) {}
+ 
+  // Method 2: fetch with keepalive as backup
+  try {
+    fetch('/api/interview/expire', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,  // ← this survives page unload
+    });
+  } catch (_) {}
+};
+ 
     const blockContext = (e: MouseEvent) => { if (stage === 'interview') e.preventDefault(); };
 
     document.addEventListener('visibilitychange', onHide);
-    window.addEventListener('blur', onWindowBlur);
-    window.addEventListener('focus', onWindowFocus);
+  const blurArmTimer = setTimeout(() => {
+  window.addEventListener('blur', onWindowBlur);
+  window.addEventListener('focus', onWindowFocus);
+}, 2000);
     window.addEventListener('beforeunload', onUnload);
     document.addEventListener('contextmenu', blockContext);
 
@@ -584,8 +668,8 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
     }
   };
 
-  const startCountdown = (qText: string) => {
-    const limit = getTimeLimit(qText);
+  const startCountdown = (qText: string, timerSeconds?: number) => {
+    const limit = getTimeLimit(qText, timerSeconds);
     setTimeLeft(limit);
     setTimerActive(true);
     if (countdownRef.current) clearInterval(countdownRef.current);
@@ -688,68 +772,99 @@ export default function InterviewClient({ candidate }: InterviewClientProps) {
     setIsLoadingQ(true);
     stopMicMonitor();
     stopCameraCheck();
-
+  
     await fetch('/api/interview/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: candidate.token }),
     });
-
-    const res = await fetch('/api/interview/questions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jobRole:        candidate.jobRole,
-        experience:     candidate.experience,
-        candidateName:  candidate.candidateName,
-        resumeText:     candidate.resumeText,
-        jobDescription: candidate.jobDescription,
-      }),
-    });
-
-    const data = await res.json();
-    const qs: Question[] = (data.questions as string[]).map((text, i) => ({
-      id: i, text, recorded: false, blob: null,
-    }));
-
-    // FIX: Pre-initialise all transcript slots before interview begins
-    // so there are never undefined gaps regardless of when speech fires
+  
+    let qs: Question[];
+  
+    // ── MANUAL MODE: use project questions directly ──────────────────────────
+    if (
+      candidate.interviewMode === 'manual' &&
+      candidate.projectQuestions &&
+      candidate.projectQuestions.length > 0
+    ) {
+      qs = candidate.projectQuestions.map((q, i) => ({
+        id: i,
+        text: q.text,
+        recorded: false,
+        blob: null,
+        timerSeconds: q.timerMinutes ? q.timerMinutes * 60 : undefined,
+        type:      q.type,                    // ← ADD
+        languages: q.languages,   
+      }));
+    } else {
+      // ── AI MODE: fetch generated questions ─────────────────────────────────
+      const res = await fetch('/api/interview/questions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobRole:        candidate.jobRole,
+          experience:     candidate.experience,
+          candidateName:  candidate.candidateName,
+          resumeText:     candidate.resumeText,
+          jobDescription: candidate.jobDescription,
+        }),
+      });
+      const data = await res.json();
+      qs = (data.questions as string[]).map((text, i) => ({
+        id: i, text, recorded: false, blob: null,
+      }));
+    }
+  
+    // Pre-initialise all transcript slots
     const slots: Record<number, string> = {};
     qs.forEach((_, i) => { slots[i] = ''; });
     speechTranscriptRef.current = slots;
-
+  
     setQuestions(qs);
     setCurrentQIdx(0);
     setIsLoadingQ(false);
     if (streamRef.current) startMicMonitor(streamRef.current);
     startCameraCheck(true);
+    hasInteractionRef.current = true;
     setStage('interview');
   };
 
   const startRecording = () => {
     setQuestionRevealed(true);
     questionStartTimeRef.current = Date.now();
+  
+    // Single declaration — used for both language pre-select and countdown
+    const currentQ = questionsRef.current[currentQIdxRef.current];
+  
+    // ── Pre-select language for coding questions ──────────────────────────────
+    if (currentQ?.type === 'coding' && currentQ?.languages?.length) {
+      const langMap: Record<string, string> = {
+        'JavaScript': 'javascript', 'TypeScript': 'typescript',
+        'Java': 'java', 'Python': 'python', 'C#': 'csharp',
+      };
+      const mapped = langMap[currentQ.languages[0]] || currentQ.languages[0].toLowerCase();
+      setCodeLanguage(mapped);
+    }
+  
     if (!streamRef.current) return;
     if (videoRef.current && !videoRef.current.srcObject) {
       videoRef.current.srcObject = streamRef.current;
       videoRef.current.play().catch(() => {});
     }
     chunksRef.current = [];
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') 
-  ? 'video/webm;codecs=vp9,opus' 
-  : 'video/webm';
-const recorder = new MediaRecorder(streamRef.current, { 
-  mimeType,
-  videoBitsPerSecond: 500_000,  // 500kbps — keeps a 10-min interview under 40MB
-  audioBitsPerSecond: 64_000,
-});
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+      ? 'video/webm;codecs=vp9,opus'
+      : 'video/webm';
+    const recorder = new MediaRecorder(streamRef.current, {
+      mimeType,
+      videoBitsPerSecond: 500_000,
+      audioBitsPerSecond: 64_000,
+    });
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
     recorder.start(500);
     recorderRef.current = recorder;
     setIsRecording(true);
     setRecordingSeconds(0);
     recTimerRef.current = setInterval(() => setRecordingSeconds(prev => prev + 1), 1000);
-    startCountdown(questionsRef.current[currentQIdxRef.current]?.text || '');
-    // FIX: Use currentQIdxRef.current (the ref), not currentQIdx (the state).
-    // State may be stale in this closure; ref is always current.
+    startCountdown(currentQ?.text || '', currentQ?.timerSeconds);
     startSpeechRecognition(currentQIdxRef.current);
   };
 
@@ -943,35 +1058,71 @@ const recorder = new MediaRecorder(streamRef.current, {
   const isLastQ = currentQIdx === questions.length - 1;
 
   // ── Session expired ──────────────────────────────────────────────────────────
-  if (sessionExpired) {
-    if (expiredReason === 'candidate_ended') {
-      return (
-        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#F8FAFC', padding: '2rem', textAlign: 'center' }}>
-          <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '24px', padding: '52px 56px', maxWidth: '480px', width: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.07)' }}>
-            <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: '#FEF3C7', border: '3px solid #FCD34D', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '36px', margin: '0 auto 24px' }}>⚠️</div>
-            <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A', marginBottom: '12px', letterSpacing: '-0.02em' }}>Session Ended</h1>
-            <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.8, marginBottom: '8px' }}>
-              You ended this interview session early.
-            </p>
-            <p style={{ fontSize: '13px', color: '#94A3B8', marginBottom: '32px', lineHeight: 1.7 }}>
-              Any answers you recorded have been saved. Please contact HR at{' '}
-              <strong style={{ color: '#475569' }}>{candidate.interviewerName}</strong> if you'd like to reschedule.
-            </p>
-            <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: '12px', padding: '16px 20px', fontSize: '13px', color: '#92400E', lineHeight: 1.7 }}>
-              <strong style={{ display: 'block', marginBottom: '4px' }}>📋 What was recorded</strong>
-              {questions.filter(q => q.recorded).length} of {questions.length} questions answered before session ended.
-            </div>
-          </div>
-        </div>
-      );
-    }
-  
-    const body = expiredReason === 'app_switch'
-      ? 'Your interview session ended because you switched to another application. For security, this link can no longer be used. Please contact HR.'
-      : 'Your interview session ended because you switched tabs or closed the browser. For security, this link can no longer be used. Please contact HR.';
-    return <FullScreen icon="🔒" title="Session Ended" body={body} />;
-  }
+// ── Session expired ──────────────────────────────────────────────────────────
+if (sessionExpired) {
+  const isEndedByCandidate = expiredReason === 'candidate_ended';
+  const isTabSwitch = expiredReason === 'tab_switch';
+  const isAppSwitch = expiredReason === 'app_switch';
 
+  const config = isEndedByCandidate
+    ? {
+        icon: '🚪',
+        title: 'Interview Session Ended',
+        body: 'You ended this interview session early. This link can no longer be used.',
+        sub: `Any answers you recorded have been saved. Please contact ${candidate.interviewerName} if you'd like to reschedule.`,
+        accentColor: 'linear-gradient(90deg, #F59E0B, #EF4444)',
+        iconBg: 'linear-gradient(135deg, #FEF3C7, #FEE2E2)',
+        iconBorder: '#FCD34D',
+      }
+    : isTabSwitch || isAppSwitch
+    ? {
+        icon: '🔒',
+        title: 'Session Terminated',
+        body: isAppSwitch
+          ? 'Your session ended because you switched to another application.'
+          : 'Your session ended because you switched browser tabs.',
+        sub: 'For security, this link can no longer be used. Please contact HR to reschedule.',
+        accentColor: 'linear-gradient(90deg, #EF4444, #DC2626)',
+        iconBg: 'linear-gradient(135deg, #FEE2E2, #FECACA)',
+        iconBorder: '#FCA5A5',
+      }
+    : {
+        icon: '⏰',
+        title: 'Interview Link Expired',
+        body: 'This interview link is no longer valid.',
+        sub: 'Please contact HR to request a new link.',
+        accentColor: 'linear-gradient(90deg, #EF4444, #F97316)',
+        iconBg: 'linear-gradient(135deg, #FEE2E2, #FECACA)',
+        iconBorder: '#FCA5A5',
+      };
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#F8FAFC', padding: '2rem', textAlign: 'center' }}>
+      <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '24px', padding: '52px 56px', maxWidth: '500px', width: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.07)', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '4px', background: config.accentColor, borderRadius: '24px 24px 0 0' }} />
+        <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: config.iconBg, border: `3px solid ${config.iconBorder}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '36px', margin: '0 auto 24px', boxShadow: '0 0 0 12px rgba(239,68,68,0.06)' }}>
+          {config.icon}
+        </div>
+        <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A', marginBottom: '12px', letterSpacing: '-0.02em' }}>
+          {config.title}
+        </h1>
+        <p style={{ fontSize: '14px', color: '#64748B', lineHeight: 1.8, marginBottom: '12px' }}>
+          {config.body}
+        </p>
+        <p style={{ fontSize: '13px', color: '#94A3B8', marginBottom: '32px', lineHeight: 1.7 }}>
+          {config.sub}
+        </p>
+        <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '16px 20px', fontSize: '13px', color: '#64748B', lineHeight: 1.7 }}>
+          <strong style={{ display: 'block', color: '#374151', marginBottom: '4px' }}>📋 Interview details</strong>
+          Role: <strong style={{ color: '#0F172A' }}>{candidate.jobRole}</strong>
+          {isEndedByCandidate && questions.length > 0 && (
+            <><br />{questions.filter(q => q.recorded).length} of {questions.length} questions answered</>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
   // ── Link expired ─────────────────────────────────────────────────────────────
   if (isExpired && stage !== 'interview' && stage !== 'completed') {
     return (
@@ -1304,16 +1455,18 @@ const recorder = new MediaRecorder(streamRef.current, {
                         {String(Math.floor(timeLeft / 60)).padStart(2, '0')}:{String(timeLeft % 60).padStart(2, '0')}
                       </span>
                       <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', marginTop: '3px', color: timeLeft <= 30 ? '#F43F5E' : timeLeft <= 60 ? '#F59E0B' : '#22C55E' }}>
-                        {isCodingQuestion(questions[currentQIdx]?.text || '') ? 'CODE TIME' : 'TIME LEFT'}
+                      {isCodingQuestion(questions[currentQIdx]?.text || '', questions[currentQIdx]?.type) ? 'CODE TIME' : 'TIME LEFT'}
                       </span>
                       <div style={{ width: '64px', height: '3px', background: '#E5E7EB', borderRadius: '999px', marginTop: '6px', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', borderRadius: '999px', background: timeLeft <= 30 ? '#EF4444' : timeLeft <= 60 ? '#F59E0B' : '#22C55E', width: `${(timeLeft / getTimeLimit(questions[currentQIdx]?.text || '')) * 100}%`, transition: 'width 1s linear' }} />
+                        <div style={{ height: '100%', borderRadius: '999px', background: timeLeft <= 30 ? '#EF4444' : timeLeft <= 60 ? '#F59E0B' : '#22C55E',width: `${(timeLeft / getTimeLimit(questions[currentQIdx]?.text || '', questions[currentQIdx]?.timerSeconds)) * 100}%`
+
+, transition: 'width 1s linear' }} />
                       </div>
                     </div>
                   )}
                 </div>
 
-                {questionRevealed && currentQIdx === questions.length - 1 && isCodingQuestion(questions[currentQIdx]?.text || '') && (
+                {questionRevealed && isCodingQuestion(questions[currentQIdx]?.text || '', questions[currentQIdx]?.type) && (
                   <div style={{ border: '1px solid #1E293B', borderRadius: '12px', overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: '#1E293B' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1568,16 +1721,6 @@ function CheckRow({ ok, label }: { ok: boolean; label: string }) {
         {ok ? '✓' : '?'}
       </div>
       <span style={{ fontSize: '13px', color: ok ? '#16A34A' : '#64748B', fontWeight: ok ? 600 : 400 }}>{label}</span>
-    </div>
-  );
-}
-
-function FullScreen({ icon, title, body }: { icon: string; title: string; body: string }) {
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#F8FAFC', padding: '2rem', textAlign: 'center' }}>
-      <div style={{ fontSize: '3.5rem', marginBottom: '20px' }}>{icon}</div>
-      <h1 style={{ color: '#0F172A', fontSize: '1.75rem', fontWeight: 800, marginBottom: '12px', letterSpacing: '-0.03em' }}>{title}</h1>
-      <p style={{ color: '#64748B', maxWidth: '440px', lineHeight: 1.75, fontSize: '15px' }}>{body}</p>
     </div>
   );
 }

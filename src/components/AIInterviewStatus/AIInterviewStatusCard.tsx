@@ -28,7 +28,7 @@ export const AIInterviewStatusCard: React.FC<Props> = ({
   const [l1Status,         setL1Status]         = useState('Scheduled');
   const [hrNotes,          setHrNotes]          = useState('');
   const [hrNotesErr,       setHrNotesErr]       = useState('');
-
+  const [expiredReason, setExpiredReason] = useState<string | null>(null);
   useEffect(() => {
     if (!candidateId) return;
     const unsub = onSnapshot(doc(db, 'candidates', candidateId), (snap) => {
@@ -44,6 +44,7 @@ export const AIInterviewStatusCard: React.FC<Props> = ({
       setTechScore(        d.l1AITechnicalScore     ?? null);
       setCommScore(        d.l1AICommunicationScore ?? null);
       setL1Status(         d.l1Status               || 'Scheduled');
+      setExpiredReason(d.l1AIExpiredReason ?? null);
     });
     return () => unsub();
   }, [candidateId]);
@@ -67,9 +68,13 @@ export const AIInterviewStatusCard: React.FC<Props> = ({
 
   // Already decided — parent card shows result
   if (isDone) return null;
-
+  const effectiveStatus =
+  (aiStatus === 'in_progress' || aiStatus === 'pending') &&
+  (expiredReason !== null || l1Status === 'Expired')
+    ? 'expired'
+    : aiStatus;
   // ── STATE 1: PENDING ──────────────────────────────────────────────────────
-  if (aiStatus === 'pending') {
+  if (effectiveStatus === 'pending') {
     return (
       <div style={{ background: '#F5F3FF', borderRadius: '12px', padding: '16px', border: '1px solid #DDD6FE', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -101,7 +106,7 @@ export const AIInterviewStatusCard: React.FC<Props> = ({
   }
 
   // ── STATE 2: IN PROGRESS ──────────────────────────────────────────────────
-  if (aiStatus === 'in_progress') {
+  if (effectiveStatus === 'in_progress'){
     return (
       <div style={{ background: '#FFFBEB', borderRadius: '12px', padding: '16px', border: '1px solid #FDE68A', display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -129,7 +134,7 @@ export const AIInterviewStatusCard: React.FC<Props> = ({
       </div>
     );
   }
-  if (aiStatus === 'expired') {
+  if (effectiveStatus === 'expired') {
     return (
       <div style={{
         background: '#FFF8F8', borderRadius: '12px', padding: '16px',
@@ -175,7 +180,7 @@ export const AIInterviewStatusCard: React.FC<Props> = ({
   }
 
   // ── STATE 3: COMPLETED ────────────────────────────────────────────────────
-  if (aiStatus === 'completed') {
+  if (effectiveStatus === 'completed') {
     const sd = aiScore !== null ? scoreColor(aiScore) : null;
 
     const recBadge = (rec: string) => {

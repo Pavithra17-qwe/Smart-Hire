@@ -666,8 +666,7 @@ const ResumeReviewCard: React.FC<{
         {isDone && (
           <div style={{ background: '#F9FAFB', borderRadius: '8px', padding: '10px 12px', border: '1px solid #E5E7EB', display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <p style={{ fontSize: '13px', fontWeight: '600', color: '#374151', margin: 0 }}>
-              {status === 'Rejected' ? '✕ Resume Rejected' : '✓ Moved to L1 Interview'}
-            </p>
+            {status === 'Rejected' ? '✕ Resume Rejected' : '✓ Moved to Screening Round'}            </p>
             {hrFeedback && <p style={{ fontSize: '12px', color: '#6B7280', margin: 0 }}>"{hrFeedback}"</p>}
             <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
           </div>
@@ -695,7 +694,7 @@ const ResumeReviewCard: React.FC<{
                 }}
                 style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}
               >
-                ✓ Move to L1
+                ✓ Move to Screening Round
               </Button>
             </div>
           </div>
@@ -1205,7 +1204,7 @@ const AIScoreReport: React.FC<{
             <Button onClick={() => {
               if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
               onAction('ai-select', { feedback: hrNotes.trim(), aiScore: overallScore ?? 0 });
-            }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L2</Button>
+            }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L1 Technical Round</Button>
           </div>
         </div>
       )}
@@ -1239,7 +1238,7 @@ const AIScoreReport: React.FC<{
             <Button onClick={() => {
               if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
               onAction('ai-select', { feedback: hrNotes.trim(), aiScore: 0 });
-            }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L2</Button>
+            }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L1 Technical Round </Button>
           </div>
         </div>
       )}
@@ -1248,7 +1247,7 @@ const AIScoreReport: React.FC<{
       {isDone && savedFeedback && (
         <div style={{ margin: '0 16px 16px', background: status === 'Rejected' ? '#FFF8F8' : '#F0FDF9', border: `1px solid ${status === 'Rejected' ? '#FECACA' : '#6EE7B7'}`, borderRadius: '8px', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <p style={{ fontSize: '12px', fontWeight: 700, margin: 0, color: status === 'Rejected' ? '#DC2626' : '#059669' }}>
-            {status === 'Rejected' ? '✕ Rejected by HR' : '✓ Moved to L2 by HR'}
+          {status === 'Rejected' ? '✕ Rejected by HR' : '✓ Moved to L1 Technical Round by HR'}
           </p>
           <p style={{ fontSize: '12px', color: '#374151', margin: 0 }}>{savedFeedback}</p>
           <UpdatedByBadge history={history} stage="L1 Interview" actions={['ai-select', 'ai-reject']} />
@@ -1262,7 +1261,12 @@ const AIScoreReport: React.FC<{
 // ─── STAGE 2 & 3: L1 / L2 INTERVIEW ─────────────────────────────────────────
 const InterviewStageCard: React.FC<{
   candidate: Candidate; role: UserRole | null; user: any;
-  panelUsers: PanelUser[]; stageKey: 'l1' | 'l2'; title: string;
+  panelUsers: PanelUser[]; stageKey:
+  | 'screening'
+  | 'l1'
+  | 'l2'
+  | 'l2manager'
+  | 'hr'; title: string;
   history: CandidateHistoryItem[];
   onAction: (action: string, payload: any) => void;
 }> = ({ candidate, role, user, panelUsers, stageKey, title, history, onAction }) => {
@@ -1277,13 +1281,23 @@ const InterviewStageCard: React.FC<{
   const [fbErr, setFbErr]       = useState('');
   const today = new Date().toISOString().split('T')[0];
 
-  const statusKey   = stageKey === 'l1' ? 'l1Status'          : 'l2Status';
-  const dateKey     = stageKey === 'l1' ? 'l1ScheduledDate'   : 'l2ScheduledDate';
-  const slotKey     = stageKey === 'l1' ? 'l1TimeSlot'        : 'l2TimeSlot';
-  const notesKey    = stageKey === 'l1' ? 'l1SchedulingNotes' : 'l2SchedulingNotes';
-  const fbKey       = stageKey === 'l1' ? 'l1Feedback'        : 'l2Feedback';
-  const panelUidKey = stageKey === 'l1' ? 'l1PanelUid'        : 'l2PanelUid';
-  const panelNmKey  = stageKey === 'l1' ? 'l1PanelName'       : 'l2PanelName';
+  const prefixMap = {
+    screening: 'screening',
+    l1: 'l1',
+    l2: 'l2',
+    l2manager: 'l2Manager',
+    hr: 'hr',
+  };
+  
+  const prefix = prefixMap[stageKey];
+  
+  const statusKey   = `${prefix}Status`;
+  const dateKey     = `${prefix}ScheduledDate`;
+  const slotKey     = `${prefix}TimeSlot`;
+  const notesKey    = `${prefix}SchedulingNotes`;
+  const fbKey       = `${prefix}Feedback`;
+  const panelUidKey = `${prefix}PanelUid`;
+  const panelNmKey  = `${prefix}PanelName`;
 
   const status        = (candidate as any)[statusKey]  || 'Locked';
   const savedDate     = (candidate as any)[dateKey];
@@ -1301,7 +1315,7 @@ const InterviewStageCard: React.FC<{
   const canHRSchedule    = isHR && status === 'Pending';
   const canPanelFeedback = isAssignedPanel && status === 'Scheduled';
 
-  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected', 'Expired'].includes(status) && savedDate;
+  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && savedDate;
   const showFeedback = ['Selected', 'Rejected'].includes(status) && savedFeedback && (candidate as any)[`${stageKey}InterviewType`] !== 'ai';
   const handleSchedule = () => {
     if (!panelUid)      { setSchedErr('Please select a panel member.'); return; }
@@ -1338,7 +1352,7 @@ const InterviewStageCard: React.FC<{
     onAction(action, { feedback: feedback.trim() });
   };
 
-  const nextStageLabel = stageKey === 'l1' ? 'L2' : 'HR Round';
+  const nextStageLabel = stageKey === 'l1' ? 'L1 Technical Round' : stageKey === 'l2' ? 'L2 Manager' : 'HR Round';
 
   return (
     <StageShell title={title} status={status} isLocked={isLocked}>
@@ -1354,13 +1368,15 @@ const InterviewStageCard: React.FC<{
        day: '2-digit', month: 'short', year: 'numeric',
     })}
   </p>
-  {(candidate as any).l1InterviewType === 'ai' && stageKey === 'l1' && (
-    <>
-      <span style={{ color: '#9CA3AF' }}>—</span>
-      <AIInterviewCountdownWithFallback
-  candidate={candidate}
-  isCompleted={(candidate as any).l1AIStatus === 'completed'}
-/>
+  {stageKey === 'l1' &&
+ ['ai', 'manual'].includes((candidate as any).l1InterviewType) &&
+ (candidate as any).l1AIInterviewSentAt && (
+  <>
+    <span style={{ color: '#9CA3AF' }}>—</span>
+    <AIInterviewCountdownWithFallback
+      candidate={candidate}
+      isCompleted={(candidate as any).l1AIStatus === 'completed'}
+    />
     </>
   )}
 </div>
@@ -1389,7 +1405,7 @@ const InterviewStageCard: React.FC<{
 {/* ── AI Interview: session expired/ended early ── */}
 {stageKey === 'l1' &&
  (status === 'Expired' || (candidate as any).l1AIStatus === 'expired') &&
- (candidate as any).l1InterviewType === 'ai' && (
+ ['ai', 'manual'].includes((candidate as any).l1InterviewType) && (
   <div style={{
     background: '#FFF8F8', border: '1.5px solid #FECACA',
     borderRadius: '12px', padding: '16px',
@@ -1478,34 +1494,176 @@ const InterviewStageCard: React.FC<{
     )}
   </div>
 )}
-      {/* ── AI Interview: waiting for candidate ── */}
-      {stageKey === 'l1' &&
- ['Scheduled', 'Expired'].includes(status) &&
- (candidate as any).l1InterviewType === 'ai' &&
- !['completed', 'expired'].includes((candidate as any).l1AIStatus) && (
-        <AIInterviewStatusCard
-          candidateId={candidate.id}
-          candidateName={candidate.candidateName || ''}
-          role={role}
-          onDecision={(action, payload) => onAction(action, payload)}
-        />
+    {/* ── AI Interview: waiting for candidate ── */}
+    {stageKey === 'l1' &&
+ status === 'Scheduled' &&
+ status !== 'Expired' &&
+ ['ai', 'manual'].includes((candidate as any).l1InterviewType) &&
+ !['completed', 'expired'].includes((candidate as any).l1AIStatus) &&
+ (candidate as any).l1AIExpiredReason == null && (
+   <AIInterviewStatusCard
+     candidateId={candidate.id}
+     candidateName={candidate.candidateName || ''}
+     role={role}
+     onDecision={(action, payload) => onAction(action, payload)}
+   />
+)}
+
+      {/* ── MANUAL Interview: show link + countdown while pending ── */}
+      {/* ── MANUAL Interview: completed ── */}
+{stageKey === 'l1' &&
+ (candidate as any).l1InterviewType === 'manual' &&
+ (candidate as any).l1AIStatus !== 'completed' && (
+        <div style={{
+          border: '1.5px solid #DDD6FE',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          background: 'white',
+        }}>
+          {/* Header */}
+          <div style={{
+            padding: '13px 16px',
+            borderBottom: '1px solid #F3F4F6',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            background: '#FAFAFA',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '18px' }}>📋</span>
+              <span style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>
+                Manual Interview Link
+              </span>
+            </div>
+            <AIInterviewCountdownWithFallback
+  candidate={candidate}
+  isCompleted={(candidate as any).l1AIStatus === 'completed'}
+/>
+          </div>
+
+          {/* Link box */}
+          <div style={{ padding: '16px' }}>
+            <p style={{ fontSize: '12px', color: '#6B7280', marginBottom: '10px' }}>
+              This link uses the project's interview questions. Share it with the candidate or copy it below.
+            </p>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: '#F5F3FF',
+              border: '1px solid #DDD6FE',
+              borderRadius: '8px',
+              padding: '10px 14px',
+            }}>
+              <span style={{
+                flex: 1,
+                fontSize: '12px',
+                color: '#5B21B6',
+                fontWeight: 600,
+                wordBreak: 'break-all',
+              }}>
+                {(candidate as any).l1AIInterviewUrl || '—'}
+              </span>
+              <button
+                onClick={() => {
+                  const url = (candidate as any).l1AIInterviewUrl;
+                  if (url) {
+                    navigator.clipboard.writeText(url);
+                  }
+                }}
+                style={{
+                  background: '#7C3AED',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                Copy
+              </button>
+            </div>
+
+            {/* Questions preview */}
+            {(candidate as any).projectQuestions?.length > 0 && (
+              <div style={{ marginTop: '14px' }}>
+                <p style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: '#6B7280',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  marginBottom: '8px',
+                }}>
+                  📝 Interview Questions ({(candidate as any).projectQuestions.length})
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {((candidate as any).projectQuestions as any[]).map((q: any, i: number) => (
+                    <div key={i} style={{
+                      display: 'flex',
+                      gap: '10px',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      background: q.type === 'coding' ? '#EFF6FF' : '#F9FAFB',
+                      border: `1px solid ${q.type === 'coding' ? '#BFDBFE' : '#E5E7EB'}`,
+                    }}>
+                      <span style={{
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        color: q.type === 'coding' ? '#1D4ED8' : '#6B7280',
+                        background: q.type === 'coding' ? '#DBEAFE' : '#F3F4F6',
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                        alignSelf: 'flex-start',
+                        flexShrink: 0,
+                        marginTop: '1px',
+                      }}>
+                        {q.type === 'coding' ? '💻' : '📝'} Q{i + 1}
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#374151', lineHeight: 1.5 }}>
+                        {q.text}
+                      </span>
+                      {q.timerMinutes && (
+                        <span style={{
+                          fontSize: '10px',
+                          color: '#1D4ED8',
+                          fontWeight: 600,
+                          flexShrink: 0,
+                          alignSelf: 'flex-start',
+                          marginTop: '2px',
+                        }}>
+                          ⏱ {q.timerMinutes}m
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
+
+
 
       {/* ── AI Interview: inline score report in L1 once completed ── */}
       {stageKey === 'l1' &&
-       (candidate as any).l1InterviewType === 'ai' &&
+       ['ai', 'manual'].includes((candidate as any).l1InterviewType) &&
        (candidate as any).l1AIStatus === 'completed' && (
         <AIScoreReport
-        candidate={candidate}
-        role={role}
-        status={status}
-        savedFeedback={savedFeedback}
-        history={history}
-        onAction={onAction}
-      />
+          candidate={candidate}
+          role={role}
+          status={status}
+          savedFeedback={savedFeedback}
+          history={history}
+          onAction={onAction}
+        />
       )}
 
-      {canHRSchedule && stageKey === 'l2' && (
+{canHRSchedule && (stageKey === 'l2' || stageKey === 'l2manager') && (
         <div style={{ background: '#F9FAFB', borderRadius: '10px', padding: '14px', border: '1px solid #E5E7EB' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '12px' }}>Schedule {title}</p>
           <p style={{ ...lbl, marginBottom: '6px' }}>Assign Panel Member <span style={{ color: '#DC2626' }}>*</span></p>
@@ -1834,6 +1992,8 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
             resumeText, jobDescription, scheduledByUid: user.uid, scheduledByName: actorName,
             status: 'pending', createdAt: sentAt, expiresAt, interviewUrl,
             l1AIInterviewSentAt: sentAt, // ← also save here for page.tsx fallback
+            interviewMode:    (candidate as any).interviewMode    ?? 'ai',
+            projectQuestions: (candidate as any).projectQuestions ?? [],
           });
           updateData = {
             resumeReviewStatus: 'Accepted',
@@ -1915,6 +2075,8 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
       scheduledByName: actorName,
       status: 'pending', createdAt: sentAt, expiresAt,
       interviewUrl, l1AIInterviewSentAt: sentAt,
+      interviewMode:    (candidate as any).interviewMode    ?? 'ai',
+      projectQuestions: (candidate as any).projectQuestions ?? [],
     });
 
     updateData = {
@@ -1941,8 +2103,8 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
       experience:        String((candidate as any).experience || ''),
       location:          String((candidate as any).location   || ''),
       stage:             'L1 Interview',
-      schedulingNotes:   `Your new interview link: ${interviewUrl}`,
-      interviewFeedback: '',
+      schedulingNotes:   `AI interview link: ${interviewUrl}`,
+            interviewFeedback: '',
       interviewDate:     new Date().toISOString().split('T')[0],
       interviewTime:     '',
       senderRole:        'hr',
@@ -1969,13 +2131,37 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
           updateData = { l2Status: 'Scheduled', l2ScheduledDate: payload.scheduledDate, l2TimeSlot: payload.timeSlot, l2SchedulingNotes: payload.schedulingNotes, l2PanelUid: payload.panelUid, l2PanelName: payload.panelName, l2PanelEmail: payload.panelEmail, l2InterviewerUid: user.uid, l2InterviewerName: actorName, l2InterviewerEmail: actorEmail };
           historyData.status = 'Scheduled';
         } else if (action === 'panel-select') {
-          updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, hrStatus: 'Pending' };
+          updateData = { l2Status: 'Selected', l2Feedback: payload.feedback, l2ManagerStatus: 'Pending' };
           historyData.status = 'Selected';
         } else if (action === 'panel-reject') {
           updateData = { l2Status: 'Rejected', l2Feedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
         }
         break;
+
+        case 'L2 Manager Round':
+  if (action === 'schedule') {
+    updateData = {
+      l2ManagerStatus: 'Scheduled',
+      l2ManagerScheduledDate: payload.scheduledDate,
+      l2ManagerTimeSlot: payload.timeSlot,
+      l2ManagerSchedulingNotes: payload.schedulingNotes,
+      l2ManagerPanelUid: payload.panelUid,
+      l2ManagerPanelName: payload.panelName,
+      l2ManagerPanelEmail: payload.panelEmail,
+      l2ManagerInterviewerUid: user.uid,
+      l2ManagerInterviewerName: actorName,
+      l2ManagerInterviewerEmail: actorEmail,
+    };
+    historyData.status = 'Scheduled';
+  } else if (action === 'panel-select') {
+    updateData = { l2ManagerStatus: 'Selected', l2ManagerFeedback: payload.feedback, hrStatus: 'Pending' };
+    historyData.status = 'Selected';
+  } else if (action === 'panel-reject') {
+    updateData = { l2ManagerStatus: 'Rejected', l2ManagerFeedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
+    historyData.status = 'Rejected';
+  }
+  break;
 
       case 'HR Round':
         if (action === 'schedule') {
@@ -2075,6 +2261,7 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
         const emailType = action === 'accept' ? 'resume_accepted' : 'resume_rejected';
         enqueue(uploaderEmail, 'hr', emailType);
         enqueue(actorEmail,    'hr', emailType);
+        enqueue(fresh.candidateEmail, 'hr', emailType);
       }
     } else if (action === 'schedule' && stage === 'L1 Interview') {
       const panelEmail = fresh.l1PanelEmail || payload.panelEmail || '';
@@ -2086,27 +2273,44 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
       enqueue(uploaderEmail, 'hr', 'interview_scheduled');
       enqueue(actorEmail,    'hr', 'interview_scheduled');
       enqueue(panelEmail,    'hr', 'panel_assigned');
-    } else if (action === 'schedule' && stage === 'HR Round') {
-      enqueue(uploaderEmail, 'hr', 'interview_scheduled');
-      enqueue(actorEmail,    'hr', 'interview_scheduled');
-    } else if (stage === 'L1 Interview' && (action === 'ai-select' || action === 'ai-reject')) {
+    } 
+   else if (action === 'schedule' && stage === 'L2 Manager Round') {
+    const panelEmail = fresh.l2ManagerPanelEmail || payload.panelEmail || '';
+    enqueue(uploaderEmail, 'hr', 'interview_scheduled');
+    enqueue(actorEmail,    'hr', 'interview_scheduled');
+    enqueue(panelEmail,    'hr', 'panel_assigned');
+  } else if (action === 'schedule' && stage === 'HR Round') {
+    enqueue(uploaderEmail, 'hr', 'interview_scheduled');
+    enqueue(actorEmail,    'hr', 'interview_scheduled');
+  }
+    else if (stage === 'L1 Interview' && (action === 'ai-select' || action === 'ai-reject')) {
       const emailType = action === 'ai-select' ? 'candidate_selected' : 'candidate_rejected';
       enqueue(uploaderEmail, 'hr', emailType);
       enqueue(actorEmail,    'hr', emailType);
+      enqueue(fresh.candidateEmail, 'hr', emailType);
     } else if ((stage === 'L1 Interview' || stage === 'L2 Interview') && (action === 'panel-select' || action === 'panel-reject')) {
       const reviewerEmail = fresh.resumeReviewedByEmail || (stage === 'L1 Interview' ? fresh.l1InterviewerEmail : fresh.l2InterviewerEmail) || null;
       const emailType = action === 'panel-select' ? 'candidate_selected' : 'candidate_rejected';
       enqueue(uploaderEmail, 'panel', emailType);
       enqueue(reviewerEmail, 'panel', emailType);
       enqueue(actorEmail,    'panel', emailType);
-    } else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
+      enqueue(fresh.candidateEmail, 'panel', emailType); 
+} else if (stage === 'L2 Manager Round' && (action === 'panel-select' || action === 'panel-reject')) {
+  const emailType = action === 'panel-select' ? 'candidate_selected' : 'candidate_rejected';
+  enqueue(uploaderEmail,        'panel', emailType);
+  enqueue(actorEmail,           'panel', emailType);
+  enqueue(fresh.candidateEmail, 'panel', emailType);
+} 
+else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
       const emailType = action === 'select' ? 'candidate_selected' : 'candidate_rejected';
       enqueue(uploaderEmail, 'hr', emailType);
       enqueue(actorEmail,    'hr', emailType);
+      enqueue(fresh.candidateEmail, 'hr', emailType);
     } else if (stage === 'Offer Stage') {
       const emailType = action === 'release-offer' ? 'offer_released' : action === 'offer-accept' ? 'offer_accepted' : 'offer_rejected';
       enqueue(uploaderEmail, 'hr', emailType);
       enqueue(actorEmail,    'hr', emailType);
+      enqueue(fresh.candidateEmail, 'hr', emailType);
     }
 
     for (const emailParams of queue.values()) {
@@ -2193,8 +2397,19 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
             <p style={{ fontSize: '13px', color: 'gray', marginBottom: '16px' }}>Manage active round. Save details to advance.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <ResumeReviewCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} history={history} onAction={(a, p) => handleAction('Resume Review', a, p)} />
-              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l1" title="L1 Interview (AI Screening Round)" history={history} onAction={(a, p) => handleAction('L1 Interview', a, p)} />
-              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l2" title="L2 Interview (Technical Panel Round)" history={history} onAction={(a, p) => handleAction('L2 Interview', a, p)} />
+              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l1" title="Screening Round" history={history} onAction={(a, p) => handleAction('L1 Interview', a, p)} />
+              <InterviewStageCard candidate={candidate} role={role as UserRole} user={user} panelUsers={panelUsers} stageKey="l2" title="L1 Technical Round" history={history} onAction={(a, p) => handleAction('L2 Interview', a, p)} />
+              <InterviewStageCard
+  candidate={candidate}
+  role={role as UserRole}
+  user={user}
+  panelUsers={panelUsers}
+  stageKey="l2manager"
+  title="L2 Manager Round"
+  history={history}
+  onAction={(a, p) => handleAction('L2 Manager Round', a, p)}
+/>
+
               <HRRoundCard candidate={candidate} role={role as UserRole} history={history} onAction={(a, p) => handleAction('HR Round', a, p)} />
               <OfferStageCard candidate={candidate} role={role as UserRole} history={history} onAction={(a, p) => handleAction('Offer Stage', a, p)} />
             </div>

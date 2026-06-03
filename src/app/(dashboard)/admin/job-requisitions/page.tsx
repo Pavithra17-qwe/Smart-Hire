@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   collection, addDoc, serverTimestamp, query, doc,
@@ -13,17 +13,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Plus, Eye, MoreVertical, XCircle } from "lucide-react";
+import { Loader2, Plus, Eye, MoreVertical, XCircle, Trash2, Code2, AlignLeft, ChevronDown } from "lucide-react";
 import { logActivity } from "@/lib/activity-logger";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 
+// ─── Constants ────────────────────────────────────────────────────────────────
 const LOCATIONS_OPTIONS = ["Chennai", "Bangalore", "Remote"];
 const ROLES_OPTIONS = ["Junior QA", "Senior QA", "DM"];
+const CODING_LANGUAGES = ["JavaScript", "TypeScript", "Java", "Python", "C#"];
 
-/* ─── Types ──────────────────────────────────────────────────────────────── */
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface QuestionItem {
+  id: string;
+  type: "theory" | "coding";
+  text: string;
+  languages?: string[];
+  timerMinutes?: string;
+}
+
 interface AgencyUser {
   uid: string;
   displayName?: string;
@@ -33,16 +44,17 @@ interface AgencyUser {
 }
 
 interface FormData {
-  projectName:   string;
-  location:      string;
-  otherLocation: string;
-  role:          string;
-  otherRole:     string;
-  status:        string;
-  jdFileName:    string;
-  jdFileType:    string;
-  jdFileData:    string;
-  assignedAgencies: string[]; // array of agency UIDs
+  projectName:      string;
+  location:         string;
+  otherLocation:    string;
+  role:             string;
+  otherRole:        string;
+  status:           string;
+  jdFileName:       string;
+  jdFileType:       string;
+  jdFileData:       string;
+  assignedAgencies: string[];
+  questions:        QuestionItem[];
 }
 
 const EMPTY_FORM: FormData = {
@@ -50,9 +62,46 @@ const EMPTY_FORM: FormData = {
   role: "", otherRole: "", status: "Active",
   jdFileName: "", jdFileType: "text", jdFileData: "",
   assignedAgencies: [],
+  questions: [{ id: crypto.randomUUID(), type: "theory", text: "" }],
 };
 
-/* ─── Shared JD opener ───────────────────────────────────────────────────── */
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function buildQuestionsPayload(questions: QuestionItem[]) {
+  return questions
+    .filter((q) => q.text.trim())
+    .map((q) => ({
+      type: q.type,
+      text: q.text.trim(),
+      ...(q.type === "coding"
+        ? {
+            languages: q.languages ?? ["JavaScript"],
+            timerMinutes: parseInt(q.timerMinutes ?? "") || 30,
+          }
+        : {}),
+    }));
+}
+
+function restoreQuestionsFromDoc(doc: any): QuestionItem[] {
+  if (Array.isArray(doc.questions) && doc.questions.length > 0) {
+    if (typeof doc.questions[0] === "object" && "type" in doc.questions[0]) {
+      return doc.questions.map((q: any) => ({
+        id: crypto.randomUUID(),
+        type: q.type ?? "theory",
+        text: q.text ?? "",
+        languages: q.languages,
+        timerMinutes: q.timerMinutes != null ? String(q.timerMinutes) : undefined,
+      }));
+    }
+    // Legacy: plain string array → theory items
+    return doc.questions.map((text: string) => ({
+      id: crypto.randomUUID(),
+      type: "theory" as const,
+      text,
+    }));
+  }
+  return [{ id: crypto.randomUUID(), type: "theory", text: "" }];
+}
+
 function openJDFile(jdFileData: string, jdFileName?: string) {
   if (!jdFileData) return;
   if (jdFileData.startsWith("https://")) {
@@ -83,15 +132,189 @@ function openJDFile(jdFileData: string, jdFileName?: string) {
   }
 }
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("File read failed"));
-    reader.readAsDataURL(file);
-  });
+// ─── CodingCard ───────────────────────────────────────────────────────────────
+function CodingCard({ item, onChange }: { item: QuestionItem; onChange: (patch: Partial<QuestionItem>) => void }) {
+  const toggleLang = (lang: string) => {
+    const langs = item.languages ?? ["JavaScript"];
+    onChange({
+      languages: langs.includes(lang) ? langs.filter(l => l !== lang) : [...langs, lang],
+    });
+  };
+
+  return (
+    <div className="space-y-3 rounded-md bg-blue-50 border border-blue-200 p-4">
+      <textarea
+        className="w-full text-sm bg-white border rounded-md px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-400"
+        rows={3}
+        placeholder="Describe the coding challenge…"
+        value={item.text}
+        onChange={e => onChange({ text: e.target.value })}
+      />
+      <div className="space-y-1.5">
+        <span className="text-xs font-medium text-blue-700">Allowed Languages</span>
+        <div className="flex flex-wrap gap-2">
+          {CODING_LANGUAGES.map(lang => {
+            const selected = (item.languages ?? ["JavaScript"]).includes(lang);
+            return (
+              <label key={lang} className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs cursor-pointer transition-colors ${
+                selected ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-600 border-gray-300 hover:border-blue-400"
+              }`}>
+                <input type="checkbox" className="hidden" checked={selected} onChange={() => toggleLang(lang)} />
+                {lang}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-medium text-blue-700 w-24 shrink-0">Timer (minutes)</span>
+        <input
+          type="number" min={5} max={120}
+          className="w-24 text-sm bg-white border rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="30"
+          value={item.timerMinutes ?? ""}
+          onChange={e => onChange({ timerMinutes: e.target.value })}
+        />
+      </div>
+    </div>
+  );
 }
 
+// ─── QuestionBuilder ──────────────────────────────────────────────────────────
+function QuestionBuilder({ formData, setFormData }: { formData: FormData; setFormData: React.Dispatch<React.SetStateAction<FormData>> }) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const canAdd = formData.questions.length < 10;
+
+  const addQuestion = (type: "theory" | "coding") => {
+    setDropdownOpen(false);
+    if (!canAdd) return;
+    const newItem: QuestionItem = {
+      id: crypto.randomUUID(),
+      type,
+      text: "",
+      ...(type === "coding" ? { languages: ["JavaScript"], timerMinutes: "" } : {}),
+    };
+    setFormData(p => ({ ...p, questions: [...p.questions, newItem] }));
+  };
+
+  const updateQuestion = (id: string, patch: Partial<QuestionItem>) => {
+    setFormData(p => ({ ...p, questions: p.questions.map(q => q.id === id ? { ...q, ...patch } : q) }));
+  };
+
+  const removeQuestion = (id: string) => {
+    if (formData.questions.length <= 1) return;
+    setFormData(p => ({ ...p, questions: p.questions.filter(q => q.id !== id) }));
+  };
+
+  const theoryCount = formData.questions.filter(q => q.type === "theory").length;
+  const codingCount = formData.questions.filter(q => q.type === "coding").length;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm font-semibold">Interview Questions</Label>
+          <span className="text-xs text-muted-foreground font-normal">({formData.questions.length}/10)</span>
+        </div>
+
+        <div className="relative" ref={dropdownRef}>
+          <Button
+            type="button" variant="outline" size="sm"
+            disabled={!canAdd}
+            onClick={() => setDropdownOpen(o => !o)}
+            className="h-8 text-xs gap-1.5"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Question
+            <ChevronDown className="h-3 w-3 opacity-60" />
+          </Button>
+
+          {dropdownOpen && (
+            <div className="absolute right-0 mt-1 w-48 rounded-md border bg-white shadow-lg z-50 py-1">
+              <button
+                type="button"
+                onClick={() => addQuestion("theory")}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-gray-50 transition-colors"
+              >
+                <AlignLeft className="h-3.5 w-3.5 text-gray-500" />
+                Theory Question
+              </button>
+              <button
+                type="button"
+                onClick={() => addQuestion("coding")}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-gray-50 transition-colors"
+              >
+                <Code2 className="h-3.5 w-3.5 text-blue-500" />
+                Coding Question
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Question list */}
+      <div className="space-y-3">
+        {formData.questions.map((q, idx) => (
+          <div key={q.id} className="flex items-start gap-2">
+            <span className="mt-2.5 text-xs font-mono text-muted-foreground w-5 shrink-0">Q{idx + 1}</span>
+            <div className="flex-1 min-w-0">
+              {q.type === "theory" ? (
+                <Input
+                  value={q.text}
+                  onChange={e => updateQuestion(q.id, { text: e.target.value })}
+                  placeholder={`Theory question ${idx + 1}…`}
+                  className="text-sm"
+                />
+              ) : (
+                <CodingCard item={q} onChange={patch => updateQuestion(q.id, patch)} />
+              )}
+            </div>
+            {formData.questions.length > 1 && (
+              <Button
+                type="button" variant="ghost" size="icon"
+                onClick={() => removeQuestion(q.id)}
+                className="h-9 w-9 shrink-0 mt-0.5 text-muted-foreground hover:text-red-500"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Summary pills */}
+      {(theoryCount > 0 || codingCount > 0) && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {theoryCount > 0 && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-medium">
+              <AlignLeft className="h-3 w-3" />{theoryCount} theory
+            </span>
+          )}
+          {codingCount > 0 && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">
+              <Code2 className="h-3 w-3" />{codingCount} coding
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 export default function JobRequisitions() {
   const { user, role, name } = useAuth();
   const { toast } = useToast();
@@ -114,11 +337,9 @@ export default function JobRequisitions() {
     projectName: "", location: "", designation: "", status: "", createdBy: "",
   });
 
-  // ── Fetch agency users for assignment dropdown ────────────────────────────
+  // ── Fetch agency users ────────────────────────────────────────────────────
   useEffect(() => {
     if (!user || (role !== "admin" && role !== "hr")) return;
-    // Query users collection for agency role
-    // Adjust the collection/field names to match your user schema
     const q = query(collection(db, "users"), where("role", "==", "agency"));
     const unsub = onSnapshot(q, snap => {
       setAgencyUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() } as AgencyUser)));
@@ -126,15 +347,13 @@ export default function JobRequisitions() {
     return () => unsub();
   }, [user, role]);
 
-  // ── Firestore real-time listener ─────────────────────────────────────────
+  // ── Firestore listener ────────────────────────────────────────────────────
   useEffect(() => {
     if (!user || !role) return;
     setIsLoading(true);
-
     const q = role === "agency"
       ? query(collection(db, "job_requisitions"), where("assignedAgencies", "array-contains", user.uid), orderBy("createdDate", "desc"))
       : query(collection(db, "job_requisitions"), orderBy("createdDate", "desc"));
-
     const unsub = onSnapshot(q,
       snap => { setRequisitions(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setIsLoading(false); },
       err  => { console.error("Firestore:", err); setIsLoading(false); }
@@ -162,11 +381,11 @@ export default function JobRequisitions() {
   const designationOpts = useMemo(() => [...new Set([...ROLES_OPTIONS, ...requisitions.flatMap(r => r.roles || [])])], [requisitions]);
 
   const filteredReqs = useMemo(() => requisitions.filter(req =>
-    (!filters.projectName  || req.projectName === filters.projectName) &&
-    (!filters.location     || req.locations?.includes(filters.location)) &&
-    (!filters.designation  || req.roles?.includes(filters.designation)) &&
-    (!filters.status       || req.status === filters.status) &&
-    (!filters.createdBy    || req.createdByRole === filters.createdBy)
+    (!filters.projectName || req.projectName === filters.projectName) &&
+    (!filters.location    || req.locations?.includes(filters.location)) &&
+    (!filters.designation || req.roles?.includes(filters.designation)) &&
+    (!filters.status      || req.status === filters.status) &&
+    (!filters.createdBy   || req.createdByRole === filters.createdBy)
   ), [requisitions, filters]);
 
   const total     = filteredReqs.length;
@@ -183,16 +402,17 @@ export default function JobRequisitions() {
         const loc = req.locations?.[0] || "";
         const rol = req.roles?.[0]     || "";
         setFormData({
-          projectName:      req.projectName || "",
+          projectName:      req.projectName      || "",
           location:         LOCATIONS_OPTIONS.includes(loc) ? loc : loc ? "Other" : "",
           otherLocation:    LOCATIONS_OPTIONS.includes(loc) ? "" : loc,
           role:             ROLES_OPTIONS.includes(rol) ? rol : rol ? "Others" : "",
           otherRole:        ROLES_OPTIONS.includes(rol) ? "" : rol,
-          status:           req.status     || "Active",
-          jdFileName:       req.jdFileName || "",
-          jdFileType: req.jdFileType === "manual" ? "manual" : "text",
-          jdFileData:       req.jdFileData || "",
+          status:           req.status           || "Active",
+          jdFileName:       req.jdFileName       || "",
+          jdFileType:       req.jdFileType === "manual" ? "manual" : "text",
+          jdFileData:       req.jdFileData       || "",
           assignedAgencies: req.assignedAgencies || [],
+          questions:        restoreQuestionsFromDoc(req),
         });
       }
     } else {
@@ -203,7 +423,6 @@ export default function JobRequisitions() {
 
   const handleModalCancel = () => { setIsModalOpen(false); resetForm(); };
 
-  // ── Agency toggle helper ──────────────────────────────────────────────────
   const toggleAgency = (uid: string) => {
     setFormData(p => ({
       ...p,
@@ -213,69 +432,41 @@ export default function JobRequisitions() {
     }));
   };
 
-  // ── File handler ──────────────────────────────────────────────────────────
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const allowed = [
-      "application/pdf",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ];
-    if (!allowed.includes(file.type)) {
-      toast({ variant: "destructive", title: "Invalid file", description: "Only PDF and Word documents are allowed." });
-      return;
-    }
-    setFormData(p => ({ ...p, jdFileName: file.name, jdFileType: file.type, jdFileData: "" }));
-    setIsProcessingFile(true);
-    try {
-      const base64 = await fileToBase64(file);
-      setFormData(p => ({ ...p, jdFileData: base64 }));
-      toast({ title: "File ready", description: `${file.name} loaded successfully.` });
-    } catch (err: any) {
-      toast({ variant: "destructive", title: "File error", description: err.message });
-      setFormData(p => ({ ...p, jdFileName: "", jdFileType: "", jdFileData: "" }));
-    } finally {
-      setIsProcessingFile(false);
-      e.target.value = "";
-    }
-  };
-
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    const finalLocation = formData.location === "Other" ? formData.otherLocation.trim() : formData.location;
-    const finalRole     = formData.role === "Others"    ? formData.otherRole.trim()     : formData.role;
+    const finalLocation = formData.location === "Other"  ? formData.otherLocation.trim() : formData.location;
+    const finalRole     = formData.role     === "Others" ? formData.otherRole.trim()     : formData.role;
 
     if (!formData.projectName.trim() || !finalLocation || !finalRole) {
       toast({ variant: "destructive", title: "Validation Error", description: "Project Name, Location, and Role are required." });
       return;
     }
 
-    setIsLoading(true);
     const data: any = {
       projectName:      formData.projectName.trim(),
       locations:        [finalLocation],
       roles:            [finalRole],
       status:           formData.status,
-      jdFileName:       formData.jdFileName || null,
-      jdFileType:       formData.jdFileType || null,
-      jdFileData:       formData.jdFileData || null,
-      // ── NEW: store assigned agency UIDs ──────────────────────────────────
+      jdFileName:       formData.jdFileName  || null,
+      jdFileType:       formData.jdFileType  || null,
+      jdFileData:       formData.jdFileData  || null,
       assignedAgencies: formData.assignedAgencies,
+      questions:        buildQuestionsPayload(formData.questions),
     };
 
+    setIsLoading(true);
     try {
       if (!editingId) {
-        const dupProjectSnap = await getDocs(
+        const dupSnap = await getDocs(
           query(collection(db, "job_requisitions"), where("projectName", "==", data.projectName))
         );
-        if (!dupProjectSnap.empty) {
-          toast({ variant: "destructive", title: "Duplicate Project",
-            description: `A project named "${data.projectName}" already exists.` });
+        if (!dupSnap.empty) {
+          toast({ variant: "destructive", title: "Duplicate Project", description: `A project named "${data.projectName}" already exists.` });
           setIsLoading(false);
           return;
         }
       }
+
       if (editingId) {
         await updateDoc(doc(db, "job_requisitions", editingId), { ...data, updatedDate: serverTimestamp() });
         toast({ title: "Success", description: "Project updated successfully." });
@@ -296,6 +487,7 @@ export default function JobRequisitions() {
             targetId: ref.id, targetName: data.projectName });
         }
       }
+
       setIsModalOpen(false);
       resetForm();
     } catch (err: any) {
@@ -320,15 +512,6 @@ export default function JobRequisitions() {
 
   const handleEditAction   = (id: string) => { setOpenDropdownId(null); setTimeout(() => handleModalOpen(id), 50); };
   const handleDeleteAction = (id: string) => { setOpenDropdownId(null); setTimeout(() => { setDeleteTargetId(id); setIsDeleteDialogOpen(true); }, 50); };
-
-  // ── Agency name lookup helper ─────────────────────────────────────────────
-  const getAgencyNames = (uids: string[]) => {
-    if (!uids?.length) return "—";
-    return uids.map(uid => {
-      const a = agencyUsers.find(ag => ag.uid === uid);
-      return a ? (a.name || a.displayName || a.email || uid) : uid;
-    }).join(", ");
-  };
 
   const isAdminOrHR = role === "admin" || role === "hr";
 
@@ -390,21 +573,18 @@ export default function JobRequisitions() {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              {[
-                "Project Name", "Location", "Designation", "Status",
-                "JD", "Assigned Agencies", "Created Date", "Created By", "Actions"
-              ].map(h => (
+              {["Project Name", "Location", "Designation", "Status", "Questions", "JD", "Assigned Agencies", "Created Date", "Created By", "Actions"].map(h => (
                 <th key={h} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {isLoading ? (
-              <tr><td colSpan={9} className="text-center py-8">
+              <tr><td colSpan={10} className="text-center py-8">
                 <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
               </td></tr>
             ) : paginated.length === 0 ? (
-              <tr><td colSpan={9} className="text-center py-12 text-sm text-muted-foreground">
+              <tr><td colSpan={10} className="text-center py-12 text-sm text-muted-foreground">
                 {hasActiveFilters ? "No projects match your filters." : "No projects yet. Click Create Client Project to get started."}
               </td></tr>
             ) : paginated.map(req => (
@@ -417,44 +597,49 @@ export default function JobRequisitions() {
                     req.status === "Active" ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"
                   }`}>{req.status}</span>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-  {req.jdFileData && req.jdFileData.trim() !== "" ? (
-    <button
-      type="button"
-      onClick={() => {
-        if (!req.jdFileData) return;
-      
-        // 👉 HANDLE BOTH manual + txt
-        if (req.jdFileType === "manual" || req.jdFileType === "text") {
-          const newWindow = window.open("", "_blank");
-          if (newWindow) {
-            newWindow.document.write(`
-              <html>
-                <head><title>${req.jdFileName || "Job Description"}</title></head>
-                <body style="padding:20px; font-family:Arial;">
-<div style="white-space: pre-wrap; word-break: break-word;">
-  ${req.jdFileData}
-</div>                </body>
-              </html>
-            `);
-            newWindow.document.close();
-          }
-        } else {
-          // 👉 Only for PDF / DOC
-          openJDFile(req.jdFileData, req.jdFileName);
-        }
-      }}
-      className="text-indigo-600 hover:text-indigo-800"
-      title="View JD"
-    >
-      <Eye className="h-4 w-4" />
-    </button>
-  ) : (
-    <span className="text-gray-400 text-xs">No JD</span>
-  )}
-</td>
 
-                {/* ── NEW: Assigned Agencies column ── */}
+                {/* Questions summary */}
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                  {(() => {
+                    const items: any[] = req.questions ?? [];
+                    const theory = items.filter(q => q.type === "theory" || typeof q === "string").length;
+                    const coding = items.filter(q => q.type === "coding").length;
+                    if (!theory && !coding) return <span className="text-gray-400 text-xs">None</span>;
+                    return (
+                      <span className="inline-flex items-center gap-1.5 text-xs">
+                        {theory > 0 && <span className="font-medium">{theory}T</span>}
+                        {coding > 0 && <span className="text-blue-600 font-medium">{coding}C</span>}
+                      </span>
+                    );
+                  })()}
+                </td>
+
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  {req.jdFileData && req.jdFileData.trim() !== "" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!req.jdFileData) return;
+                        if (req.jdFileType === "manual" || req.jdFileType === "text") {
+                          const newWindow = window.open("", "_blank");
+                          if (newWindow) {
+                            newWindow.document.write(`<html><head><title>${req.jdFileName || "Job Description"}</title></head><body style="padding:20px;font-family:Arial;"><div style="white-space:pre-wrap;word-break:break-word;">${req.jdFileData}</div></body></html>`);
+                            newWindow.document.close();
+                          }
+                        } else {
+                          openJDFile(req.jdFileData, req.jdFileName);
+                        }
+                      }}
+                      className="text-indigo-600 hover:text-indigo-800"
+                      title="View JD"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <span className="text-gray-400 text-xs">No JD</span>
+                  )}
+                </td>
+
                 <td className="px-6 py-4 text-sm text-gray-600 max-w-[200px]">
                   {req.assignedAgencies?.length ? (
                     <div className="flex flex-wrap gap-1">
@@ -462,9 +647,7 @@ export default function JobRequisitions() {
                         const a = agencyUsers.find(ag => ag.uid === uid);
                         const label = a ? (a.name || a.displayName || a.email || uid) : uid;
                         return (
-                          <span key={uid} className="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full font-medium">
-                            {label}
-                          </span>
+                          <span key={uid} className="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full font-medium">{label}</span>
                         );
                       })}
                     </div>
@@ -477,15 +660,11 @@ export default function JobRequisitions() {
                   {req.createdDate?.toDate?.().toLocaleDateString("en-IN") || "—"}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
-  <div className="flex flex-col">
-    <span className="text-gray-900 font-medium">
-      {req.createdByName || "—"}
-    </span>
-    <span className="text-xs text-gray-500">
-      {req.createdByRole || ""}
-    </span>
-  </div>
-</td>
+                  <div className="flex flex-col">
+                    <span className="text-gray-900 font-medium">{req.createdByName || "—"}</span>
+                    <span className="text-xs text-gray-500">{req.createdByRole || ""}</span>
+                  </div>
+                </td>
                 <td className="px-6 py-4 text-right">
                   <DropdownMenu open={openDropdownId === req.id} onOpenChange={o => setOpenDropdownId(o ? req.id : null)}>
                     <DropdownMenuTrigger asChild>
@@ -493,8 +672,7 @@ export default function JobRequisitions() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => handleEditAction(req.id)}>Edit</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleDeleteAction(req.id)}
-                        className="text-red-600 focus:text-red-600 focus:bg-red-50">Delete</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleDeleteAction(req.id)} className="text-red-600 focus:text-red-600 focus:bg-red-50">Delete</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </td>
@@ -516,10 +694,10 @@ export default function JobRequisitions() {
         </span>
         <div className="flex gap-1">
           {[
-            { l: "<<", a: () => setPage(0),                                                    d: page === 0 },
-            { l: "<",  a: () => setPage(p => Math.max(p - 1, 0)),                              d: page === 0 },
-            { l: ">",  a: () => setPage(p => (p + 1) * rowsPerPage < total ? p + 1 : p),       d: (page + 1) * rowsPerPage >= total },
-            { l: ">>", a: () => setPage(Math.floor((total - 1) / rowsPerPage)),                 d: (page + 1) * rowsPerPage >= total },
+            { l: "<<", a: () => setPage(0),                                               d: page === 0 },
+            { l: "<",  a: () => setPage(p => Math.max(p - 1, 0)),                         d: page === 0 },
+            { l: ">",  a: () => setPage(p => (p + 1) * rowsPerPage < total ? p + 1 : p),  d: (page + 1) * rowsPerPage >= total },
+            { l: ">>", a: () => setPage(Math.floor((total - 1) / rowsPerPage)),            d: (page + 1) * rowsPerPage >= total },
           ].map(b => (
             <button key={b.l} onClick={b.a} disabled={b.d}
               className="w-8 h-8 border rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">{b.l}</button>
@@ -527,19 +705,20 @@ export default function JobRequisitions() {
         </div>
       </div>
 
-      {/* ── Create / Edit Modal ── */}
+      {/* Create / Edit Modal */}
       <Dialog open={isModalOpen} onOpenChange={open => { if (!open) handleModalCancel(); }}>
-        <DialogContent className="sm:max-w-[580px] p-0">
+        <DialogContent className="sm:max-w-[620px] p-0">
           <DialogHeader className="p-6 pb-4">
             <DialogTitle className="text-xl font-bold">
               {editingId ? "Edit Project" : "New Client Project"}
             </DialogTitle>
             <p className="text-sm text-muted-foreground pt-1">
-              Define the role, location, assign agencies, and upload the JD file.
+              Define the role, location, assign agencies, upload the JD, and set interview questions.
             </p>
           </DialogHeader>
 
-          <div className="px-6 pb-6 space-y-5 max-h-[60vh] overflow-y-auto">
+          <div className="px-6 pb-6 space-y-5 max-h-[68vh] overflow-y-auto">
+
             {/* Project Name */}
             <div className="space-y-2">
               <Label>Project Name <span className="text-red-500">*</span></Label>
@@ -598,7 +777,7 @@ export default function JobRequisitions() {
               </div>
             </div>
 
-            {/* ── NEW: Assign Agencies (Admin/HR only) ─────────────────────────── */}
+            {/* Assign Agencies */}
             {isAdminOrHR && (
               <div className="space-y-2">
                 <Label>Assign Agencies</Label>
@@ -607,20 +786,12 @@ export default function JobRequisitions() {
                     <p className="text-sm text-muted-foreground">No agency users found.</p>
                   ) : agencyUsers.map(agency => {
                     const label = agency.name || agency.displayName || agency.email || agency.uid;
-                    const checked = formData.assignedAgencies.includes(agency.uid);
                     return (
                       <div key={agency.uid} className="flex items-center space-x-3">
-                        <Checkbox
-                          id={`agency-${agency.uid}`}
-                          checked={checked}
-                          onCheckedChange={() => toggleAgency(agency.uid)}
-                        />
-                        <Label
-                          htmlFor={`agency-${agency.uid}`}
-                          className="font-normal cursor-pointer text-sm"
-                        >
-                          {label}
-                        </Label>
+                        <Checkbox id={`agency-${agency.uid}`}
+                          checked={formData.assignedAgencies.includes(agency.uid)}
+                          onCheckedChange={() => toggleAgency(agency.uid)} />
+                        <Label htmlFor={`agency-${agency.uid}`} className="font-normal cursor-pointer text-sm">{label}</Label>
                       </div>
                     );
                   })}
@@ -638,7 +809,7 @@ export default function JobRequisitions() {
               <Label>Job Description (JD)</Label>
               <RadioGroup
                 value={formData.jdFileType || "text"}
-                onValueChange={(v) => setFormData(p => ({ ...p, jdFileType: v, jdFileData: "", jdFileName: "" }))}
+                onValueChange={v => setFormData(p => ({ ...p, jdFileType: v, jdFileData: "", jdFileName: "" }))}
                 className="flex gap-6"
               >
                 <div className="flex items-center gap-2">
@@ -650,34 +821,25 @@ export default function JobRequisitions() {
                   <Label htmlFor="jd-manual">Enter Manually</Label>
                 </div>
               </RadioGroup>
-
               {formData.jdFileType === "text" && (
-                <Input
-                  type="file"
-                  accept=".txt"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const text = await file.text();
-                    setFormData(p => ({ ...p, jdFileName: file.name, jdFileData: text, jdFileType: "text" }));
-                  }}
-                />
+                <Input type="file" accept=".txt" onChange={async e => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const text = await file.text();
+                  setFormData(p => ({ ...p, jdFileName: file.name, jdFileData: text, jdFileType: "text" }));
+                }} />
               )}
-                 {/* Show existing file */}
-    {formData.jdFileName && (
-      <p className="text-xs text-muted-foreground">
-        Uploaded: {formData.jdFileName}
-      </p>
-    )}
+              {formData.jdFileName && <p className="text-xs text-muted-foreground">Uploaded: {formData.jdFileName}</p>}
               {formData.jdFileType === "manual" && (
-                <textarea
-                  className="w-full border rounded-md p-3 text-sm"
-                  rows={6}
-                  placeholder="Enter Job Description here..."
+                <Textarea className="w-full" rows={6} placeholder="Enter Job Description here..."
                   value={formData.jdFileData}
-                  onChange={(e) => setFormData(p => ({ ...p, jdFileData: e.target.value }))}
-                />
+                  onChange={e => setFormData(p => ({ ...p, jdFileData: e.target.value }))} />
               )}
+            </div>
+
+            {/* Question Builder */}
+            <div className="border-t pt-4">
+              <QuestionBuilder formData={formData} setFormData={setFormData} />
             </div>
 
             {/* Status */}
@@ -694,11 +856,8 @@ export default function JobRequisitions() {
           </div>
 
           <DialogFooter className="px-6 py-4 bg-gray-50 border-t sm:justify-end gap-2">
-            <Button variant="outline" onClick={handleModalCancel} disabled={isLoading || isProcessingFile}>
-              Cancel
-            </Button>
-            <Button onClick={handleSubmit} disabled={isLoading || isProcessingFile}
-              className="bg-[#8A2BE2] hover:bg-[#7f26cc] text-white">
+            <Button variant="outline" onClick={handleModalCancel} disabled={isLoading || isProcessingFile}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={isLoading || isProcessingFile} className="bg-[#8A2BE2] hover:bg-[#7f26cc] text-white">
               {isLoading
                 ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…</>
                 : editingId ? "Update Project" : "Create Client Project"}

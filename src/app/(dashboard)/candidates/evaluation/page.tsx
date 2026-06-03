@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, UserPlus, Upload, FileCheck, Sparkles, Info } from "lucide-react";
+import { Loader2, UserPlus, Upload, FileCheck, Sparkles, Info, Bot, ClipboardList, Code2, AlignLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { candidateResumeExtraction } from "@/ai/flows/candidate-resume-extraction-flow";
@@ -19,10 +19,22 @@ import { candidateMatchScoring } from "@/ai/flows/candidate-match-scoring-flow";
 import { Textarea } from "@/components/ui/textarea";
 import { logActivity } from "@/lib/activity-logger";
 
+// ─── Types ─────────────────────────────────────────────────────────────────────
+type InterviewMode = "ai" | "manual";
+
+interface ProjectQuestion {
+  type: "theory" | "coding";
+  text: string;
+  languages?: string[];
+  timerMinutes?: number;
+}
+
+// ─── Constants ─────────────────────────────────────────────────────────────────
 const NOTICE_PERIOD_OPTIONS = ["Immediate", "0-15 days", "15-30 days", "30-60 days", "60+ days"];
 const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
 const phoneRegex = /^[6-9]\d{9}$/;
 
+// ─── AI Scoring helper (unchanged) ────────────────────────────────────────────
 async function computeMatchScore(
   resumeFile: { data: string; type: string } | null,
   project: any,
@@ -67,10 +79,6 @@ async function computeMatchScore(
         ? project.jdFileType
         : 'application/pdf';
 
-    console.log('[Evaluation] resolvedJdText length:', resolvedJdText.length);
-    console.log('[Evaluation] resolvedJdFile present:', !!resolvedJdFile);
-    console.log('[Evaluation] resumeFile type:', resumeFile?.type);
-
     const result = await candidateMatchScoring({
       jdText:            resolvedJdText || undefined,
       jdFileDataB64:     resolvedJdFile || undefined,
@@ -92,7 +100,6 @@ async function computeMatchScore(
     const summary = result.summary?.trim() || `Match score: ${score}%`;
 
     return { matchScore: score, matchSummary: summary };
-
   } catch (err) {
     console.error("❌ AI scoring failed:", err);
     return { matchScore: 0, matchSummary:
@@ -100,7 +107,122 @@ async function computeMatchScore(
   }
 }
 
-// ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
+// ─── Interview mode toggle ─────────────────────────────────────────────────────
+function InterviewModeToggle({
+  value,
+  onChange,
+}: {
+  value: InterviewMode;
+  onChange: (v: InterviewMode) => void;
+}) {
+  return (
+    <div className="flex rounded-lg border overflow-hidden">
+      <button
+        type="button"
+        onClick={() => onChange("ai")}
+        className={cn(
+          "flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors",
+          value === "ai"
+            ? "bg-primary text-primary-foreground"
+            : "bg-background text-muted-foreground hover:bg-muted"
+        )}
+      >
+        <Bot className="h-4 w-4" />
+        AI Interview
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("manual")}
+        className={cn(
+          "flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors border-l",
+          value === "manual"
+            ? "bg-primary text-primary-foreground"
+            : "bg-background text-muted-foreground hover:bg-muted"
+        )}
+      >
+        <ClipboardList className="h-4 w-4" />
+        Manual Interview
+      </button>
+    </div>
+  );
+}
+
+// ─── Project questions preview (shown in Manual mode) ─────────────────────────
+function ProjectQuestionsPreview({ questions }: { questions: ProjectQuestion[] }) {
+  if (!questions || questions.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground text-center">
+        No interview questions defined for this project.
+      </div>
+    );
+  }
+
+  const theoryQs = questions.filter(q => q.type === "theory");
+  const codingQs = questions.filter(q => q.type === "coding");
+
+  return (
+    <div className="rounded-md border bg-muted/30 divide-y">
+      <div className="px-4 py-2.5 flex items-center gap-2">
+        <ClipboardList className="h-4 w-4 text-muted-foreground" />
+        <span className="text-sm font-semibold">Interview Questions for this Project</span>
+        <span className="ml-auto text-xs text-muted-foreground">{questions.length} question{questions.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      <div className="px-4 py-3 space-y-3">
+        {theoryQs.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <AlignLeft className="h-3 w-3" /> Theory
+            </div>
+            {theoryQs.map((q, i) => (
+              <div key={i} className="flex gap-2.5 text-sm">
+                <span className="shrink-0 font-mono text-xs text-muted-foreground mt-0.5">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span>{q.text}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {codingQs.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <Code2 className="h-3 w-3 text-blue-500" /> Coding
+            </div>
+            {codingQs.map((q, i) => (
+              <div key={i} className="rounded-md bg-blue-50 border border-blue-200 p-3 space-y-1.5">
+                <div className="flex gap-2.5 text-sm">
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground mt-0.5">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <span>{q.text}</span>
+                </div>
+                <div className="flex flex-wrap gap-3 pl-7 text-xs text-blue-700">
+                  {q.languages && q.languages.length > 0 && (
+                    <span>
+                      Languages:{" "}
+                      {q.languages.map((l, li) => (
+                        <span key={l} className="font-medium">
+                          {l}{li < q.languages!.length - 1 ? ", " : ""}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                  {q.timerMinutes != null && (
+                    <span>Timer: <span className="font-medium">{q.timerMinutes} min</span></span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function CandidateEvaluation() {
   const { user, role, name: loggedInName } = useAuth();
   const [projects, setProjects]             = useState<any[]>([]);
@@ -109,6 +231,9 @@ export default function CandidateEvaluation() {
   const [errors, setErrors]                 = useState<Record<string, string>>({});
   const { toast }                           = useToast();
   const router                              = useRouter();
+
+  // ── NEW: interview mode state ───────────────────────────────────────────────
+  const [interviewMode, setInterviewMode] = useState<InterviewMode>("ai");
 
   const [formData, setFormData] = useState({
     candidateName:        "",
@@ -134,12 +259,8 @@ export default function CandidateEvaluation() {
     if (!role || !user) { setProjects([]); return; }
 
     let q: any;
-
     if (role === "admin" || role === "hr") {
-      q = query(
-        collection(db, "job_requisitions"),
-        where("status", "==", "Active")
-      );
+      q = query(collection(db, "job_requisitions"), where("status", "==", "Active"));
     } else if (role === "agency") {
       q = query(
         collection(db, "job_requisitions"),
@@ -147,7 +268,6 @@ export default function CandidateEvaluation() {
         where("assignedAgencies", "array-contains", user.uid)
       );
     }
-
     if (!q) return;
 
     const unsub = onSnapshot(q, (snap: any) => {
@@ -175,6 +295,8 @@ export default function CandidateEvaluation() {
       } else {
         setFormData(prev => ({ ...prev, projectId: value === "none" ? "none" : "", role: "", location: "" }));
       }
+      // Reset to AI mode whenever the project changes
+      setInterviewMode("ai");
     }
 
     if (errors[field]) setErrors(prev => ({ ...prev, [field]: "" }));
@@ -184,7 +306,6 @@ export default function CandidateEvaluation() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // ── Size guard: 1 MB max ──────────────────────────────────────
     if (file.size > 1 * 1024 * 1024) {
       setErrors(prev => ({
         ...prev,
@@ -194,7 +315,6 @@ export default function CandidateEvaluation() {
       return;
     }
 
-    // ── FIX 3: Block non-PDF/DOCX file types ─────────────────────
     const allowedTypes = [
       'application/pdf',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -207,12 +327,8 @@ export default function CandidateEvaluation() {
       e.target.value = '';
       return;
     }
-    // ─────────────────────────────────────────────────────────────
-
-    console.log("📁 File selected:", file.name, file.type, file.size);
 
     setErrors(prev => ({ ...prev, resumeFile: "" }));
-
     setIsLoadingExtracting(true);
 
     setFormData(prev => ({
@@ -225,25 +341,19 @@ export default function CandidateEvaluation() {
       currentCtc:     "",
       expectedCtc:    "",
       noticePeriod:   "",
-      currentCompany: "",
     }));
 
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = (reader.result as string).split(",")[1];
-      console.log("📄 Base64 length:", base64?.length);
-
       setFormData(prev => ({ ...prev, resumeFile: { name: file.name, type: file.type, data: base64 } }));
 
       try {
-        console.log("🚀 Calling candidateResumeExtraction...");
         const extracted = await candidateResumeExtraction({
           fileName: file.name,
           fileType: file.type,
           fileDataB64: base64,
         });
-
-        console.log("✅ Extracted result:", JSON.stringify(extracted, null, 2));
 
         setFormData(prev => ({
           ...prev,
@@ -254,7 +364,6 @@ export default function CandidateEvaluation() {
           currentCtc:     extracted.currentCtc    ?? "",
           expectedCtc:    extracted.expectedCtc   ?? "",
           noticePeriod:   extracted.noticePeriod  ?? "",
-          currentCompany: extracted.currentCompany ?? "",
           currentLocation:   "",
           permanentLocation: "",
         }));
@@ -287,7 +396,6 @@ export default function CandidateEvaluation() {
     if (!formData.noticePeriod)                e.noticePeriod         = "Notice period is required.";
     if (!formData.isComfortableOnsite)         e.isComfortableOnsite  = "This field is required.";
     if (!formData.resumeFile)                  e.resumeFile           = "Resume is mandatory.";
-
     return e;
   };
 
@@ -300,7 +408,7 @@ export default function CandidateEvaluation() {
     }
     const formErrors = validateForm();
     if (Object.keys(formErrors).length > 0) { setErrors(formErrors); return; }
-
+   
     setIsLoading(true);
     try {
       const emailLower = formData.candidateEmail.trim().toLowerCase();
@@ -310,14 +418,15 @@ export default function CandidateEvaluation() {
         setIsLoading(false);
         return;
       }
-
+   
       const selectedProject =
-      formData.projectId && formData.projectId !== "none"
-        ? projects.find(p => p.id === formData.projectId) || null
-        : null;
+        formData.projectId && formData.projectId !== "none"
+          ? projects.find(p => p.id === formData.projectId) || null
+          : null;
+   
       let matchScore = 0;
       let matchSummary = "No project selected — AI scoring skipped.";
-
+   
       if (selectedProject) {
         const result = await computeMatchScore(
           formData.resumeFile,
@@ -332,20 +441,25 @@ export default function CandidateEvaluation() {
       } else {
         toast({ title: "ℹ️ Scoring Skipped", description: "Project not selected — AI scoring not performed." });
       }
-
-      const autoAdvance = selectedProject && matchScore >= 70;
-
+   
+      // ── Auto-advance only applies in AI mode ──────────────────────────────
+      const autoAdvance = interviewMode === "ai" && selectedProject && matchScore >= 70;
+   
+      // ✅ NEW — generate a token/url for manual mode too
+      const isManualWithProject = interviewMode === "manual" && !!selectedProject;
+   
       let l1Token = '';
       let l1Url   = '';
-
-      if (autoAdvance) {
+   
+      // ✅ CHANGED — was only inside autoAdvance, now also covers manual mode
+      if (autoAdvance || isManualWithProject) {
         l1Token = globalThis.crypto.randomUUID();
         const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
         l1Url   = `${baseUrl}/interview/${l1Token}`;
       }
-
+   
       const { projectId, ...rest } = formData;
-
+   
       const candidateData: any = {
         ...rest,
         candidateEmail:       emailLower,
@@ -353,19 +467,29 @@ export default function CandidateEvaluation() {
         matchScore,
         matchSummary,
         aiScore:              matchScore,
+        interviewMode,
         projectName:          selectedProject?.projectName || "—",
+        projectQuestions:     selectedProject?.questions || [],
         projectLocation:      selectedProject?.location || (selectedProject?.locations || []).join(", ") || formData.location || "—",
         createdDate:          serverTimestamp(),
         createdBy:            user?.uid,
         createdByEmail:       user?.email || '',
         createdByRole:        role,
-        resumeReviewStatus:   autoAdvance ? "Accepted" : "Pending",
-        l1Status:             autoAdvance ? "Scheduled" : "Locked",
-        l2Status:             "Locked",
-        hrStatus:             "Locked",
-        offerStatus:          "Locked",
-        finalStatus:          "In Progress",
-        status:               "Submitted",
+   
+        // ✅ CHANGED — manual mode gets Scheduled too, not Locked
+        resumeReviewStatus: (autoAdvance || isManualWithProject) ? "Accepted" : "Pending",
+                l1Status:           autoAdvance
+                              ? "Scheduled"
+                              : isManualWithProject
+                                ? "Scheduled"      // ✅ NEW
+                                : "Locked",
+        l2Status:           "Locked",
+        hrStatus:           "Locked",
+        offerStatus:        "Locked",
+        finalStatus:        "In Progress",
+        status:             "Submitted",
+   
+        // ✅ CHANGED — autoAdvance fields (same as before)
         ...(autoAdvance && {
           l1InterviewType:       'ai',
           l1ScheduledDate:       new Date().toISOString().split('T')[0],
@@ -377,17 +501,32 @@ export default function CandidateEvaluation() {
           resumeReviewedByName:  loggedInName || user?.displayName || '',
           resumeFeedback:        `Auto-advanced: AI match score ${matchScore}% ≥ 70%`,
         }),
+   
+        // ✅ NEW — manual mode fields stored on candidate doc
+        ...(isManualWithProject && {
+          l1InterviewType:       'manual',
+          l1ScheduledDate:       new Date().toISOString().split('T')[0],
+          l1AIInterviewToken:    l1Token,
+          l1AIInterviewUrl:      l1Url,
+          l1AIInterviewSentAt:   new Date(),
+          l1InterviewerName:     loggedInName || user?.displayName || '',
+          l1InterviewerEmail:    user?.email  || '',
+          resumeReviewedByEmail: user?.email  || '',
+          resumeReviewedByName:  loggedInName || user?.displayName || '',
+          resumeFeedback:        `Auto-accepted: Manual interview mode selected`,
+        }),
       };
-
+   
       if (role === "agency") {
         candidateData.jobRequisitionId = selectedProject?.id || null;
         candidateData.agencyName       = loggedInName;
       } else if (selectedProject) {
         candidateData.jobRequisitionId = selectedProject.id;
       }
-
+   
       const newDocRef = await addDoc(collection(db, "candidates"), candidateData);
-
+   
+      // ── AI mode: create ai_interviews doc + send email (UNCHANGED) ─────────
       if (autoAdvance && l1Token) {
         const resumeText = [
           `Name: ${formData.candidateName}`,
@@ -395,14 +534,14 @@ export default function CandidateEvaluation() {
           `Experience: ${formData.experience} years`,
           `Notice Period: ${formData.noticePeriod || ''}`,
         ].filter(Boolean).join('\n');
-
+   
         const jobDescription =
           selectedProject?.jdText?.trim() ||
           (selectedProject?.jdFileType === 'manual' ? selectedProject?.jdFileData?.trim() : '') ||
           `Role: ${formData.candidateDesignation}`;
-
+   
         const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-
+   
         await addDoc(collection(db, 'ai_interviews'), {
           token:           l1Token,
           candidateId:     newDocRef.id,
@@ -417,8 +556,10 @@ export default function CandidateEvaluation() {
           createdAt:       serverTimestamp(),
           expiresAt,
           interviewUrl:    l1Url,
+          interviewMode:      'ai',
+          projectQuestions:   selectedProject?.questions || [],
         });
-
+   
         try {
           const { sendInterviewEmail } = await import('@/ai/flows/send-interview-email-flow');
           await sendInterviewEmail({
@@ -443,14 +584,83 @@ export default function CandidateEvaluation() {
         } catch (emailErr) {
           console.error('Auto-advance email failed:', emailErr);
         }
-
+   
         toast({
           title:       "🚀 Auto-Advanced to L1!",
           description: `Score ${matchScore}% ≥ 70% — AI interview link sent to ${formData.candidateName}.`,
         });
-      } else {
+      }
+   
+      // ✅ NEW BLOCK — Manual mode: create ai_interviews doc with project questions
+      else if (isManualWithProject && l1Token) {
+        const resumeText = [
+          `Name: ${formData.candidateName}`,
+          `Role: ${formData.candidateDesignation}`,
+          `Experience: ${formData.experience} years`,
+          `Notice Period: ${formData.noticePeriod || ''}`,
+        ].filter(Boolean).join('\n');
+  
+        const jobDescription =
+          selectedProject?.jdText?.trim() ||
+          (selectedProject?.jdFileType === 'manual' ? selectedProject?.jdFileData?.trim() : '') ||
+          `Role: ${formData.candidateDesignation}`;
+  
+        const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  
+        await addDoc(collection(db, 'ai_interviews'), {
+          token:            l1Token,
+          candidateId:      newDocRef.id,
+          candidateName:    formData.candidateName,
+          candidateEmail:   emailLower,
+          jobRole:          formData.candidateDesignation,
+          resumeText,
+          jobDescription,
+          scheduledByUid:   user?.uid    || '',
+          scheduledByName:  loggedInName || '',
+          status:           'pending',
+          createdAt:        serverTimestamp(),
+          expiresAt,
+          interviewUrl:     l1Url,
+          interviewMode:    'manual',
+          projectQuestions: selectedProject?.questions || [],
+        });
+  
+        // ✅ FIX 1 — Send email to candidate with the interview link
+        try {
+          const { sendInterviewEmail } = await import('@/ai/flows/send-interview-email-flow');
+          await sendInterviewEmail({
+            candidateName:     formData.candidateName,
+            candidateEmail:    emailLower,
+            jobRole:           formData.candidateDesignation,
+            experience:        String(formData.experience || ''),
+            location:          formData.currentLocation || '',
+            interviewerName:   loggedInName || '',
+            interviewerEmail:  user?.email  || '',
+            interviewDate:     new Date().toISOString().split('T')[0],
+            interviewTime:     '',
+            schedulingNotes:   `AI interview link: ${l1Url}\n\nPlease complete within 48 hours.`,
+            interviewFeedback: '',
+            stage:             'L1 Interview',
+            senderRole:        'hr',
+            emailType:         'interview_scheduled',
+            candidateId:       newDocRef.id,
+            threadMessageId:   '',
+            interviewLink:     l1Url,
+          });
+        } catch (emailErr) {
+          console.error('Manual interview email failed:', emailErr);
+        }
+  
         toast({
-          title:       matchScore < 70 && selectedProject
+          title:       "✅ Candidate Submitted (Manual Interview)",
+          description: `Interview link sent to ${formData.candidateName}.`,
+        });
+      }
+   
+      // ✅ CHANGED — remaining else (AI mode, score < 70, no project) — same as before
+      else {
+        toast({
+          title: matchScore < 70 && selectedProject
             ? `⚠️ Score ${matchScore}% — Sent for HR Review`
             : "✅ Candidate Submitted",
           description: matchScore < 70 && selectedProject
@@ -458,25 +668,29 @@ export default function CandidateEvaluation() {
             : "Candidate profile created successfully.",
         });
       }
-
+   
       await addDoc(collection(db, "candidate_history"), {
         candidateId: newDocRef.id,
         ...candidateData,
       });
-
+   
       if (user && loggedInName && role) {
         await logActivity({
           userId:     user.uid,
           userName:   loggedInName,
           userRole:   role,
-          action:     autoAdvance ? "Candidate Auto-Advanced to L1" : "Candidate Uploaded",
+          action:     autoAdvance
+            ? "Candidate Auto-Advanced to L1"
+            : interviewMode === "manual"
+              ? "Candidate Uploaded (Manual Interview)"
+              : "Candidate Uploaded",
           stage:      autoAdvance ? "L1 Interview" : "Sourcing",
           targetType: "Candidate",
           targetId:   newDocRef.id,
           targetName: candidateData.candidateName,
         });
       }
-
+   
       router.push("/candidates/history");
     } catch (error: any) {
       console.error("Submission Error:", error);
@@ -485,15 +699,27 @@ export default function CandidateEvaluation() {
       setIsLoading(false);
     }
   };
-
-  const isAgency           = role === "agency";
-  const projectAutoFilled  = !!formData.projectId && formData.projectId !== "none";
-  const selectedProject = projects.find(p => p.id === formData.projectId);
+  
+  // ── Derived values ────────────────────────────────────────────────────────
+  const isAgency          = role === "agency";
+  const selectedProject   = projects.find(p => p.id === formData.projectId);
+  const projectSelected   = !!selectedProject;
 
   const shouldShowFields =
     selectedProject &&
     selectedProject.roles?.length &&
     selectedProject.locations?.length;
+
+  // Parse questions from the selected project
+  const projectQuestions: ProjectQuestion[] = (() => {
+    if (!selectedProject?.questions) return [];
+    return (selectedProject.questions as any[]).map((q: any) => ({
+      type:         q.type ?? "theory",
+      text:         q.text ?? "",
+      languages:    q.languages,
+      timerMinutes: q.timerMinutes,
+    }));
+  })();
 
   return (
     <div className="max-w-3xl mx-auto py-8">
@@ -511,12 +737,11 @@ export default function CandidateEvaluation() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-8">
 
-            {/* ── Resume Upload ─────────────────────────────────────────── */}
+            {/* ── Resume Upload ──────────────────────────────────────────── */}
             <div className="space-y-2">
               <Label className="font-bold flex items-center gap-2">
                 Upload Resume <Sparkles className="w-4 h-4 text-primary" />
               </Label>
-              {/* FIX 2: Added onDragOver + onDrop for drag and drop support */}
               <label
                 className={cn(
                   "flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors",
@@ -559,10 +784,10 @@ export default function CandidateEvaluation() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6">
 
               {/* ── Project selection ──────────────────────────────────── */}
-              <div className="md:col-span-2 space-y-2">
+              <div className="md:col-span-2 space-y-3">
 
                 {isAgency && (
-                  <div className="flex items-start gap-2 p-3 rounded-md bg-blue-50 border border-blue-200 mb-1">
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-blue-50 border border-blue-200">
                     <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
                     <p className="text-xs text-blue-700">
                       <strong>Only projects assigned to you are shown.</strong> Select a project to auto-fill role
@@ -572,7 +797,7 @@ export default function CandidateEvaluation() {
                 )}
 
                 {role === "hr" && (
-                  <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200 mb-1">
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200">
                     <Info className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
                     <p className="text-xs text-amber-700">
                       All active projects (created by Admin or HR) are available for selection.
@@ -609,6 +834,24 @@ export default function CandidateEvaluation() {
                   </SelectContent>
                 </Select>
                 {errors.projectId && <p className="text-xs text-red-500">{errors.projectId}</p>}
+
+                {/* ── Interview mode toggle — only shown when a project is selected ── */}
+                {projectSelected && (
+                  <div className="space-y-2 pt-1">
+                    <Label className="font-bold text-sm">Interview Mode</Label>
+                    <InterviewModeToggle value={interviewMode} onChange={setInterviewMode} />
+                    <p className="text-xs text-muted-foreground">
+                      {interviewMode === "ai"
+                        ? "Candidates scoring ≥ 70% will receive an AI interview link automatically."
+                        : "The interviewer will conduct the session using the questions defined in this project."}
+                    </p>
+                  </div>
+                )}
+
+                {/* ── Manual mode: show project questions ──────────────────── */}
+                {projectSelected && interviewMode === "manual" && (
+                  <ProjectQuestionsPreview questions={projectQuestions} />
+                )}
               </div>
 
               <div className="md:col-span-2"><hr /></div>
@@ -653,14 +896,10 @@ export default function CandidateEvaluation() {
                 <Label className="font-bold">Current Location</Label>
                 <Input
                   value={formData.currentLocation}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    handleInputChange("currentLocation", e.target.value)
-                  }
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("currentLocation", e.target.value)}
                   className={cn({ "border-red-500": errors.currentLocation })}
                 />
-                {errors.currentLocation && (
-                  <p className="text-xs text-red-500">{errors.currentLocation}</p>
-                )}
+                {errors.currentLocation && <p className="text-xs text-red-500">{errors.currentLocation}</p>}
               </div>
 
               {/* Permanent Location */}
@@ -668,17 +907,13 @@ export default function CandidateEvaluation() {
                 <Label className="font-bold">Permanent Location</Label>
                 <Input
                   value={formData.permanentLocation}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    handleInputChange("permanentLocation", e.target.value)
-                  }
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleInputChange("permanentLocation", e.target.value)}
                   className={cn({ "border-red-500": errors.permanentLocation })}
                 />
-                {errors.permanentLocation && (
-                  <p className="text-xs text-red-500">{errors.permanentLocation}</p>
-                )}
+                {errors.permanentLocation && <p className="text-xs text-red-500">{errors.permanentLocation}</p>}
               </div>
 
-              {/* Experience — FIX 1: min="0" to block negative values */}
+              {/* Experience */}
               <div className="space-y-2">
                 <Label className="font-bold">Experience (Years)</Label>
                 <Input
@@ -703,7 +938,7 @@ export default function CandidateEvaluation() {
                 {errors.candidateDesignation && <p className="text-xs text-red-500">{errors.candidateDesignation}</p>}
               </div>
 
-              {/* Current CTC — FIX 1: min="0" to block negative values */}
+              {/* Current CTC */}
               <div className="space-y-2">
                 <Label className="font-bold">Current CTC</Label>
                 <Input
@@ -716,7 +951,7 @@ export default function CandidateEvaluation() {
                 {errors.currentCtc && <p className="text-xs text-red-500">{errors.currentCtc}</p>}
               </div>
 
-              {/* Expected CTC — FIX 1: min="0" to block negative values */}
+              {/* Expected CTC */}
               <div className="space-y-2">
                 <Label className="font-bold">Expected CTC</Label>
                 <Input
@@ -731,24 +966,13 @@ export default function CandidateEvaluation() {
 
               {shouldShowFields && (
                 <>
-                  {/* Project Role */}
                   <div className="space-y-2">
                     <Label className="font-bold">Project Role / Designation</Label>
-                    <Input
-                      value={formData.role}
-                      disabled
-                      className="bg-muted/30 cursor-not-allowed"
-                    />
+                    <Input value={formData.role} disabled className="bg-muted/30 cursor-not-allowed" />
                   </div>
-
-                  {/* Project Location */}
                   <div className="space-y-2">
                     <Label className="font-bold">Project Location</Label>
-                    <Input
-                      value={formData.location}
-                      disabled
-                      className="bg-muted/30 cursor-not-allowed"
-                    />
+                    <Input value={formData.location} disabled className="bg-muted/30 cursor-not-allowed" />
                   </div>
                 </>
               )}
@@ -804,30 +1028,6 @@ export default function CandidateEvaluation() {
           </form>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
-function CheckRow({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '10px',
-      padding: '10px 14px', borderRadius: '8px',
-      background: ok ? '#F0FDF4' : '#F9FAFB',
-      border: `1px solid ${ok ? '#86EFAC' : '#E5E7EB'}`,
-    }}>
-      <div style={{
-        width: '20px', height: '20px', borderRadius: '50%', flexShrink: 0,
-        background: ok ? '#16A34A' : '#E5E7EB',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '11px', color: 'white', fontWeight: 700,
-      }}>
-        {ok ? '✓' : '?'}
-      </div>
-      <span style={{ fontSize: '13px', color: ok ? '#16A34A' : '#6B7280', fontWeight: ok ? 600 : 400 }}>
-        {label}
-      </span>
     </div>
   );
 }

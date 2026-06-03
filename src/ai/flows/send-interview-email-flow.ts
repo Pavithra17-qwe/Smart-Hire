@@ -138,8 +138,8 @@ The SmartHire Team`;
 
 case 'interview_scheduled': {
   const isAIInterview =
-    input.schedulingNotes?.includes('AI interview link:') ||
-    input.schedulingNotes?.includes('Interview link:');
+  input.schedulingNotes?.includes('AI interview link:') ||
+  input.schedulingNotes?.includes('Interview link:');
 
   if (isAIInterview) {
     // Extract just the URL from schedulingNotes
@@ -149,11 +149,11 @@ case 'interview_scheduled': {
 
     return `Hi ${candidateName},
 
-Congratulations! You have been shortlisted for the ${jobRole} position.
-
-Please complete your AI-powered video interview using the link below:
-
-${interviewUrl}
+    Congratulations! You have been shortlisted for the ${jobRole} position.
+    
+    Please complete your AI-powered video interview using the link below:
+    
+    ${interviewUrl}
 
 IMPORTANT INSTRUCTIONS:
   • This link is valid for 48 hours only
@@ -172,18 +172,18 @@ Best regards,
 The SmartHire Team`;
   }
 
-  // Normal interview schedule (L2, HR round)
-  return `Hi,
+    // Normal interview schedule (L2, HR round)
+    return `Hi,
 
-This is to inform you that the ${stage} has been scheduled.
-
-Candidate   : ${candidateName}
-Job Role    : ${jobRole}
-Date        : ${interviewDate}
-Time Slot   : ${interviewTime}
-${schedulingNotes
-  ? `\nNotes :\n  AI interview link has been sent to the candidate successfully.\n`
-  : ''}
+    This is to inform you that the ${stage} has been scheduled.
+    
+    Candidate   : ${candidateName}
+    Job Role    : ${jobRole}
+    Date        : ${interviewDate}
+    Time Slot   : ${interviewTime}
+    ${schedulingNotes
+      ? `\nNotes :\n  ${schedulingNotes}\n`
+      : ''}
 Handled by :
   - Name  : ${interviewerName}
   - Role  : HR
