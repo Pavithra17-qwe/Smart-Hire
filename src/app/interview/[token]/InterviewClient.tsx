@@ -968,36 +968,63 @@ const onUnload = (e: BeforeUnloadEvent) => {
     } catch (err) {
       console.warn('[Submit] Frame extraction failed (non-fatal):', err);
     }
-
     setSubmitStep('Uploading your interview recording...');
     let singleVideoUrl = '';
     try {
-      const formData = new FormData();
-      formData.append('video',          mergedBlob, 'full-interview.webm');
-      formData.append('token',          candidate.token);
-      formData.append('candidateId',    candidate.candidateId);
-      formData.append('questionIdx',    '0');
-      formData.append('candidateName',  candidate.candidateName);
-      formData.append('candidateEmail', candidate.candidateEmail);
-      formData.append('questionText',   'Full Interview Recording');
-      formData.append('isMerged',       'true');
-      formData.append('transcripts',    JSON.stringify(speechTranscriptRef.current)); // ← ADDED
-      console.log('[Submit] Transcripts being sent:', speechTranscriptRef.current);   // ← ADDED
-      
-        const res = await fetch('/api/interview/complete', { method: 'POST', body: formData });
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => ({}));
-          console.error('[Submit] complete API failed:', res.status, errBody);
-          // Don't throw — continue to scoring even if upload fails
-        } else {
-          const data = await res.json();
-          singleVideoUrl = data.videoUrl || '';
-          console.log('[Submit] Upload succeeded:', singleVideoUrl);
-        }
-      } catch (err) {
-        console.error('[Submit] complete API threw:', err);
-        // Non-fatal — continue to scoring
-      }
+      // Step A: get signature (tiny request, no video)
+      setSubmitStep('Preparing secure upload...');
+      const sigRes = await fetch('/api/interview/sign-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token:          candidate.token,
+          candidateId:    candidate.candidateId,
+          candidateName:  candidate.candidateName,
+          candidateEmail: candidate.candidateEmail,
+        }),
+      });
+      const sigData = await sigRes.json();
+    
+      // Step B: upload video directly to Cloudinary (bypasses Vercel)
+      setSubmitStep('Uploading your interview recording...');
+      const cloudForm = new FormData();
+      cloudForm.append('file',       mergedBlob, 'full-interview.webm');
+      cloudForm.append('signature',  sigData.signature);
+      cloudForm.append('timestamp',  String(sigData.timestamp));
+      cloudForm.append('folder',     sigData.folder);
+      cloudForm.append('public_id',  sigData.public_id);
+      cloudForm.append('api_key',    sigData.api_key);
+      cloudForm.append('overwrite',  'false');
+      cloudForm.append('tags',       `interview,candidate_${candidate.candidateId},token_${candidate.token}`);
+    
+      const cloudRes = await fetch(
+        `https://api.cloudinary.com/v1_1/${sigData.cloud_name}/video/upload`,
+        { method: 'POST', body: cloudForm }
+      );
+      const cloudData = await cloudRes.json();
+      singleVideoUrl = cloudData.secure_url || '';
+      console.log('[Submit] Cloudinary direct upload success:', singleVideoUrl);
+    
+      // Step C: save URL + transcripts to Firestore via API (tiny JSON)
+      setSubmitStep('Saving your responses...');
+      const saveRes = await fetch('/api/interview/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoUrl:       singleVideoUrl,
+          token:          candidate.token,
+          candidateId:    candidate.candidateId,
+          candidateName:  candidate.candidateName,
+          candidateEmail: candidate.candidateEmail,
+          transcripts:    speechTranscriptRef.current,  // ← speech goes here
+          isMerged:       true,
+        }),
+      });
+      console.log('[Submit] Transcripts sent:', speechTranscriptRef.current);
+    
+    } catch (err) {
+      console.error('[Submit] Upload failed:', err);
+    }
 
     const uploadedUrls = allQs.map(() => singleVideoUrl);
     setUploadedVideoUrls(uploadedUrls);
