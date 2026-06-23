@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { FieldValue } from 'firebase-admin/firestore';
+import { analyzeFrames } from '@/lib/analyzeVideoFrames';
 
 export async function POST(req: NextRequest) {
 
@@ -21,6 +22,7 @@ export async function POST(req: NextRequest) {
       faceVisiblePct:    clientFacePct,
       timings,
     } = body;
+    
 
     candidateId = body.candidateId || '';
 
@@ -55,38 +57,29 @@ export async function POST(req: NextRequest) {
     } = body.gazeBreakdown ?? { center: 0, down: 0, side: 0, absent: 0 };
 
    // ── STEP 1: Server-side video analysis (Claude Vision via direct frames) ──
+// ── STEP 1: Server-side video analysis (direct function call) ────────────────
 let videoEyeScore:   number  = -1;
 let videoBodyScore:  number  = -1;
 let videoFacePct:    number  = -1;
 let videoGaze       = { center: 0, down: 0, side: 0, absent: 0 };
 let videoSuspicion: string[] = [];
 let videoAnalysisMethod      = 'none';
- 
-// videoFrames sent directly from client (base64 JPEG array)
+
 const videoFrames: string[] = Array.isArray(body.videoFrames) ? body.videoFrames : [];
- 
+console.log('[Score] videoFrames received:', videoFrames.length); // ← ADD THIS
+
 if (videoFrames.length >= 2) {
   try {
-    console.log(`[Score] Sending ${videoFrames.length} frames to analyze-video...`);
-    const baseUrl     = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const analysisRes = await fetch(`${baseUrl}/api/interview/analyze-video`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ frames: videoFrames }),
-      signal:  AbortSignal.timeout(60000), // 60s timeout
-    });
- 
-    if (analysisRes.ok) {
-      const analysisData = await analysisRes.json();
-      if (typeof analysisData.eyeContactScore === 'number' && analysisData.eyeContactScore >= 0) {
-        videoEyeScore       = analysisData.eyeContactScore;
-        videoBodyScore      = analysisData.bodyLanguageScore;
-        videoFacePct        = analysisData.faceVisiblePct;
-        videoGaze           = analysisData.gazeBreakdown;
-        videoSuspicion      = analysisData.suspicionFlags || [];
-        videoAnalysisMethod = analysisData.method;
-        console.log('[Score] Video analysis succeeded:', { eye: videoEyeScore, body: videoBodyScore });
-      }
+    console.log(`[Score] Analyzing ${videoFrames.length} frames directly...`);
+    const analysisData = await analyzeFrames(videoFrames);
+    if (analysisData.eyeContactScore >= 0) {
+      videoEyeScore       = analysisData.eyeContactScore;
+      videoBodyScore      = analysisData.bodyLanguageScore;
+      videoFacePct        = analysisData.faceVisiblePct;
+      videoGaze           = analysisData.gazeBreakdown;
+      videoSuspicion      = analysisData.suspicionFlags || [];
+      videoAnalysisMethod = analysisData.method;
+      console.log('[Score] Video analysis succeeded:', { eye: videoEyeScore, body: videoBodyScore });
     }
   } catch (err: any) {
     console.warn('[Score] Video analysis failed (non-fatal):', err.message);

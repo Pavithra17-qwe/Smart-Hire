@@ -926,30 +926,33 @@ const onUnload = (e: BeforeUnloadEvent) => {
   //      Used state snapshot `questions` which might not match questionsRef.
   //      Also used optional-chain on array which silently returned undefined.
   // NEW: Uses questionsRef.current length + Record object access.
-  const handleSubmit = async (currentQuestions: Question[]) => {
-    let lastBlob: Blob | null = null;
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      lastBlob = await stopRecording();
-    }
-    const allQs = questionsRef.current.map((q, i) => {
-      if (i === currentQIdxRef.current && lastBlob && !q.recorded)
-        return { ...q, recorded: true, blob: lastBlob };
-      return q;
-    });
-    setQuestions(allQs);
+// REPLACE WITH:
+const handleSubmit = async (currentQuestions: Question[]) => {
+  // ── stopRecording FIRST so MediaPipe captures the full session ──────
+  let lastBlob: Blob | null = null;
+  if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+    lastBlob = await stopRecording();
+  }
+  const allQs = questionsRef.current.map((q, i) => {
+    if (i === currentQIdxRef.current && lastBlob && !q.recorded)
+      return { ...q, recorded: true, blob: lastBlob };
+    return q;
+  });
+  setQuestions(allQs);
 
-    const mediaPipeResult = stopCapture();
-    mediaPipeResultRef.current = mediaPipeResult ?? {
-      eyeContactScore:   -1,
-      bodyLanguageScore: -1,
-      faceVisiblePct:    -1,
-      suspicionFlags:    [],
-      gazeBreakdown:     { center: 0, down: 0, side: 0, absent: 0 },
-    };
+  // ── stopCapture AFTER stopRecording so scores are finalized ─────────
+  const mediaPipeResult = stopCapture();
+  mediaPipeResultRef.current = mediaPipeResult ?? {
+    eyeContactScore:   -1,
+    bodyLanguageScore: -1,
+    faceVisiblePct:    -1,
+    suspicionFlags:    [],
+    gazeBreakdown:     { center: 0, down: 0, side: 0, absent: 0 },
+  };
 
-    setIsSubmitting(true);
-    sessionLockRef.current = true;
-    stopAllMedia();
+  setIsSubmitting(true);
+  sessionLockRef.current = true;
+  stopAllMedia();
     setSubmitStep('Uploading your interview recording...');
 
     const validBlobs = allQs

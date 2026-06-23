@@ -28,6 +28,7 @@ const StageStatusBadge = ({ status }: { status: Status }) => {
     else if (normalized === "released")                                               color = "!bg-orange-100 !text-orange-700";
     else if (normalized === "in progress")                                            color = "!bg-purple-100 !text-purple-700";
     else if (normalized === "locked")                                                 color = "!bg-gray-100 !text-gray-500";
+    else if (normalized === "on hold")                                                color = "!bg-amber-100 !text-amber-700";
 
     return <Badge className={`capitalize ${color}`}>{displayStatus}</Badge>;
 };
@@ -35,11 +36,11 @@ const StageStatusBadge = ({ status }: { status: Status }) => {
 const FINAL_STATUSES = ['In Progress', 'Completed', 'Rejected'];
 
 const STAGE_OPTIONS = {
-    resumeReview: ['Pending', 'Accepted', 'Rejected'],
-    l1:    ['Pending', 'Scheduled', 'Selected', 'Rejected'],
-    l2:    ['Pending', 'Scheduled', 'Selected', 'Rejected'],
-    hr:    ['Pending', 'Scheduled', 'Selected', 'Rejected'],
-    offer: ['Pending', 'Released', 'Accepted', 'Rejected'],
+    resumeReview: ['Pending', 'Accepted', 'Rejected', 'On Hold'],
+    l1:    ['Pending', 'Scheduled', 'Selected', 'Rejected', 'On Hold'],
+    l2:    ['Pending', 'Scheduled', 'Selected', 'Rejected', 'On Hold'],
+    hr:    ['Pending', 'Scheduled', 'Selected', 'Rejected', 'On Hold'],
+    offer: ['Pending', 'Released', 'Accepted', 'Rejected', 'On Hold'],
 };
 
 const INITIAL_FILTERS = {

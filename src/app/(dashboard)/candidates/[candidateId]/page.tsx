@@ -99,7 +99,8 @@ type CandidateHistoryItem = {
 type Status =
   | 'Pending' | 'Accepted' | 'Rejected' | 'Scheduled'
   | 'Selected' | 'Offer Sent' | 'Joined' | 'In Progress'
-  | 'Locked' | 'Released' | 'Panel Assigned' | 'Panel Reviewed';
+  | 'Locked' | 'Released' | 'Panel Assigned' | 'Panel Reviewed'
+  | 'On Hold';
 
 type UserRole = 'admin' | 'hr' | 'agency' | 'panel';
 
@@ -464,10 +465,11 @@ const StageShell: React.FC<{ title: string; status: string; isLocked: boolean; c
   const isActive   = !isLocked && ['Pending', 'Scheduled', 'Released'].includes(normalized.name);
 
   // Map 'Expired' to a red badge manually since normalizeStatus may not know it
-  const displayBadge = status === 'Expired'
+  const displayBadge = status === 'On Hold'
+    ? <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px', background: '#FEF3C7', color: '#92400E' }}>⏸ On Hold</span>
+    : status === 'Expired'
     ? <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px', background: '#FEE2E2', color: '#991B1B' }}>Expired</span>
     : <Badge className={normalized.color}>{isLocked ? 'Locked' : normalized.name}</Badge>;
-
   return (
     <div style={{
       borderRadius: '12px',
@@ -570,6 +572,7 @@ const ResumeReviewCard: React.FC<{
     'Panel Reviewed': { label: 'Panel Reviewed', bg: '#FEF3C7', color: '#92400E' },
     Accepted:         { label: 'Accepted',       bg: '#D1FAE5', color: '#065F46' },
     Rejected:         { label: 'Rejected',       bg: '#FEE2E2', color: '#991B1B' },
+    'On Hold':        { label: 'On Hold',        bg: '#FEF3C7', color: '#92400E' },
   };
   const badge = badgeMap[status] || { label: status, bg: '#F3F4F6', color: '#374151' };
   const aiScore = (candidate as any).matchScore ?? (candidate as any).aiScore ?? null;
@@ -671,8 +674,7 @@ const ResumeReviewCard: React.FC<{
             <UpdatedByBadge history={history} stage="Resume Review" actions={['accept', 'reject']} />
           </div>
         )}
-
-        {isHR && status === 'Pending' && (
+{isHR && status === 'Pending' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <div>
               <p style={{ fontSize: '11px', fontWeight: '600', color: '#6B7280', marginBottom: '5px' }}>HR Feedback <span style={{ color: '#DC2626' }}>*</span></p>
@@ -688,6 +690,16 @@ const ResumeReviewCard: React.FC<{
               <Button variant="destructive" onClick={handleHRReject}>✕ Reject</Button>
               <Button
                 onClick={() => {
+                  if (!feedback.trim()) { setErr('Note is required to put on hold.'); return; }
+                  setErr('');
+                  onAction('hold', { feedback: feedback.trim() });
+                }}
+                style={{ background: '#F59E0B', color: 'white', fontWeight: 'bold' }}
+              >
+                ⏸ Hold
+              </Button>
+              <Button
+                onClick={() => {
                   if (!feedback.trim()) { setErr('HR feedback is required.'); return; }
                   setErr('');
                   onAction('accept', { feedback: feedback.trim() });
@@ -700,7 +712,20 @@ const ResumeReviewCard: React.FC<{
           </div>
         )}
 
-        {!isHR && status === 'Pending' && (
+        {isHR && status === 'On Hold' && (
+          <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: 0 }}>⏸ On Hold</p>
+            {(candidate as any).resumeHoldFeedback && (
+              <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>"{(candidate as any).resumeHoldFeedback}"</p>
+            )}
+            <UpdatedByBadge history={history} stage="Resume Review" actions={['hold']} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Button onClick={() => onAction('resume', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>▶ Resume</Button>
+            </div>
+          </div>
+        )}
+
+        {!isHR && (status === 'Pending' || status === 'On Hold') && (
           <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Waiting for HR to review the resume.</p>
         )}
       </div>
@@ -1176,7 +1201,8 @@ const AIScoreReport: React.FC<{
   
 
       {/* ── HR Decision panel (scores available) ── */}
-      {role === 'hr' && !isDone && !evaluationFailed && (
+      {/* ── HR Decision panel (scores available) ── */}
+      {role === 'hr' && !isDone && !evaluationFailed && status !== 'On Hold' && (
         <div style={{ margin: '0 16px 16px', background: '#F8F7FF', borderRadius: '10px', padding: '14px', border: '1px solid #DDD6FE' }}>
           <p style={{ fontSize: '13px', fontWeight: 700, color: '#4C1D95', margin: '0 0 4px' }}>👤 Your Decision</p>
           <p style={{ fontSize: '12px', color: '#6B7280', margin: '0 0 10px' }}>
@@ -1202,6 +1228,10 @@ const AIScoreReport: React.FC<{
               onAction('ai-reject', { feedback: hrNotes.trim(), aiScore: overallScore ?? 0 });
             }}>✕ Reject</Button>
             <Button onClick={() => {
+              if (!hrNotes.trim()) { setHrErr('Note is required to put on hold.'); return; }
+              onAction('hold', { feedback: hrNotes.trim() });
+            }} style={{ background: '#F59E0B', color: 'white', fontWeight: 'bold' }}>⏸ Hold</Button>
+            <Button onClick={() => {
               if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
               onAction('ai-select', { feedback: hrNotes.trim(), aiScore: overallScore ?? 0 });
             }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L1 Technical Round</Button>
@@ -1209,8 +1239,23 @@ const AIScoreReport: React.FC<{
         </div>
       )}
 
+      {/* ── On Hold (scores available) ── */}
+      {role === 'hr' && !isDone && !evaluationFailed && status === 'On Hold' && (
+        <div style={{ margin: '0 16px 16px', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: 0 }}>⏸ On Hold</p>
+          {(candidate as any).l1HoldFeedback && (
+            <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>"{(candidate as any).l1HoldFeedback}"</p>
+          )}
+          <UpdatedByBadge history={history} stage="L1 Interview" actions={['hold']} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button onClick={() => onAction('resume', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>▶ Resume</Button>
+          </div>
+        </div>
+      )}
+
       {/* ── HR Decision panel (evaluation failed) ── */}
-      {role === 'hr' && !isDone && evaluationFailed && (
+     {/* ── HR Decision panel (evaluation failed) ── */}
+     {role === 'hr' && !isDone && evaluationFailed && status !== 'On Hold' && (
         <div style={{ margin: '0 16px 16px', background: '#FFF8F8', borderRadius: '10px', padding: '14px', border: '1px solid #FECACA' }}>
           <p style={{ fontSize: '13px', fontWeight: 700, color: '#991B1B', margin: '0 0 4px' }}>👤 Manual Decision Required</p>
           <p style={{ fontSize: '12px', color: '#6B7280', margin: '0 0 10px' }}>
@@ -1236,9 +1281,27 @@ const AIScoreReport: React.FC<{
               onAction('ai-reject', { feedback: hrNotes.trim(), aiScore: 0 });
             }}>✕ Reject</Button>
             <Button onClick={() => {
+              if (!hrNotes.trim()) { setHrErr('Note is required to put on hold.'); return; }
+              onAction('hold', { feedback: hrNotes.trim() });
+            }} style={{ background: '#F59E0B', color: 'white', fontWeight: 'bold' }}>⏸ Hold</Button>
+            <Button onClick={() => {
               if (!hrNotes.trim()) { setHrErr('HR notes are required.'); return; }
               onAction('ai-select', { feedback: hrNotes.trim(), aiScore: 0 });
             }} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>✓ Move to L1 Technical Round </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── On Hold (evaluation failed path) ── */}
+      {role === 'hr' && !isDone && evaluationFailed && status === 'On Hold' && (
+        <div style={{ margin: '0 16px 16px', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: 0 }}>⏸ On Hold</p>
+          {(candidate as any).l1HoldFeedback && (
+            <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>"{(candidate as any).l1HoldFeedback}"</p>
+          )}
+          <UpdatedByBadge history={history} stage="L1 Interview" actions={['hold']} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button onClick={() => onAction('resume', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>▶ Resume</Button>
           </div>
         </div>
       )}
@@ -1304,6 +1367,7 @@ const InterviewStageCard: React.FC<{
   const savedSlot     = (candidate as any)[slotKey];
   const savedNotes    = (candidate as any)[notesKey];
   const savedFeedback = (candidate as any)[fbKey];
+  const savedHoldFeedback = (candidate as any)[`${prefix}HoldFeedback`];
   const assignedPanel = (candidate as any)[panelUidKey];
   const panelName     = (candidate as any)[panelNmKey];
 
@@ -1691,18 +1755,54 @@ const InterviewStageCard: React.FC<{
           </div>
         </div>
       )}
-
-      {canPanelFeedback && (
+{canPanelFeedback && (
         <div style={{ background: '#F0FDF4', borderRadius: '10px', padding: '14px', border: '1px solid #86EFAC' }}>
           <p style={{ fontWeight: 'bold', fontSize: '13px', color: '#065F46', marginBottom: '4px' }}>Submit Interview Feedback</p>
           <Textarea placeholder="Enter your technical interview feedback (mandatory)…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }} style={{ resize: 'vertical', minHeight: '90px' }} />
           {fbErr && <p style={errS}><AlertCircle className="h-3 w-3" />{fbErr}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
             <Button variant="destructive" onClick={() => handlePanelDecision('panel-reject')}>✕ Reject</Button>
+            <Button onClick={() => {
+              if (!feedback.trim()) { setFbErr('Note is required to put on hold.'); return; }
+              setFbErr('');
+              onAction('hold', { feedback: feedback.trim() });
+            }} style={{ background: '#F59E0B', color: 'white', fontWeight: 'bold' }}>⏸ Hold</Button>
             <Button variant="default" onClick={() => handlePanelDecision('panel-select')} style={{ background: '#059669', color: 'white' }}>✓ Move to {nextStageLabel}</Button>
           </div>
         </div>
       )}
+
+     {/* Panel On Hold view */}
+{isAssignedPanel && status === 'On Hold' && (
+  <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+    <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: 0 }}>⏸ On Hold</p>
+    {savedHoldFeedback && (
+      <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>"{savedHoldFeedback}"</p>
+    )}
+    <UpdatedByBadge history={history} stage={stageKey === 'l2' ? 'L2 Interview' : title} actions={['hold']} />
+    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <Button onClick={() => onAction('resume', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>▶ Resume</Button>
+    </div>
+  </div>
+)}
+
+{/* HR On Hold view — full access for L1 and L2, read-only for others */}
+{isHR && status === 'On Hold' && (
+  (stageKey === 'l1' || stageKey === 'l2') ? (
+    <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: 0 }}>⏸ On Hold</p>
+      {savedHoldFeedback && (
+        <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>"{savedHoldFeedback}"</p>
+      )}
+      <UpdatedByBadge history={history} stage={stageKey === 'l2' ? 'L2 Interview' : title} actions={['hold']} />
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <Button onClick={() => onAction('resume', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>▶ Resume</Button>
+      </div>
+    </div>
+  ) : (
+    <ReadOnlyNote msg="This candidate is currently on hold by the assigned panel member." />
+  )
+)}
 
       {isHR && status === 'Scheduled' && (candidate as any).l1InterviewType !== 'ai' && (
         <ReadOnlyNote msg="Waiting for the assigned panel member to submit their feedback and decision." />
@@ -1798,18 +1898,37 @@ const HRRoundCard: React.FC<{
           </div>
         </div>
       )}
-      {isHR && status === 'Scheduled' && (
+     {isHR && status === 'Scheduled' && (
         <>
           <p style={{ ...lbl, marginBottom: '2px' }}>Interview Feedback <span style={{ color: '#DC2626' }}>*</span></p>
           <Textarea placeholder="Enter post-HR-round feedback (mandatory)…" value={feedback} onChange={e => { setFeedback(e.target.value); if (e.target.value.trim()) setFbErr(''); }} style={{ resize: 'vertical', minHeight: '90px' }} />
           {fbErr && <p style={errS}><AlertCircle className="h-3 w-3" />{fbErr}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
             <Button variant="destructive" onClick={() => handleDecide('reject')}>✕ Reject</Button>
+            <Button onClick={() => {
+              if (!feedback.trim()) { setFbErr('Note is required to put on hold.'); return; }
+              setFbErr('');
+              onAction('hold', { feedback: feedback.trim() });
+            }} style={{ background: '#F59E0B', color: 'white', fontWeight: 'bold' }}>⏸ Hold</Button>
             <Button variant="default"     onClick={() => handleDecide('select')}>✓ Move to Offer</Button>
           </div>
         </>
       )}
-      {!isHR && status !== 'Locked' && <ReadOnlyNote msg="Only HR can manage the HR Round." />}
+
+      {isHR && status === 'On Hold' && (
+        <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: 0 }}>⏸ On Hold</p>
+          {(candidate as any).hrHoldFeedback && (
+            <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>"{(candidate as any).hrHoldFeedback}"</p>
+          )}
+          <UpdatedByBadge history={history} stage="HR Round" actions={['hold']} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button onClick={() => onAction('resume', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>▶ Resume</Button>
+          </div>
+        </div>
+      )}
+
+      {!isHR && status !== 'Locked' && status !== 'On Hold' && <ReadOnlyNote msg="Only HR can manage the HR Round." />}
     </StageShell>
   );
 };
@@ -1864,11 +1983,30 @@ const OfferStageCard: React.FC<{
           {offerError && <p style={errS}><AlertCircle className="h-3 w-3" />{offerError}</p>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
             <Button variant="destructive" onClick={() => handleOfferAction('offer-reject')}>✕ Mark Rejected</Button>
+            <Button onClick={() => {
+              if (!offerFeedback.trim()) { setOfferError('Note is required to put on hold.'); return; }
+              setOfferError('');
+              onAction('hold', { feedback: offerFeedback.trim() });
+            }} style={{ background: '#F59E0B', color: 'white', fontWeight: 'bold' }}>⏸ Hold</Button>
             <Button variant="default"     onClick={() => handleOfferAction('offer-accept')}>✓ Mark Accepted</Button>
           </div>
         </>
       )}
-      {!isHR && status !== 'Locked' && status !== 'Released' && <ReadOnlyNote msg="Only HR can manage the Offer Stage." />}
+
+      {isHR && status === 'On Hold' && (
+        <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '10px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <p style={{ fontSize: '13px', fontWeight: 700, color: '#92400E', margin: 0 }}>⏸ On Hold</p>
+          {(candidate as any).offerHoldFeedback && (
+            <p style={{ fontSize: '12px', color: '#78350F', margin: 0 }}>"{(candidate as any).offerHoldFeedback}"</p>
+          )}
+          <UpdatedByBadge history={history} stage="Offer Stage" actions={['hold']} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button onClick={() => onAction('resume', {})} style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}>▶ Resume</Button>
+          </div>
+        </div>
+      )}
+
+      {!isHR && status !== 'Locked' && status !== 'Released' && status !== 'On Hold' && <ReadOnlyNote msg="Only HR can manage the Offer Stage." />}
     </StageShell>
   );
 };
@@ -2016,6 +2154,12 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
         } else if (action === 'reject') {
           updateData = { resumeReviewStatus: 'Rejected', resumeFeedback: payload.feedback || (candidate as any).resumePanelFeedback || '', finalStatus: 'Rejected', l1Status: 'Locked', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
+        } else if (action === 'hold') {
+          updateData = { resumeReviewStatus: 'On Hold', resumeHoldFeedback: payload.feedback, resumeReviewPrevStatus: candidate.resumeReviewStatus };
+          historyData.status = 'On Hold';
+        } else if (action === 'resume') {
+          updateData = { resumeReviewStatus: (candidate as any).resumeReviewPrevStatus || 'Pending', resumeHoldFeedback: null };
+          historyData.status = 'Resumed';
         }
         break;
 
@@ -2123,6 +2267,12 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
         } else if (action === 'panel-reject') {
           updateData = { l1Status: 'Rejected', l1Feedback: payload.feedback, finalStatus: 'Rejected', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
+        } else if (action === 'hold') {
+          updateData = { l1Status: 'On Hold', l1HoldFeedback: payload.feedback, l1PrevStatus: candidate.l1Status };
+          historyData.status = 'On Hold';
+        } else if (action === 'resume') {
+          updateData = { l1Status: (candidate as any).l1PrevStatus || 'Scheduled', l1HoldFeedback: null };
+          historyData.status = 'Resumed';
         }
         break;
 
@@ -2136,6 +2286,12 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
         } else if (action === 'panel-reject') {
           updateData = { l2Status: 'Rejected', l2Feedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
           historyData.status = 'Rejected';
+        } else if (action === 'hold') {
+          updateData = { l2Status: 'On Hold', l2HoldFeedback: payload.feedback, l2PrevStatus: candidate.l2Status };
+          historyData.status = 'On Hold';
+        } else if (action === 'resume') {
+          updateData = { l2Status: (candidate as any).l2PrevStatus || 'Scheduled', l2HoldFeedback: null };
+          historyData.status = 'Resumed';
         }
         break;
 
@@ -2160,6 +2316,12 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
   } else if (action === 'panel-reject') {
     updateData = { l2ManagerStatus: 'Rejected', l2ManagerFeedback: payload.feedback, finalStatus: 'Rejected', hrStatus: 'Locked', offerStatus: 'Locked' };
     historyData.status = 'Rejected';
+  } else if (action === 'hold') {
+    updateData = { l2ManagerStatus: 'On Hold', l2ManagerHoldFeedback: payload.feedback, l2ManagerPrevStatus: (candidate as any).l2ManagerStatus };
+    historyData.status = 'On Hold';
+  } else if (action === 'resume') {
+    updateData = { l2ManagerStatus: (candidate as any).l2ManagerPrevStatus || 'Scheduled', l2ManagerHoldFeedback: null };
+    historyData.status = 'Resumed';
   }
   break;
 
@@ -2170,6 +2332,12 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
         } else if (action === 'select') {
           updateData = { hrStatus: 'Selected', hrFeedback: payload.feedback, offerStatus: 'Pending' };
           historyData.status = 'Selected';
+        } else if (action === 'hold') {
+          updateData = { hrStatus: 'On Hold', hrHoldFeedback: payload.feedback, hrPrevStatus: candidate.hrStatus };
+          historyData.status = 'On Hold';
+        } else if (action === 'resume') {
+          updateData = { hrStatus: (candidate as any).hrPrevStatus || 'Scheduled', hrHoldFeedback: null };
+          historyData.status = 'Resumed';
         } else {
           updateData = { hrStatus: 'Rejected', hrFeedback: payload.feedback, finalStatus: 'Rejected', offerStatus: 'Locked' };
           historyData.status = 'Rejected';

@@ -11,11 +11,12 @@ export interface Candidate {
   lastUpdated?: Timestamp;
 
   // Stage Statuses
-  resumeReviewStatus?: 'Pending' | 'Accepted' | 'Rejected';
-  l1Status?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected';
-  l2Status?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected';
-  hrStatus?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected';
-  offerStatus?: 'Locked' | 'Pending' | 'Released' | 'Accepted' | 'Rejected';
+  resumeReviewStatus?: 'Pending' | 'Accepted' | 'Rejected' | 'Panel Assigned' | 'Panel Reviewed' | 'On Hold';
+  l1Status?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected' | 'On Hold';
+  l2Status?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected' | 'On Hold';
+  l2ManagerStatus?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected' | 'On Hold';
+  hrStatus?: 'Locked' | 'Pending' | 'Scheduled' | 'Selected' | 'Rejected' | 'On Hold';
+  offerStatus?: 'Locked' | 'Pending' | 'Released' | 'Accepted' | 'Rejected' | 'On Hold';
   finalStatus?: string;
 
   // Feedback
