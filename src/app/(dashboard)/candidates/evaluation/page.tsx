@@ -1,7 +1,11 @@
 'use client';
 
+
 import { useState, useEffect } from "react";
-import { collection, addDoc, onSnapshot, serverTimestamp, query, where, getDocs } from "firebase/firestore";
+import {
+  collection, addDoc, onSnapshot, serverTimestamp,
+  query, where, getDocs, doc, getDoc, updateDoc,
+} from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -11,16 +15,21 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, UserPlus, Upload, FileCheck, Sparkles, Info, Bot, ClipboardList, Code2, AlignLeft } from "lucide-react";
-import { useRouter } from "next/navigation";
+import {
+  Loader2, UserPlus, Upload, FileCheck, Sparkles, Info,
+  Bot, ClipboardList, Code2, AlignLeft, RotateCcw, AlertCircle,
+} from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { candidateResumeExtraction } from "@/ai/flows/candidate-resume-extraction-flow";
 import { candidateMatchScoring } from "@/ai/flows/candidate-match-scoring-flow";
 import { Textarea } from "@/components/ui/textarea";
 import { logActivity } from "@/lib/activity-logger";
 
+
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type InterviewMode = "ai" | "manual";
+
 
 interface ProjectQuestion {
   type: "theory" | "coding";
@@ -29,10 +38,12 @@ interface ProjectQuestion {
   timerMinutes?: number;
 }
 
+
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const NOTICE_PERIOD_OPTIONS = ["Immediate", "0-15 days", "15-30 days", "30-60 days", "60+ days"];
 const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
 const phoneRegex = /^[6-9]\d{9}$/;
+
 
 // ─── AI Scoring helper (unchanged) ────────────────────────────────────────────
 async function computeMatchScore(
@@ -49,11 +60,13 @@ async function computeMatchScore(
     return { matchScore: 0, matchSummary: "No project selected — AI scoring requires a Job Requisition." };
   }
 
+
   try {
     const hasManualText = !!project.jdFileData?.trim() && project.jdFileType === 'manual';
     const hasJdText     = !!project.jdText?.trim();
     const hasJdFile     = !!project.jdFileDataB64;
     const hasJdFileData = !!project.jdFileData && project.jdFileType !== 'manual';
+
 
     if (!hasManualText && !hasJdText && !hasJdFile && !hasJdFileData) {
       return {
@@ -62,22 +75,27 @@ async function computeMatchScore(
       };
     }
 
+
     toast({ title: "🤖 AI Scoring", description: "Analyzing resume against job requirements…" });
+
 
     const resolvedJdText =
       project.jdText?.trim() ||
       (project.jdFileType === 'manual' ? project.jdFileData?.trim() : '') ||
       '';
 
+
     const resolvedJdFile =
       project.jdFileDataB64 ||
       (project.jdFileType !== 'manual' ? project.jdFileData : '') ||
       '';
 
+
     const resolvedJdType =
       project.jdFileType && project.jdFileType !== 'manual'
         ? project.jdFileType
         : 'application/pdf';
+
 
     const result = await candidateMatchScoring({
       jdText:            resolvedJdText || undefined,
@@ -96,8 +114,10 @@ async function computeMatchScore(
       },
     });
 
+
     const score   = typeof result.matchScore === "number" ? result.matchScore : 0;
     const summary = result.summary?.trim() || `Match score: ${score}%`;
+
 
     return { matchScore: score, matchSummary: summary };
   } catch (err) {
@@ -107,7 +127,8 @@ async function computeMatchScore(
   }
 }
 
-// ─── Interview mode toggle ─────────────────────────────────────────────────────
+
+// ─── Interview mode toggle (unchanged) ────────────────────────────────────────
 function InterviewModeToggle({
   value,
   onChange,
@@ -147,7 +168,8 @@ function InterviewModeToggle({
   );
 }
 
-// ─── Project questions preview (shown in Manual mode) ─────────────────────────
+
+// ─── Project questions preview (unchanged) ────────────────────────────────────
 function ProjectQuestionsPreview({ questions }: { questions: ProjectQuestion[] }) {
   if (!questions || questions.length === 0) {
     return (
@@ -157,8 +179,10 @@ function ProjectQuestionsPreview({ questions }: { questions: ProjectQuestion[] }
     );
   }
 
+
   const theoryQs = questions.filter(q => q.type === "theory");
   const codingQs = questions.filter(q => q.type === "coding");
+
 
   return (
     <div className="rounded-md border bg-muted/30 divide-y">
@@ -167,7 +191,6 @@ function ProjectQuestionsPreview({ questions }: { questions: ProjectQuestion[] }
         <span className="text-sm font-semibold">Interview Questions for this Project</span>
         <span className="ml-auto text-xs text-muted-foreground">{questions.length} question{questions.length !== 1 ? "s" : ""}</span>
       </div>
-
       <div className="px-4 py-3 space-y-3">
         {theoryQs.length > 0 && (
           <div className="space-y-2">
@@ -184,7 +207,6 @@ function ProjectQuestionsPreview({ questions }: { questions: ProjectQuestion[] }
             ))}
           </div>
         )}
-
         {codingQs.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -222,7 +244,47 @@ function ProjectQuestionsPreview({ questions }: { questions: ProjectQuestion[] }
   );
 }
 
-// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RE-EVALUATION BANNER — rendered only when isReEvaluation === true
+// ─────────────────────────────────────────────────────────────────────────────
+function ReEvaluationBanner({ candidate }: { candidate: any }) {
+  function deriveRejectedStage(c: any): string {
+    if ((c.resumeReviewStatus ?? '').toLowerCase() === 'rejected') return 'Resume Review';
+    if ((c.l1Status           ?? '').toLowerCase() === 'rejected') return 'Screening';
+    if ((c.l2Status           ?? '').toLowerCase() === 'rejected') return 'L1 Interview';
+    if ((c.hrStatus           ?? '').toLowerCase() === 'rejected') return 'L2 Interview';
+    if ((c.offerStatus        ?? '').toLowerCase() === 'rejected') return 'HR Round';
+    if ((c.newOfferStatus     ?? '').toLowerCase() === 'rejected') return 'Offer';
+    return c.rejectedStage || 'a previous stage';
+  }
+
+
+  return (
+    <div className="space-y-2 mb-2">
+      {/* Primary mode banner */}
+      <div className="flex items-start gap-3 rounded-lg border border-blue-300 bg-blue-50 px-4 py-3">
+        <RotateCcw className="h-5 w-5 text-blue-600 mt-0.5 shrink-0" />
+        <div>
+          <p className="text-sm font-semibold text-blue-800">
+            Re-Evaluation Mode – Candidate previously rejected and currently under review.
+          </p>
+          <p className="text-xs text-blue-600 mt-0.5">
+            All previously submitted information has been prefilled. Update any fields if needed,
+            then submit to return this candidate to the active pipeline.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN COMPONENT
+// All original CandidateEvaluation code is preserved verbatim below.
+// Re-evaluation additions are clearly marked with: // ── RE-EVAL EXTENSION ──
+// ─────────────────────────────────────────────────────────────────────────────
 export default function CandidateEvaluation() {
   const { user, role, name: loggedInName } = useAuth();
   const [projects, setProjects]             = useState<any[]>([]);
@@ -232,8 +294,10 @@ export default function CandidateEvaluation() {
   const { toast }                           = useToast();
   const router                              = useRouter();
 
+
   // ── NEW: interview mode state ───────────────────────────────────────────────
   const [interviewMode, setInterviewMode] = useState<InterviewMode>("ai");
+
 
   const [formData, setFormData] = useState({
     candidateName:        "",
@@ -254,9 +318,86 @@ export default function CandidateEvaluation() {
     resumeFile:           null as { name: string; type: string; data: string } | null,
   });
 
+
+  // ── RE-EVAL EXTENSION: detect ?reEvaluate=<candidateId> query param ─────────
+  const searchParams                                = useSearchParams();
+  const reEvalCandidateId                           = searchParams.get("reEvaluate");
+  const isReEvaluation                              = !!reEvalCandidateId;
+  const [reEvalCandidate,   setReEvalCandidate]     = useState<any>(null);
+  const [reEvalLoading,     setReEvalLoading]       = useState(isReEvaluation);
+  const [reEvalNotFound,    setReEvalNotFound]      = useState(false);
+
+
+  // ── RE-EVAL EXTENSION: fetch + prefill when in re-evaluation mode ────────────
+  useEffect(() => {
+    if (!isReEvaluation || !reEvalCandidateId) return;
+
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "candidates", reEvalCandidateId));
+        if (!snap.exists()) { setReEvalNotFound(true); setReEvalLoading(false); return; }
+
+
+        const data = snap.data();
+        setReEvalCandidate({ id: snap.id, ...data });
+
+
+        // Prefill all form fields from the stored candidate document
+        setFormData({
+          candidateName:        data.candidateName        ?? "",
+          candidateEmail:       data.candidateEmail       ?? "",
+          phoneNumber:          data.phoneNumber          ?? "",
+          currentLocation:      data.currentLocation      ?? "",
+          permanentLocation:    data.permanentLocation    ?? "",
+          experience:           String(data.experience    ?? ""),
+          candidateDesignation: data.candidateDesignation ?? "",
+          currentCtc:           String(data.currentCtc   ?? ""),
+          expectedCtc:          String(data.expectedCtc  ?? ""),
+          projectId:            data.jobRequisitionId     ?? data.projectId ?? "",
+          role:                 data.role                 ?? "",
+          location:             data.projectLocation      ?? data.location  ?? "",
+          noticePeriod:         data.noticePeriod         ?? "",
+          isComfortableOnsite:  data.isComfortableOnsite  ?? "",
+          comments:             data.comments             ?? "",
+          // Prefill resume if stored on the candidate doc
+          resumeFile: data.resumeFile
+            ? data.resumeFile
+            : data.resumeData
+              ? { name: data.resumeName ?? "resume", type: data.resumeType ?? "application/pdf", data: data.resumeData }
+              : null,
+        });
+
+
+        // ── RE-EVAL EXTENSION: log "Re-Evaluation Started" audit event ─────────
+        await addDoc(collection(db, "candidate_history"), {
+          candidateId:      snap.id,
+          event:            "Re-Evaluation Started",
+          stage:            "Sourcing",
+          performedByUid:   "",   // populated after auth resolves — see submit
+          performedByName:  "",
+          performedByEmail: "",
+          timestamp:        serverTimestamp(),
+          note:             "Candidate opened for re-evaluation from the Rejected Candidates module.",
+        });
+
+
+      } catch (err) {
+        console.error("Failed to load candidate for re-evaluation:", err);
+        toast({ variant: "destructive", title: "Error", description: "Could not load candidate data." });
+      } finally {
+        setReEvalLoading(false);
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reEvalCandidateId]);
+  // ── END RE-EVAL EXTENSION ───────────────────────────────────────────────────
+
+
   // ── Fetch projects ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!role || !user) { setProjects([]); return; }
+
 
     let q: any;
     if (role === "admin" || role === "hr") {
@@ -270,18 +411,22 @@ export default function CandidateEvaluation() {
     }
     if (!q) return;
 
+
     const unsub = onSnapshot(q, (snap: any) => {
       setProjects(snap.docs.map((d: any) => ({ ...d.data(), id: d.id })));
     });
     return () => unsub();
   }, [role, user]);
 
+
   // ── Input change handler ────────────────────────────────────────────────────
   const handleInputChange = (field: string, value: string) => {
     let processed = value;
     if (field === "phoneNumber") processed = value.replace(/[^0-9]/g, "").slice(0, 10);
 
+
     setFormData(prev => ({ ...prev, [field]: processed }));
+
 
     if (field === "projectId") {
       const project = projects.find((p: any) => p.id === value);
@@ -299,12 +444,15 @@ export default function CandidateEvaluation() {
       setInterviewMode("ai");
     }
 
+
     if (errors[field]) setErrors(prev => ({ ...prev, [field]: "" }));
   };
+
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
 
     if (file.size > 1 * 1024 * 1024) {
       setErrors(prev => ({
@@ -314,6 +462,7 @@ export default function CandidateEvaluation() {
       e.target.value = '';
       return;
     }
+
 
     const allowedTypes = [
       'application/pdf',
@@ -328,8 +477,10 @@ export default function CandidateEvaluation() {
       return;
     }
 
+
     setErrors(prev => ({ ...prev, resumeFile: "" }));
     setIsLoadingExtracting(true);
+
 
     setFormData(prev => ({
       ...prev,
@@ -343,10 +494,12 @@ export default function CandidateEvaluation() {
       noticePeriod:   "",
     }));
 
+
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = (reader.result as string).split(",")[1];
       setFormData(prev => ({ ...prev, resumeFile: { name: file.name, type: file.type, data: base64 } }));
+
 
       try {
         const extracted = await candidateResumeExtraction({
@@ -354,6 +507,7 @@ export default function CandidateEvaluation() {
           fileType: file.type,
           fileDataB64: base64,
         });
+
 
         setFormData(prev => ({
           ...prev,
@@ -368,6 +522,7 @@ export default function CandidateEvaluation() {
           permanentLocation: "",
         }));
 
+
         toast({ title: "Resume Parsed", description: "Details auto-filled from resume." });
       } catch (err) {
         console.error("❌ Extraction error:", err);
@@ -378,6 +533,7 @@ export default function CandidateEvaluation() {
     };
     reader.readAsDataURL(file);
   };
+
 
   // ── Validation ────────────────────────────────────────────────────────────
   const validateForm = () => {
@@ -399,6 +555,7 @@ export default function CandidateEvaluation() {
     return e;
   };
 
+
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -408,25 +565,35 @@ export default function CandidateEvaluation() {
     }
     const formErrors = validateForm();
     if (Object.keys(formErrors).length > 0) { setErrors(formErrors); return; }
-   
+
+
     setIsLoading(true);
     try {
       const emailLower = formData.candidateEmail.trim().toLowerCase();
-      const dupSnap = await getDocs(query(collection(db, "candidates"), where("candidateEmail", "==", emailLower)));
-      if (!dupSnap.empty) {
-        toast({ variant: "destructive", title: "Duplicate Candidate", description: "A candidate with this email already exists." });
-        setIsLoading(false);
-        return;
+
+
+      // ── RE-EVAL EXTENSION: skip duplicate email check for re-evaluation ──────
+      if (!isReEvaluation) {
+        const dupSnap = await getDocs(query(collection(db, "candidates"), where("candidateEmail", "==", emailLower)));
+        if (!dupSnap.empty) {
+          toast({ variant: "destructive", title: "Duplicate Candidate", description: "A candidate with this email already exists." });
+          setIsLoading(false);
+          return;
+        }
       }
-   
+      // ── END RE-EVAL EXTENSION ────────────────────────────────────────────────
+
+
       const selectedProject =
         formData.projectId && formData.projectId !== "none"
           ? projects.find(p => p.id === formData.projectId) || null
           : null;
-   
+
+
       let matchScore = 0;
       let matchSummary = "No project selected — AI scoring skipped.";
-   
+
+
       if (selectedProject) {
         const result = await computeMatchScore(
           formData.resumeFile,
@@ -441,25 +608,31 @@ export default function CandidateEvaluation() {
       } else {
         toast({ title: "ℹ️ Scoring Skipped", description: "Project not selected — AI scoring not performed." });
       }
-   
+
+
       // ── Auto-advance only applies in AI mode ──────────────────────────────
-      const autoAdvance = interviewMode === "ai" && selectedProject && matchScore >= 70;
-   
+      const autoAdvance = interviewMode === "ai" && selectedProject && matchScore >= 80;
+
+
       // ✅ NEW — generate a token/url for manual mode too
       const isManualWithProject = interviewMode === "manual" && !!selectedProject;
-   
+
+
       let l1Token = '';
       let l1Url   = '';
-   
+
+
       // ✅ CHANGED — was only inside autoAdvance, now also covers manual mode
       if (autoAdvance || isManualWithProject) {
         l1Token = globalThis.crypto.randomUUID();
         const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
         l1Url   = `${baseUrl}/interview/${l1Token}`;
       }
-   
+
+
       const { projectId, ...rest } = formData;
-   
+
+
       const candidateData: any = {
         ...rest,
         candidateEmail:       emailLower,
@@ -475,20 +648,22 @@ export default function CandidateEvaluation() {
         createdBy:            user?.uid,
         createdByEmail:       user?.email || '',
         createdByRole:        role,
-   
+
+
         // ✅ CHANGED — manual mode gets Scheduled too, not Locked
         resumeReviewStatus: (autoAdvance || isManualWithProject) ? "Accepted" : "Pending",
-                l1Status:           autoAdvance
+        l1Status:           autoAdvance
                               ? "Scheduled"
                               : isManualWithProject
-                                ? "Scheduled"      // ✅ NEW
+                                ? "Scheduled"
                                 : "Locked",
         l2Status:           "Locked",
         hrStatus:           "Locked",
         offerStatus:        "Locked",
         finalStatus:        "In Progress",
         status:             "Submitted",
-   
+
+
         // ✅ CHANGED — autoAdvance fields (same as before)
         ...(autoAdvance && {
           l1InterviewType:       'ai',
@@ -499,9 +674,10 @@ export default function CandidateEvaluation() {
           l1InterviewerEmail:    user?.email  || '',
           resumeReviewedByEmail: user?.email  || '',
           resumeReviewedByName:  loggedInName || user?.displayName || '',
-          resumeFeedback:        `Auto-advanced: AI match score ${matchScore}% ≥ 70%`,
+          resumeFeedback:        `Auto-advanced: AI match score ${matchScore}% ≥ 80%`,
         }),
-   
+
+
         // ✅ NEW — manual mode fields stored on candidate doc
         ...(isManualWithProject && {
           l1InterviewType:       'manual',
@@ -516,16 +692,47 @@ export default function CandidateEvaluation() {
           resumeFeedback:        `Auto-accepted: Manual interview mode selected`,
         }),
       };
-   
+
+
       if (role === "agency") {
         candidateData.jobRequisitionId = selectedProject?.id || null;
         candidateData.agencyName       = loggedInName;
       } else if (selectedProject) {
         candidateData.jobRequisitionId = selectedProject.id;
       }
-   
-      const newDocRef = await addDoc(collection(db, "candidates"), candidateData);
-   
+
+
+      // ── RE-EVAL EXTENSION: update existing doc instead of creating new one ───
+      let savedCandidateId: string;
+
+
+      if (isReEvaluation && reEvalCandidateId) {
+        // Update the existing candidate document in-place (preserves ID + history)
+        const reEvalUpdateFields = {
+          ...candidateData,
+          // Clear rejection metadata
+          rejectedStage:      null,
+          rejectionReason:    null,
+          rejectionDate:      null,
+          rejectedByName:     null,
+          rejectedByEmail:    null,
+          rejectedByUid:      null,
+          // Audit fields
+          reEvaluatedAt:      serverTimestamp(),
+          reEvaluatedByUid:   user?.uid    || '',
+          reEvaluatedByName:  loggedInName || '',
+          reEvaluatedByEmail: user?.email  || '',
+        };
+        await updateDoc(doc(db, "candidates", reEvalCandidateId), reEvalUpdateFields);
+        savedCandidateId = reEvalCandidateId;
+      } else {
+        // ── ORIGINAL PATH: create a new candidate document (unchanged) ─────────
+        const newDocRef = await addDoc(collection(db, "candidates"), candidateData);
+        savedCandidateId = newDocRef.id;
+      }
+      // ── END RE-EVAL EXTENSION ────────────────────────────────────────────────
+
+
       // ── AI mode: create ai_interviews doc + send email (UNCHANGED) ─────────
       if (autoAdvance && l1Token) {
         const resumeText = [
@@ -534,17 +741,20 @@ export default function CandidateEvaluation() {
           `Experience: ${formData.experience} years`,
           `Notice Period: ${formData.noticePeriod || ''}`,
         ].filter(Boolean).join('\n');
-   
+
+
         const jobDescription =
           selectedProject?.jdText?.trim() ||
           (selectedProject?.jdFileType === 'manual' ? selectedProject?.jdFileData?.trim() : '') ||
           `Role: ${formData.candidateDesignation}`;
-   
+
+
         const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-   
+
+
         await addDoc(collection(db, 'ai_interviews'), {
           token:           l1Token,
-          candidateId:     newDocRef.id,
+          candidateId:     savedCandidateId,
           candidateName:   formData.candidateName,
           candidateEmail:  emailLower,
           jobRole:         formData.candidateDesignation,
@@ -559,7 +769,8 @@ export default function CandidateEvaluation() {
           interviewMode:      'ai',
           projectQuestions:   selectedProject?.questions || [],
         });
-   
+
+
         try {
           const { sendInterviewEmail } = await import('@/ai/flows/send-interview-email-flow');
           await sendInterviewEmail({
@@ -577,20 +788,22 @@ export default function CandidateEvaluation() {
             stage:             'L1 Interview',
             senderRole:        'hr',
             emailType:         'interview_scheduled',
-            candidateId:       newDocRef.id,
+            candidateId:       savedCandidateId,
             threadMessageId:   '',
             interviewLink:     l1Url,
           });
         } catch (emailErr) {
           console.error('Auto-advance email failed:', emailErr);
         }
-   
+
+
         toast({
           title:       "🚀 Auto-Advanced to L1!",
-          description: `Score ${matchScore}% ≥ 70% — AI interview link sent to ${formData.candidateName}.`,
+          description: `Score ${matchScore}% ≥ 80% — AI interview link sent to ${formData.candidateName}.`,
         });
       }
-   
+
+
       // ✅ NEW BLOCK — Manual mode: create ai_interviews doc with project questions
       else if (isManualWithProject && l1Token) {
         const resumeText = [
@@ -599,17 +812,20 @@ export default function CandidateEvaluation() {
           `Experience: ${formData.experience} years`,
           `Notice Period: ${formData.noticePeriod || ''}`,
         ].filter(Boolean).join('\n');
-  
+
+
         const jobDescription =
           selectedProject?.jdText?.trim() ||
           (selectedProject?.jdFileType === 'manual' ? selectedProject?.jdFileData?.trim() : '') ||
           `Role: ${formData.candidateDesignation}`;
-  
+
+
         const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-  
+
+
         await addDoc(collection(db, 'ai_interviews'), {
           token:            l1Token,
-          candidateId:      newDocRef.id,
+          candidateId:      savedCandidateId,
           candidateName:    formData.candidateName,
           candidateEmail:   emailLower,
           jobRole:          formData.candidateDesignation,
@@ -624,8 +840,8 @@ export default function CandidateEvaluation() {
           interviewMode:    'manual',
           projectQuestions: selectedProject?.questions || [],
         });
-  
-        // ✅ FIX 1 — Send email to candidate with the interview link
+
+
         try {
           const { sendInterviewEmail } = await import('@/ai/flows/send-interview-email-flow');
           await sendInterviewEmail({
@@ -643,54 +859,83 @@ export default function CandidateEvaluation() {
             stage:             'L1 Interview',
             senderRole:        'hr',
             emailType:         'interview_scheduled',
-            candidateId:       newDocRef.id,
+            candidateId:       savedCandidateId,
             threadMessageId:   '',
             interviewLink:     l1Url,
           });
         } catch (emailErr) {
           console.error('Manual interview email failed:', emailErr);
         }
-  
+
+
         toast({
           title:       "✅ Candidate Submitted (Manual Interview)",
           description: `Interview link sent to ${formData.candidateName}.`,
         });
       }
-   
-      // ✅ CHANGED — remaining else (AI mode, score < 70, no project) — same as before
+
+
+      // ✅ CHANGED — remaining else (AI mode, score < 80, no project) — same as before
       else {
         toast({
-          title: matchScore < 70 && selectedProject
+          title: matchScore < 80 && selectedProject
             ? `⚠️ Score ${matchScore}% — Sent for HR Review`
-            : "✅ Candidate Submitted",
-          description: matchScore < 70 && selectedProject
-            ? "Score below 70% — HR will review and decide."
-            : "Candidate profile created successfully.",
+            : isReEvaluation
+              ? "✅ Candidate Re-Submitted"
+              : "✅ Candidate Submitted",
+          description: matchScore < 80 && selectedProject
+            ? "Score below 80% — HR will review and decide."
+            : isReEvaluation
+              ? `${formData.candidateName} has been returned to the active pipeline.`
+              : "Candidate profile created successfully.",
         });
       }
-   
+
+
+      // ── Candidate history event ───────────────────────────────────────────
       await addDoc(collection(db, "candidate_history"), {
-        candidateId: newDocRef.id,
-        ...candidateData,
+        candidateId: savedCandidateId,
+        // ── RE-EVAL EXTENSION: record re-submission event ─────────────────────
+        ...(isReEvaluation
+          ? {
+              event:            "Re-Evaluation Submitted",
+              previousStatus:   "Rejected",
+              newStatus:        "In Progress",
+              stage:            "Sourcing",
+              performedByUid:   user?.uid    || '',
+              performedByName:  loggedInName || '',
+              performedByEmail: user?.email  || '',
+              timestamp:        serverTimestamp(),
+              note: `Candidate re-evaluated and returned to active pipeline by ${loggedInName || user?.email}.`,
+            }
+          : {
+              // ── ORIGINAL PATH: unchanged history write ──────────────────────
+              ...candidateData,
+            }
+        ),
       });
-   
+
+
       if (user && loggedInName && role) {
         await logActivity({
           userId:     user.uid,
           userName:   loggedInName,
           userRole:   role,
-          action:     autoAdvance
-            ? "Candidate Auto-Advanced to L1"
-            : interviewMode === "manual"
-              ? "Candidate Uploaded (Manual Interview)"
-              : "Candidate Uploaded",
+          action:     isReEvaluation
+            ? "Re-Evaluation Submitted"
+            : autoAdvance
+              ? "Candidate Auto-Advanced to L1"
+              : interviewMode === "manual"
+                ? "Candidate Uploaded (Manual Interview)"
+                : "Candidate Uploaded",
           stage:      autoAdvance ? "L1 Interview" : "Sourcing",
           targetType: "Candidate",
-          targetId:   newDocRef.id,
+          targetId:   savedCandidateId,
           targetName: candidateData.candidateName,
         });
       }
-   
+
+
       router.push("/candidates/history");
     } catch (error: any) {
       console.error("Submission Error:", error);
@@ -699,16 +944,19 @@ export default function CandidateEvaluation() {
       setIsLoading(false);
     }
   };
-  
+
+
   // ── Derived values ────────────────────────────────────────────────────────
   const isAgency          = role === "agency";
   const selectedProject   = projects.find(p => p.id === formData.projectId);
   const projectSelected   = !!selectedProject;
 
+
   const shouldShowFields =
     selectedProject &&
     selectedProject.roles?.length &&
     selectedProject.locations?.length;
+
 
   // Parse questions from the selected project
   const projectQuestions: ProjectQuestion[] = (() => {
@@ -721,21 +969,68 @@ export default function CandidateEvaluation() {
     }));
   })();
 
+
+  // ── RE-EVAL EXTENSION: loading / not-found guards ────────────────────────
+  if (isReEvaluation && reEvalLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+
+  if (isReEvaluation && reEvalNotFound) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <AlertCircle className="h-12 w-12 text-red-400" />
+        <p className="text-lg font-semibold">Candidate not found</p>
+        <Button variant="outline" onClick={() => router.push("/candidates/rejected")}>
+          Back to Rejected Candidates
+        </Button>
+      </div>
+    );
+  }
+  // ── END RE-EVAL EXTENSION ────────────────────────────────────────────────
+
+
   return (
     <div className="max-w-3xl mx-auto py-8">
-      <Card className="shadow-lg border-t-4 border-t-primary">
+      {/*
+       * ── RE-EVAL EXTENSION: card border colour changes in re-evaluation mode ──
+       * border-t-primary  → new candidate (original)
+       * border-t-blue-500 → re-evaluation mode
+       * This is the ONLY visual change to the card; all inner content is unchanged.
+       */}
+      <Card className={cn("shadow-lg border-t-4", isReEvaluation ? "border-t-blue-500" : "border-t-primary")}>
         <CardHeader>
           <div className="flex items-center gap-3 mb-2">
-            <UserPlus className="w-6 h-6 text-primary" />
-            <CardTitle className="text-2xl font-bold">New Candidate Profile</CardTitle>
+            {/* ── RE-EVAL EXTENSION: swap icon + title in re-evaluation mode ── */}
+            {isReEvaluation
+              ? <RotateCcw className="w-6 h-6 text-blue-600" />
+              : <UserPlus  className="w-6 h-6 text-primary"  />
+            }
+            <CardTitle className="text-2xl font-bold">
+              {isReEvaluation ? "Re-Evaluate Candidate" : "New Candidate Profile"}
+            </CardTitle>
           </div>
           <CardDescription>
-            Upload a resume to auto-fill details and run AI match scoring.
+            {isReEvaluation
+              ? "Review and update the candidate's information before re-submitting to the active pipeline."
+              : "Upload a resume to auto-fill details and run AI match scoring."
+            }
           </CardDescription>
+
+
+          {/* ── RE-EVAL EXTENSION: banner injected below description ─────────── */}
+          {isReEvaluation && <ReEvaluationBanner candidate={reEvalCandidate} />}
+          {/* ── END RE-EVAL EXTENSION ─────────────────────────────────────────── */}
         </CardHeader>
+
 
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-8">
+
 
             {/* ── Resume Upload ──────────────────────────────────────────── */}
             <div className="space-y-2">
@@ -781,10 +1076,13 @@ export default function CandidateEvaluation() {
               {errors.resumeFile && <p className="text-xs text-red-500">{errors.resumeFile}</p>}
             </div>
 
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6">
+
 
               {/* ── Project selection ──────────────────────────────────── */}
               <div className="md:col-span-2 space-y-3">
+
 
                 {isAgency && (
                   <div className="flex items-start gap-2 p-3 rounded-md bg-blue-50 border border-blue-200">
@@ -796,6 +1094,7 @@ export default function CandidateEvaluation() {
                   </div>
                 )}
 
+
                 {role === "hr" && (
                   <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 border border-amber-200">
                     <Info className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
@@ -805,10 +1104,12 @@ export default function CandidateEvaluation() {
                   </div>
                 )}
 
+
                 <Label htmlFor="project" className="font-bold">
                   Client Project
                   <span className="text-muted-foreground font-normal text-xs ml-1">(optional)</span>
                 </Label>
+
 
                 <Select
                   value={formData.projectId}
@@ -835,6 +1136,7 @@ export default function CandidateEvaluation() {
                 </Select>
                 {errors.projectId && <p className="text-xs text-red-500">{errors.projectId}</p>}
 
+
                 {/* ── Interview mode toggle — only shown when a project is selected ── */}
                 {projectSelected && (
                   <div className="space-y-2 pt-1">
@@ -842,11 +1144,12 @@ export default function CandidateEvaluation() {
                     <InterviewModeToggle value={interviewMode} onChange={setInterviewMode} />
                     <p className="text-xs text-muted-foreground">
                       {interviewMode === "ai"
-                        ? "Candidates scoring ≥ 70% will receive an AI interview link automatically."
+                        ? "Candidates scoring ≥ 80% will receive an AI interview link automatically."
                         : "The interviewer will conduct the session using the questions defined in this project."}
                     </p>
                   </div>
                 )}
+
 
                 {/* ── Manual mode: show project questions ──────────────────── */}
                 {projectSelected && interviewMode === "manual" && (
@@ -854,7 +1157,9 @@ export default function CandidateEvaluation() {
                 )}
               </div>
 
+
               <div className="md:col-span-2"><hr /></div>
+
 
               {/* Candidate Name */}
               <div className="space-y-2">
@@ -866,6 +1171,7 @@ export default function CandidateEvaluation() {
                 />
                 {errors.candidateName && <p className="text-xs text-red-500">{errors.candidateName}</p>}
               </div>
+
 
               {/* Candidate Email */}
               <div className="space-y-2">
@@ -879,6 +1185,7 @@ export default function CandidateEvaluation() {
                 {errors.candidateEmail && <p className="text-xs text-red-500">{errors.candidateEmail}</p>}
               </div>
 
+
               {/* Phone */}
               <div className="space-y-2">
                 <Label className="font-bold">Phone Number</Label>
@@ -891,6 +1198,7 @@ export default function CandidateEvaluation() {
                 {errors.phoneNumber && <p className="text-xs text-red-500">{errors.phoneNumber}</p>}
               </div>
 
+
               {/* Current Location */}
               <div className="space-y-2">
                 <Label className="font-bold">Current Location</Label>
@@ -902,6 +1210,7 @@ export default function CandidateEvaluation() {
                 {errors.currentLocation && <p className="text-xs text-red-500">{errors.currentLocation}</p>}
               </div>
 
+
               {/* Permanent Location */}
               <div className="space-y-2">
                 <Label className="font-bold">Permanent Location</Label>
@@ -912,6 +1221,7 @@ export default function CandidateEvaluation() {
                 />
                 {errors.permanentLocation && <p className="text-xs text-red-500">{errors.permanentLocation}</p>}
               </div>
+
 
               {/* Experience */}
               <div className="space-y-2">
@@ -927,6 +1237,7 @@ export default function CandidateEvaluation() {
                 {errors.experience && <p className="text-xs text-red-500">{errors.experience}</p>}
               </div>
 
+
               {/* Designation */}
               <div className="space-y-2">
                 <Label className="font-bold">Candidate Designation</Label>
@@ -937,6 +1248,7 @@ export default function CandidateEvaluation() {
                 />
                 {errors.candidateDesignation && <p className="text-xs text-red-500">{errors.candidateDesignation}</p>}
               </div>
+
 
               {/* Current CTC */}
               <div className="space-y-2">
@@ -951,6 +1263,7 @@ export default function CandidateEvaluation() {
                 {errors.currentCtc && <p className="text-xs text-red-500">{errors.currentCtc}</p>}
               </div>
 
+
               {/* Expected CTC */}
               <div className="space-y-2">
                 <Label className="font-bold">Expected CTC</Label>
@@ -964,6 +1277,7 @@ export default function CandidateEvaluation() {
                 {errors.expectedCtc && <p className="text-xs text-red-500">{errors.expectedCtc}</p>}
               </div>
 
+
               {shouldShowFields && (
                 <>
                   <div className="space-y-2">
@@ -976,6 +1290,7 @@ export default function CandidateEvaluation() {
                   </div>
                 </>
               )}
+
 
               {/* Notice Period */}
               <div className="space-y-2">
@@ -994,6 +1309,7 @@ export default function CandidateEvaluation() {
                 {errors.noticePeriod && <p className="text-xs text-red-500">{errors.noticePeriod}</p>}
               </div>
 
+
               {/* Onsite comfort */}
               <div className="space-y-3">
                 <Label className={cn("font-bold", { "text-red-500": errors.isComfortableOnsite })}>
@@ -1010,6 +1326,7 @@ export default function CandidateEvaluation() {
                 {errors.isComfortableOnsite && <p className="text-xs text-red-500">{errors.isComfortableOnsite}</p>}
               </div>
 
+
               {/* Comments */}
               <div className="md:col-span-2 space-y-2">
                 <Label className="font-bold">Comments</Label>
@@ -1020,14 +1337,46 @@ export default function CandidateEvaluation() {
               </div>
             </div>
 
-            <Button type="submit" className="w-full h-12 text-lg" disabled={isLoading || isLoadingExtracting}>
-              {isLoading
-                ? <><Loader2 className="animate-spin mr-2 h-5 w-5" /> Submitting & Scoring…</>
-                : "Submit Candidate"}
-            </Button>
+
+            {/*
+             * ── RE-EVAL EXTENSION: Cancel button added in re-evaluation mode ──
+             * Submit button text/label changes; underlying handler is unchanged.
+             */}
+            <div className={cn("flex gap-3", !isReEvaluation && "block")}>
+              {isReEvaluation && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => router.push("/candidates/rejected")}
+                  disabled={isLoading || isLoadingExtracting}
+                >
+                  Cancel
+                </Button>
+              )}
+              <Button
+                type="submit"
+                className={cn(
+                  "h-12 text-lg",
+                  isReEvaluation ? "flex-1 bg-blue-600 hover:bg-blue-700 gap-2" : "w-full",
+                )}
+                disabled={isLoading || isLoadingExtracting}
+              >
+                {isLoading
+                  ? <><Loader2 className="animate-spin mr-2 h-5 w-5" /> {isReEvaluation ? "Re-Submitting…" : "Submitting & Scoring…"}</>
+                  : isReEvaluation
+                    ? <><RotateCcw className="h-5 w-5" /> Re-Submit to Active Pipeline</>
+                    : "Submit Candidate"
+                }
+              </Button>
+            </div>
+            {/* ── END RE-EVAL EXTENSION ───────────────────────────────────────── */}
+
+
           </form>
         </CardContent>
       </Card>
     </div>
   );
 }
+

@@ -1,5 +1,6 @@
 
-import { addDoc, collection, Timestamp, query, where } from "firebase/firestore";
+// import { addDoc, collection, Timestamp, query, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, Timestamp, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Role } from "@/hooks/useAuth";
 
@@ -45,6 +46,16 @@ export const createNewCandidate = async (data: CandidateData) => {
     return { success: true };
   } catch (error) {
     console.error("Firestore create failed:", error);
+    return { success: false, error: (error as Error).message };
+  }
+};
+
+export const deleteCandidate = async (id: string) => {
+  try {
+    await deleteDoc(doc(db, "candidates", id));
+    return { success: true };
+  } catch (error) {
+    console.error("Firestore delete failed:", error);
     return { success: false, error: (error as Error).message };
   }
 };

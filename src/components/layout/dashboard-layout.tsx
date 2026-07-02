@@ -9,6 +9,7 @@ import { auth } from "@/lib/firebase";
 import { signOut } from "firebase/auth";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import React from "react";
+import { XCircle } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,6 +49,10 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       { title: "Candidate List", icon: Users, href: "/candidates/list", roles: ["admin", "agency", "hr", "panel"] },
       { title: "Candidate History", icon: History, href: "/candidates/history", roles: ["admin", "agency", "hr", "panel"] },
       { title: "Activity Log", icon: Activity, href: "/admin/activity-log", roles: ["admin"] },
+      { title: "Rejected Candidates",
+  icon: XCircle,
+  href: "/candidates/rejected",
+  roles: ["admin", "agency", "hr"]}
     ];
     return allItems.filter(item => item.roles.includes(role || ""));
   }, [role]);
@@ -66,11 +71,14 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       "/candidates/evaluation": { title: "Candidate Evaluation", subtitle: "Initiate a new recruitment evaluation process." },
       "/candidates/list": { title: "Candidate List", subtitle: "A simplified list of all candidates in the pipeline." },
       "/candidates/history": { title: "Candidate History", subtitle: "Comprehensive log and workflow of all candidate evaluations." },
+      "/candidates/rejected":{title: "Rejected Candidates",
+        subtitle: "Manage and re-evaluate rejected candidates."},
     };
 
     const isCandidateDetails = pathname.startsWith("/candidates/") && 
                                pathname !== "/candidates/evaluation" && 
                                pathname !== "/candidates/list" &&
+                               pathname !== "/candidates/rejected" &&
                                pathname !== "/candidates/history";
 
     if (isCandidateDetails) {
