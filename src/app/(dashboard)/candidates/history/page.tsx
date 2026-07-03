@@ -53,7 +53,7 @@ const STAGE_OPTIONS = {
     resumeReview: ['Pending', 'Accepted', 'Rejected', 'On Hold'],
     ScreeningStatus: ['Pending', 'Selected', 'Rejected', 'On Hold'],
     // ↓ NEW: Screening Status filter options
-    screening: ['Selected', 'Rejected', 'Scheduled', 'On Hold'],
+    screening: ['Selected', 'Rejected', 'Scheduled', 'Rescheduled', 'On Hold'],
     l1: ['Pending', 'Scheduled', 'Selected', 'Rejected', 'On Hold'],
     l2: ['Pending', 'Scheduled', 'Selected', 'Rejected', 'On Hold'],
     hr: ['Pending', 'Scheduled', 'Selected', 'Rejected', 'On Hold'],

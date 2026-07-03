@@ -29,6 +29,43 @@ const formatFirestoreTimestamp = (timestamp: Timestamp | undefined): string => {
     }
 };
 
+// ── AI Interview Report column — reuses the existing l1AIScore /
+// l1AIStatus / l1Status fields already present on every candidate doc
+// (the same fields the Candidate Details page's AIScoreReport reads).
+// No new scoring logic, no per-row fetch.
+function getAIInterviewReportScore(candidate: Candidate): number | null {
+        const raw = (candidate as any).l1AIScore;
+        return typeof raw === 'number' ? raw : null;
+    }
+    
+    function getAIInterviewReportDisplay(candidate: Candidate): string {
+        const l1AIStatus = (candidate as any).l1AIStatus;
+        const l1Status    = (candidate as any).l1Status;
+        const score       = getAIInterviewReportScore(candidate);
+    
+        if (l1AIStatus === 'completed' && score !== null) {
+            return `${score}%`;
+       }
+        // Interview reached but not completed yet — Scheduled/Rescheduled and
+        // no completed AI status. Follows the app's existing "Pending" wording
+        // (see AIInterviewStatusCard / countdown states).
+        if (['Scheduled', 'Rescheduled'].includes(l1Status) && l1AIStatus !== 'completed') {
+            return 'Pending';
+        }
+        // Stage not reached yet (locked / not yet at Screening Round)
+        if (!l1Status || l1Status === 'Locked' || l1Status === 'Pending') {
+            return '—';
+        }
+        // Reached a terminal state (e.g. expired) without a usable score
+        return 'N/A';
+    }
+    
+    function getAIInterviewReportSortValue(candidate: Candidate): number {
+        const score = getAIInterviewReportScore(candidate);
+        // Rows without a completed score sort below every scored row.
+        return score !== null ? score : -1;
+    }
+
 const FINAL_STATUSES = ['In Progress', 'Completed', 'Rejected'];
 const INITIAL_FILTERS = { name: '', role: '', status: '', experience: '' };
 
@@ -39,6 +76,10 @@ export default function CandidateListPage() {
     const [rowsPerPage, setRowsPerPage] = useState(10);
     const [creatorMap, setCreatorMap] = useState<Record<string, string>>({});
     const [dateSort, setDateSort]     = useState<'asc' | 'desc'>('desc');
+    // ── AI Interview Report sorting — tracks which column currently
+    // drives the sort. Defaults to the existing date-sort behavior.
+    const [sortBy, setSortBy]                   = useState<'date' | 'aiInterviewScore'>('date');
+    const [aiInterviewSortDir, setAiInterviewSortDir] = useState<'asc' | 'desc'>('desc');
 
     const handleFilterChange = (filterName: string, value: string) => {
         setFilters(prev => ({ ...prev, [filterName]: value }));
@@ -57,11 +98,16 @@ export default function CandidateListPage() {
             return nameMatch && roleMatch && statusMatch && expMatch;
         });
         return filtered.sort((a, b) => {
+            if (sortBy === 'aiInterviewScore') {
+                                const scoreA = getAIInterviewReportSortValue(a);
+                               const scoreB = getAIInterviewReportSortValue(b);
+                                return aiInterviewSortDir === 'asc' ? scoreA - scoreB : scoreB - scoreA;
+                            }
             const dateA = a.createdDate ? a.createdDate.toMillis() : 0;
             const dateB = b.createdDate ? b.createdDate.toMillis() : 0;
             return dateSort === 'asc' ? dateA - dateB : dateB - dateA;
         });
-    }, [candidates, filters, dateSort]);
+    }, [candidates, filters, dateSort, sortBy, aiInterviewSortDir]);
 
     const start               = page * rowsPerPage;
     const end                 = start + rowsPerPage;
@@ -80,7 +126,14 @@ export default function CandidateListPage() {
         [candidates]
     );
     const toggleDateSort = () => setDateSort(prev => prev === 'asc' ? 'desc' : 'asc');
-
+    const toggleAiInterviewSort = () => {
+                if (sortBy === 'aiInterviewScore') {
+                    setAiInterviewSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+                } else {
+                    setSortBy('aiInterviewScore');
+                    setAiInterviewSortDir('desc');
+                }
+            };
     useEffect(() => {
         const fetchNames = async () => {
             const map: Record<string, string> = {};
@@ -192,14 +245,23 @@ export default function CandidateListPage() {
                                 <TableHead className="w-[160px]">Created By</TableHead>
                                 <TableHead
                                     className="w-[130px] cursor-pointer"
-                                    onClick={toggleDateSort}
+                                    onClick={() => { setSortBy('date'); toggleDateSort(); }}
                                 >
                                     <div className="flex items-center gap-1">
                                         Created Date
                                         {dateSort === 'asc' ? '↑' : '↓'}
                                     </div>
                                 </TableHead>
-                                <TableHead className="w-[120px]">AI Score</TableHead>
+                                <TableHead className="w-[120px]">AI Resume Score</TableHead>
+                                <TableHead
+                                   className="w-[130px] cursor-pointer"
+                                   onClick={toggleAiInterviewSort}
+                               >
+                                    <div className="flex items-center gap-1">
+                                        AI Interview Report
+                                        {sortBy === 'aiInterviewScore' ? (aiInterviewSortDir === 'asc' ? '↑' : '↓') : ''}
+                                   </div>
+                                </TableHead>
                                 <TableHead>Final Status</TableHead>
 
                                 {/* ▼▼▼ ADD 2: new column header for the per-row export icon ▼▼▼ */}
@@ -212,13 +274,13 @@ export default function CandidateListPage() {
                                 <CandidateSkeleton />
                             ) : error ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="h-60 text-center text-red-500">
+                                    <TableCell colSpan={10} className="h-60 text-center text-red-500">
                                         {(error as Error).message}
                                     </TableCell>
                                 </TableRow>
                             ) : paginatedCandidates.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="h-60 text-center text-gray-500">
+                                    <TableCell colSpan={10} className="h-60 text-center text-gray-500">
                                         <Search className="mx-auto h-12 w-12 text-gray-300" />
                                         <p className="mt-3 font-medium">No candidates found</p>
                                         {isFiltered && (
@@ -273,6 +335,10 @@ export default function CandidateListPage() {
                                             {typeof candidate.aiScore === 'number'
                                                 ? `${candidate.aiScore}%`
                                                 : 'N/A'}
+                                        </TableCell>
+                                        {/* AI Interview Report — reuses l1AIScore, no recompute */}
+                                        <TableCell className="text-sm font-semibold align-top">
+                                            {getAIInterviewReportDisplay(candidate)}
                                         </TableCell>
 
                                         {/* Final Status */}

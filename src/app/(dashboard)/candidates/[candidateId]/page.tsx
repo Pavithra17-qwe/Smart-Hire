@@ -187,6 +187,8 @@ async function sendEmail(params: {
   emailType: string;
   candidateId:     string;
   threadMessageId: string;
+  rescheduleToken?: string;
+  l1RescheduleUsed?: boolean;
 }) {
   const email = params.toEmail?.trim();
   if (!email || !email.includes('@')) {
@@ -218,6 +220,8 @@ async function sendEmail(params: {
       candidateId:       params.candidateId,
       threadMessageId:   params.threadMessageId,
       interviewLink:     '',
+      rescheduleToken:   params.rescheduleToken || '',
+      l1RescheduleUsed:  params.l1RescheduleUsed ?? false,
     });
     console.log('[sendEmail] ✅ Sent to:', email);
   } catch (err) {
@@ -580,6 +584,35 @@ const TIME_SLOTS = [
   '09:00am - 10:00am', '10:00am - 11:00am', '11:00am - 12:00pm',
   '01:00pm - 02:00pm', '02:00pm - 03:00pm', '03:00pm - 04:00pm', '04:00pm - 05:00pm',
 ];
+
+// ─── SHARED SLOT AVAILABILITY HELPERS (used by L1, L2, L2 Manager, HR Round) ──
+function parseSlotStart(slotLabel: string): { hour: number; minute: number } | null {
+  const startPart = slotLabel.split('-')[0]?.trim();
+  if (!startPart) return null;
+  const m = startPart.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if (!m) return null;
+  let hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  const meridiem = m[3].toLowerCase();
+  if (meridiem === 'pm' && hour !== 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+  return { hour, minute };
+}
+
+// Returns true if `slotLabel` starts at least `bufferMinutes` minutes from now,
+// given the currently selected `dateValue`. Future dates always pass.
+// bufferMinutes defaults to 30 (L1 / L2 / L2 Manager); HR Round passes 60.
+function isSlotSelectable(slotLabel: string, dateValue: string, todayStr: string, bufferMinutes: number = 30): boolean {
+  if (!dateValue) return true;
+  if (dateValue !== todayStr) return true;
+  const parsed = parseSlotStart(slotLabel);
+  if (!parsed) return true;
+  const slotDate = new Date();
+  slotDate.setHours(parsed.hour, parsed.minute, 0, 0);
+  const minSelectable = new Date(Date.now() + bufferMinutes * 60 * 1000);
+  return slotDate.getTime() >= minSelectable.getTime();
+}
+// ─── END SHARED SLOT AVAILABILITY HELPERS ─────────────────────────────────────
 
 // ─── UPDATED BY BADGE ─────────────────────────────────────────────────────────
 const UpdatedByBadge: React.FC<{ history: CandidateHistoryItem[]; stage: string; actions?: string[] }> = ({ history, stage, actions }) => {
@@ -1557,41 +1590,11 @@ const InterviewStageCard: React.FC<{
   // ── End panel availability state ──────────────────────────────────────────
 
   const today = new Date().toISOString().split('T')[0];
-
-  // ── Slot availability helpers (l2 / l2manager scheduling) ─────────────────
-  // Parses a TIME_SLOTS entry like "09:00am - 10:00am" into its start
-  // hour/minute in 24h time. Used only to filter the dropdown for today.
-  const parseSlotStart = (slotLabel: string): { hour: number; minute: number } | null => {
-    const startPart = slotLabel.split('-')[0]?.trim();
-    if (!startPart) return null;
-    const m = startPart.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
-    if (!m) return null;
-    let hour = parseInt(m[1], 10);
-    const minute = parseInt(m[2], 10);
-    const meridiem = m[3].toLowerCase();
-    if (meridiem === 'pm' && hour !== 12) hour += 12;
-    if (meridiem === 'am' && hour === 12) hour = 0;
-    return { hour, minute };
-  };
-
-  // Returns true if `slotLabel` starts at least 30 minutes from now,
-  // given the currently selected `dateValue`. Future dates always pass.
-  const isSlotSelectable = (slotLabel: string, dateValue: string): boolean => {
-    if (!dateValue) return true;
-    if (dateValue !== today) return true;
-    const parsed = parseSlotStart(slotLabel);
-    if (!parsed) return true;
-    const slotDate = new Date();
-    slotDate.setHours(parsed.hour, parsed.minute, 0, 0);
-    const minSelectable = new Date(Date.now() + 30 * 60 * 1000);
-    return slotDate.getTime() >= minSelectable.getTime();
-  };
-
   // Time slots to render in the dropdown for l2/l2manager scheduling —
   // all slots for future dates, only the 30-min-buffer-valid ones for today.
   const visibleTimeSlots =
     (stageKey === 'l2' || stageKey === 'l2manager')
-      ? TIME_SLOTS.filter(s => isSlotSelectable(s, date))
+      ? TIME_SLOTS.filter(s => isSlotSelectable(s, date, today))
       : TIME_SLOTS;
 
   // If the currently selected date/slot combination becomes invalid
@@ -1601,7 +1604,7 @@ const InterviewStageCard: React.FC<{
   useEffect(() => {
     if (stageKey !== 'l2' && stageKey !== 'l2manager') return;
     if (!slot) return;
-    if (!isSlotSelectable(slot, date)) {
+    if (!isSlotSelectable(slot, date, today)) {
       setSlot('');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1643,7 +1646,10 @@ const InterviewStageCard: React.FC<{
   const canHRSchedule    = isHR && status === 'Pending';
   const canPanelFeedback = isAssignedPanel && status === 'Scheduled';
 
-  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && savedDate;
+ // 'Rescheduled' added: l1Status now stays 'Rescheduled' after a
+  // candidate-initiated reschedule (previously flipped back to 'Scheduled'),
+  // so this card must still recognize that status to keep displaying.
+  const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected', 'Rescheduled'].includes(status) && savedDate;
   const showFeedback = ['Selected', 'Rejected'].includes(status) && savedFeedback && (candidate as any)[`${stageKey}InterviewType`] !== 'ai';
 
   // ── handleSchedule — UNCHANGED logic, with one pre-save availability check added ──
@@ -1750,6 +1756,78 @@ const InterviewStageCard: React.FC<{
           )}
         </div>
       )}
+     
+
+{stageKey === 'l1' && (candidate as any).l1RescheduleUsed && (
+  <div style={{
+    border: '1.5px solid #DDD6FE', borderRadius: '12px', overflow: 'hidden',
+    background: 'white',
+  }}>
+    <div style={{
+      padding: '13px 16px', borderBottom: '1px solid #F3F4F6',
+      display: 'flex', alignItems: 'center', gap: '8px', background: '#F8F7FF',
+    }}>
+      <span style={{ fontSize: '16px' }}>🔄</span>
+      <span style={{ fontWeight: 700, fontSize: '14px', color: '#4C1D95' }}>Interview Rescheduled</span>
+    </div>
+
+    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+        <div>
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#9CA3AF', marginBottom: '4px', textTransform: 'uppercase' }}>
+            Previous Schedule
+          </p>
+          <p style={{ fontSize: '13px', color: '#374151', margin: 0 }}>
+            {(candidate as any).l1PreviousScheduledDate
+              ? new Date((candidate as any).l1PreviousScheduledDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+              : '—'}
+          </p>
+          <p style={{ fontSize: '13px', color: '#374151', margin: 0 }}>
+            {(candidate as any).l1PreviousTimeSlot || ''}
+          </p>
+        </div>
+        <div>
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#9CA3AF', marginBottom: '4px', textTransform: 'uppercase' }}>
+            New Schedule
+          </p>
+          <p style={{ fontSize: '13px', color: '#111827', fontWeight: 600, margin: 0 }}>
+            {(candidate as any).l1ScheduledDate
+              ? new Date((candidate as any).l1ScheduledDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+              : '—'}
+          </p>
+          <p style={{ fontSize: '13px', color: '#111827', fontWeight: 600, margin: 0 }}>
+            {(candidate as any).l1TimeSlot || ''}
+          </p>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', paddingTop: '10px', borderTop: '1px dashed #E5E7EB' }}>
+        <div>
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#9CA3AF', marginBottom: '4px', textTransform: 'uppercase' }}>
+            Requested By
+          </p>
+          <p style={{ fontSize: '13px', color: '#374151', margin: 0 }}>{(candidate as any).l1RescheduledBy || 'Candidate'}</p>
+        </div>
+        <div>
+          <p style={{ fontSize: '11px', fontWeight: 700, color: '#9CA3AF', marginBottom: '4px', textTransform: 'uppercase' }}>
+            Requested On
+          </p>
+          <p style={{ fontSize: '13px', color: '#374151', margin: 0 }}>
+            {(candidate as any).l1RescheduledAt?.seconds
+              ? new Date((candidate as any).l1RescheduledAt.seconds * 1000).toLocaleString('en-GB', {
+                  day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+                })
+              : '—'}
+          </p>
+        </div>
+      </div>
+
+      <p style={{ fontSize: '11px', color: '#9CA3AF', margin: 0 }}>
+      The candidate has successfully rescheduled their interview. The updated interview invitation has been sent automatically.
+      </p>
+    </div>
+  </div>
+)}
 {/* ── AI Interview: session expired/ended early ── */}
 {stageKey === 'l1' &&
  (status === 'Expired' || (candidate as any).l1AIStatus === 'expired') &&
@@ -1844,7 +1922,7 @@ const InterviewStageCard: React.FC<{
 )}
     {/* ── AI Interview: waiting for candidate ── */}
     {stageKey === 'l1' &&
- status === 'Scheduled' &&
+ (status === 'Scheduled' || status === 'Rescheduled') &&
  status !== 'Expired' &&
  ['ai', 'manual'].includes((candidate as any).l1InterviewType) &&
  !['completed', 'expired'].includes((candidate as any).l1AIStatus) &&
@@ -2173,6 +2251,16 @@ const HRRoundCard: React.FC<{
   const status = candidate.hrStatus || 'Pending';
   const isHR   = role === 'hr';
 
+  // ── Time slot filtering — reuses the shared L1/L2 helper, 1-hour buffer for HR ──
+  const visibleTimeSlots = TIME_SLOTS.filter(s => isSlotSelectable(s, date, today, 60));
+
+  useEffect(() => {
+    if (!slot) return;
+    if (!isSlotSelectable(slot, date, today, 60)) {
+      setSlot('');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
   const showScheduleInfo = ['Scheduled', 'Selected', 'Rejected'].includes(status) && candidate.hrScheduledDate;
   const showFeedback     = ['Selected', 'Rejected'].includes(status) && candidate.hrFeedback;
 
@@ -2228,9 +2316,14 @@ const HRRoundCard: React.FC<{
               <Calendar className="h-4 w-4" style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
               <Input type="date" value={date} min={today} onChange={e => setDate(e.target.value)} className="pl-10" style={{ background: 'white', borderRadius: '8px' }} />
             </div>
-            <select value={slot} onChange={e => setSlot(e.target.value)} style={{ borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px', background: 'white', flex: 1, minWidth: '160px', fontSize: '13px' }}>
-              <option value="">Select a time slot</option>
-              {TIME_SLOTS.map(s => <option key={s} value={s}>{s}</option>)}
+            <select
+              value={slot}
+              onChange={e => setSlot(e.target.value)}
+              disabled={visibleTimeSlots.length === 0}
+              style={{ borderRadius: '8px', border: '1px solid #E5E7EB', padding: '9px', background: visibleTimeSlots.length === 0 ? '#F3F4F6' : 'white', flex: 1, minWidth: '160px', fontSize: '13px', cursor: visibleTimeSlots.length === 0 ? 'not-allowed' : 'pointer' }}
+            >
+              <option value="">{visibleTimeSlots.length === 0 ? 'No slots available for this date' : 'Select a time slot'}</option>
+              {visibleTimeSlots.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
           <p style={{ ...lbl, marginBottom: '6px' }}>Scheduling Notes <span style={{ color: '#DC2626' }}>*</span></p>
@@ -2490,9 +2583,9 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
           await updateDoc(doc(db, 'candidates', candidateId), { ...updateData, lastUpdated: Timestamp.now() });
 await addDoc(collection(db, 'candidate_history'), historyData);
 const threadId = (candidate as any).emailThreadMessageId || '';
-await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `AI interview link: ${interviewUrl}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId: threadId });
+await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `AI interview link: ${interviewUrl}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId: threadId,rescheduleToken: token, l1RescheduleUsed: false });
 const uploaderEmailForAI = candidate.createdByEmail || actorEmail;
-await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link sent to candidate. Token: ${token}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId: threadId });
+await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link sent to candidate. Token: ${token}`, interviewFeedback: '', interviewDate: new Date().toISOString().split('T')[0], interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId: threadId,rescheduleToken: token, l1RescheduleUsed: false });
           return;
         } else if (action === 'reject') {
           updateData = { resumeReviewStatus: 'Rejected', resumeFeedback: payload.feedback || (candidate as any).resumePanelFeedback || '', finalStatus: 'Rejected', rejectionDate: Timestamp.now(), l1Status: 'Locked', l2Status: 'Locked', hrStatus: 'Locked', offerStatus: 'Locked' };
@@ -2533,7 +2626,7 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
           await addDoc(collection(db, 'candidate_history'), historyData);
           const threadMessageId = candidate.emailThreadMessageId || '';
           const uploaderEmail = candidate.createdByEmail || '';
-          await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `Interview link: ${interviewUrl}\n\nNotes: ${payload.schedulingNotes}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId });
+          await sendEmail({ toEmail: candidate.candidateEmail || '', candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: String((candidate as any).location || ''), stage: 'L1 Interview', schedulingNotes: `Interview link: ${interviewUrl}\n\nNotes: ${payload.schedulingNotes}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId, rescheduleToken: token, l1RescheduleUsed: false });
           await sendEmail({ toEmail: uploaderEmail || actorEmail, candidateName: candidate.candidateName || '', jobRole: candidate.candidateDesignation || '', interviewerName: actorName, interviewerEmail: actorEmail, experience: String((candidate as any).experience || ''), location: '', stage: 'L1 Interview', schedulingNotes: `AI interview link has been sent to the candidate. Token: ${token}`, interviewFeedback: '', interviewDate: payload.scheduledDate, interviewTime: '', senderRole: 'hr', emailType: 'interview_scheduled', candidateId: candidateId, threadMessageId });
           return;
 
@@ -2598,6 +2691,8 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
       emailType:         'interview_scheduled',
       candidateId:       candidateId,
       threadMessageId,
+      rescheduleToken:   token,
+      l1RescheduleUsed:  (candidate as any).l1RescheduleUsed === true,
     });
     return;         
 

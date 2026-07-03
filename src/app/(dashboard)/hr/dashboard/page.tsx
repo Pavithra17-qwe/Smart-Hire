@@ -89,6 +89,7 @@ function normalize(s: any): string {
   if (v === "selected") return "Selected";
   if (v === "rejected") return "Rejected";
   if (v === "scheduled") return "Scheduled";
+  if (v === "rescheduled") return "Rescheduled";
   if (v === "pending") return "Pending";
   if (v === "released") return "Released";
   if (v === "completed") return "Completed";
@@ -503,6 +504,7 @@ export default function HRDashboard() {
 
     const screeningCurrentSelected = progress.filter(p => p.currentKey === "screening" && p.currentStatus === "Selected").length;
     const screeningScheduled = progress.filter(p => p.currentKey === "screening" && p.currentStatus === "Scheduled").length;
+    const screeningRescheduled = progress.filter(p => p.currentKey === "screening" && p.currentStatus === "Rescheduled").length;
     const screeningRejected = progress.filter(p => p.currentKey === "screening" && p.currentStatus === "Rejected").length;
     const screeningOnHold = progress.filter(p => p.currentKey === "screening" && p.currentStatus === "On Hold").length;
     const screeningExpired = progress.filter(p => p.currentKey === "screening" && p.currentStatus === "Expired").length;
@@ -540,7 +542,11 @@ export default function HRDashboard() {
       rejected: filtered.filter(c => c.finalStatus === "Rejected").length,
 
       // ── Hiring Funnel counts ──────────────────────────────────────────
-      resumeAccepted: screeningScheduled + screeningOnHold + screeningExpired,
+      // Resume Reviewed = every candidate who has entered the AI Screening
+      // stage, regardless of screening outcome: Scheduled + On Hold +
+      // Expired + Rescheduled (excludes Rejected/Pending — those haven't
+      // meaningfully "entered" screening from a funnel perspective).
+      resumeAccepted: screeningScheduled + screeningOnHold + screeningExpired + screeningRescheduled,
       screeningSelected: l1Scheduled + l1OnHold + l1Pending,
       l1Selected: l2Scheduled + l2OnHold + l2Pending,
       l2Selected: hrScheduled + hrOnHold + hrPending,
@@ -549,7 +555,7 @@ export default function HRDashboard() {
 
       // ── Interview Stage Breakdown (current stage only) ──────────────────
       resumeCurrentAccepted, resumeRejected, resumeOnHold, resumePending,
-      screeningCurrentSelected, screeningScheduled, screeningRejected, screeningOnHold, screeningExpired, screeningPending,
+      screeningCurrentSelected, screeningScheduled, screeningRescheduled, screeningRejected, screeningOnHold, screeningExpired, screeningPending,
       l1CurrentSelected, l1Scheduled, l1Rejected, l1OnHold, l1Pending,
       l2CurrentSelected, l2Scheduled, l2Rejected, l2OnHold, l2Pending,
       hrCurrentSelected, hrScheduled, hrRejected, hrOnHold, hrPending,
@@ -670,10 +676,10 @@ export default function HRDashboard() {
       {/* ── FILTERS ── */}
       <div className="bg-card border rounded-xl p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3 items-end">
-          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
             {/* Project filter */}
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1 h-4">
                 <Briefcase className="h-3 w-3" /> Project
               </label>
               <Select value={filterProject} onValueChange={setFilterProject}>
@@ -692,7 +698,7 @@ export default function HRDashboard() {
 
             {/* Designation filter */}
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1 h-4">
                 <Filter className="h-3 w-3" /> Job Role / Designation
               </label>
               <Select value={filterDesignation} onValueChange={setFilterDesignation}>
@@ -709,9 +715,8 @@ export default function HRDashboard() {
             </div>
 
             {/* Status filter */}
-            {/* Status filter */}
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1 h-4">
                 Status
               </label>
               <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -914,6 +919,7 @@ export default function HRDashboard() {
                   { label: "Rejected", count: stats.screeningRejected, dot: "bg-rose-400", href: buildCandidateLink("screening", "rejected") },
                   { label: "On Hold", count: stats.screeningOnHold, dot: "bg-amber-400", href: buildCandidateLink("screening", "on hold") },
                   { label: "Expired", count: stats.screeningExpired, dot: "bg-stone-400", href: buildCandidateLink("screening", "expired") },
+                  { label: "Rescheduled", count: stats.screeningRescheduled, dot: "bg-orange-400", href: buildCandidateLink("screening", "Rescheduled") },
                 ]} />
                 <StageCol title="L1 Interview" accent="bg-violet-500" items={[
                   { label: "Scheduled", count: stats.l1Scheduled, dot: "bg-blue-400", href: buildCandidateLink("l1", "scheduled") },

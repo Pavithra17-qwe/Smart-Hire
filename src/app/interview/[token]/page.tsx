@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 import { adminDb } from '@/lib/firebaseAdmin';
 import InterviewClient from './InterviewClient';
+import CloseButton from './CloseButton';
 
 interface PageProps {
   params: Promise<{ token: string }>;
@@ -171,6 +172,26 @@ function ExpiredPage({ reason }: { reason: string }) {
       iconBg: 'linear-gradient(135deg, #FEE2E2, #FECACA)',
       iconBorder: '#FCA5A5',
     },
+    // Old link — candidate successfully rescheduled and this token was
+    // explicitly invalidated by submit/route.ts (expiredReason: 'rescheduled')
+    rescheduled: {
+      icon: '🔄',
+      title: 'Interview Link No Longer Valid',
+      body: 'Your screening interview has been rescheduled.\n\nThis interview link belongs to your previous interview schedule and has been deactivated.\n\nPlease use the updated interview link provided in your latest Rescheduled Interview email to join your interview.\n\nIf you cannot find the latest email, please contact the hiring team for assistance.',
+      accent: 'linear-gradient(90deg, #6366F1, #8B5CF6)',
+      iconBg: 'linear-gradient(135deg, #EDE9FE, #DDD6FE)',
+      iconBorder: '#C4B5FD',
+    },
+    // Old link — replaced by an even newer reschedule invite, invalidated
+    // defensively by sendRescheduledInvite.ts (expiredReason: 'superseded')
+    superseded: {
+      icon: '🔄',
+      title: 'Interview Link No Longer Valid',
+      body: 'Your screening interview has been rescheduled.\n\nThis interview link belongs to your previous interview schedule and has been deactivated.\n\nPlease use the updated interview link provided in your latest Rescheduled Interview email to join your interview.\n\nIf you cannot find the latest email, please contact the hiring team for assistance.',
+      accent: 'linear-gradient(90deg, #6366F1, #8B5CF6)',
+      iconBg: 'linear-gradient(135deg, #EDE9FE, #DDD6FE)',
+     iconBorder: '#C4B5FD',
+    },
     // 48-hour time limit
     time_expired: {
       icon: '⏰',
@@ -265,9 +286,14 @@ function ExpiredPage({ reason }: { reason: string }) {
         <p style={{
           fontSize: '14px', color: '#64748B',
           lineHeight: 1.8, marginBottom: '32px',
+          whiteSpace: 'pre-line',
         }}>
           {msg.body}
         </p>
+
+        {(reason === 'rescheduled' || reason === 'superseded') && <CloseButton />}
+
+       
 
         {/* Footer note */}
         <div style={{
