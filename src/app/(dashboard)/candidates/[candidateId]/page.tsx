@@ -3119,8 +3119,8 @@ else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
             </div>
           </div>
 
-
         </div>
       </div>
     </div>
   );
+}
