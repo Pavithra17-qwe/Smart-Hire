@@ -375,11 +375,25 @@ export default function HRDashboard() {
 
 
   // ── Unique projects for filter ───────────────────────────────────────────────
+  // ── Unique projects for filter ───────────────────────────────────────────────
+  // FIX: dropdown must show ALL projects (Active + Inactive), not just Active
+  // ones. The status check that excluded Inactive projects has been removed;
+  // every project with a non-empty projectName is now included.
   const projects = useMemo(() => {
     const set = new Set<string>();
-    jobRequisitions.forEach(jr => { if (jr.projectName) set.add(jr.projectName); });
+    jobRequisitions.forEach(jr => {
+      if (jr.projectName) set.add(jr.projectName.trim());
+    });
     return Array.from(set).sort();
   }, [jobRequisitions]);
+
+  // ── Reset the Project filter if the currently selected project
+  // no longer exists in the active list (deleted / archived) ──────────────
+  useEffect(() => {
+    if (filterProject !== "all" && !projects.includes(filterProject)) {
+      setFilterProject("all");
+    }
+  }, [projects, filterProject]);
 
 
   // ── Map jobRequisitionId -> projectName for fast lookup ──────────────────────
@@ -678,22 +692,28 @@ export default function HRDashboard() {
         <div className="flex flex-col sm:flex-row gap-3 items-end">
           <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
             {/* Project filter */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1 h-4">
-                <Briefcase className="h-3 w-3" /> Project
-              </label>
-              <Select value={filterProject} onValueChange={setFilterProject}>
-                <SelectTrigger className="h-10 text-sm rounded-lg">
-                  <SelectValue placeholder="All Projects" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Projects</SelectItem>
-                  {projects.map(p => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+<div className="space-y-1.5">
+  <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1 h-4">
+    <Briefcase className="h-3 w-3" /> Project
+  </label>
+  <Select value={filterProject} onValueChange={setFilterProject}>
+    <SelectTrigger className="h-10 text-sm rounded-lg">
+      <SelectValue placeholder="All Projects" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="all">All Projects</SelectItem>
+      {projects.length > 0 ? (
+        projects.map(p => (
+          <SelectItem key={p} value={p}>{p}</SelectItem>
+        ))
+      ) : (
+        <div className="px-2 py-1.5 text-xs text-muted-foreground">
+          No Projects Available
+        </div>
+      )}
+    </SelectContent>
+  </Select>
+</div>
 
 
             {/* Designation filter */}

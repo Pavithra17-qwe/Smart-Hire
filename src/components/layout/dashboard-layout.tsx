@@ -2,7 +2,7 @@
 
 import { useAuth, Role } from "@/hooks/useAuth";
 import { SidebarProvider, Sidebar, SidebarContent, SidebarHeader, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarFooter, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
-import { LayoutDashboard, Users, ClipboardList, History, LogOut, Briefcase, UserCog, Activity, FileText } from "lucide-react";
+import { LayoutDashboard, Users, ClipboardList, History, LogOut, Briefcase, UserCog, Activity, FileText, Upload } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { auth } from "@/lib/firebase";
@@ -52,8 +52,15 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       { title: "Rejected Candidates",
   icon: XCircle,
   href: "/candidates/rejected",
-  roles: ["admin", "agency", "hr"]}
+  roles: ["admin", "agency", "hr"]},
+  {
+    title: "Bulk Candidate Import",
+    icon: Upload,
+    href: "/candidates/import",
+    roles: ["admin", "agency", "hr"],
+  },
     ];
+    
     return allItems.filter(item => item.roles.includes(role || ""));
   }, [role]);
 
@@ -73,13 +80,18 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       "/candidates/history": { title: "Candidate History", subtitle: "Comprehensive log and workflow of all candidate evaluations." },
       "/candidates/rejected":{title: "Rejected Candidates",
         subtitle: "Manage and re-evaluate rejected candidates."},
+        "/candidates/import": {
+  title: "Bulk Candidate Import",
+  subtitle: "Upload multiple resumes and process candidates in bulk.",
+},
     };
 
     const isCandidateDetails = pathname.startsWith("/candidates/") && 
                                pathname !== "/candidates/evaluation" && 
                                pathname !== "/candidates/list" &&
                                pathname !== "/candidates/rejected" &&
-                               pathname !== "/candidates/history";
+                               pathname !== "/candidates/history" &&
+                           pathname !== "/candidates/import";
 
     if (isCandidateDetails) {
       return { 

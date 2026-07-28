@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebaseAdmin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { sendInterviewEmail } from '@/ai/flows/send-interview-email-flow';
-
+import { getBaseUrl } from '@/lib/getBaseUrl';
 export async function POST(req: NextRequest) {
   try {
     const { token, candidateId, candidateEmail, candidateName, jobRole } = await req.json();
@@ -71,7 +71,8 @@ export async function POST(req: NextRequest) {
     // ── 4. Build the new interview link ─────────────────────────────────────
     const host = req.headers.get('host') || '';
     const proto = req.headers.get('x-forwarded-proto') || 'https';
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `${proto}://${host}`;
+    // const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://smart-hire-six.vercel.app`;
+    const baseUrl = getBaseUrl();
     const interviewUrl = `${baseUrl}/interview/${newToken}`;
     console.log('[Resend] Interview URL being sent:', interviewUrl);
     // ── 5. Send email to candidate (all required fields included) ────────────

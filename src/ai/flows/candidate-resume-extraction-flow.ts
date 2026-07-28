@@ -15,10 +15,14 @@ const CandidateResumeExtractionOutputSchema = z.object({
   candidateName: z.string().optional(),
   candidateEmail: z.string().optional(),
   phoneNumber: z.string().optional(),
+  currentLocation: z.string().optional(),        // ← NEW
+  permanentLocation: z.string().optional(),       // ← NEW
+  candidateDesignation: z.string().optional(),
   experience: z.string().optional(),
   currentCtc: z.string().optional(),
   expectedCtc: z.string().optional(),
   noticePeriod: z.enum(["Immediate", "15 Days", "30 Days", "60 Days", "90 Days"]).optional(),
+  isComfortableOnsite: z.enum(["Yes", "No"]).optional(),
   currentCompany: z.string().optional(),
   skills: z.array(z.string()).optional(),
 });
@@ -48,6 +52,34 @@ function parseResumeText(text: string): CandidateResumeExtractionOutput {
 
   const phoneMatch = text.match(/(?:\+91[\s\-]?)?[6-9]\d{9}/);
   const phone = phoneMatch?.[0]?.replace(/\D/g, '').slice(-10) || '';
+
+  const currentLocationMatch = text.match(/current\s*location\s*[:\-]\s*([^\n,]{2,40})/i);
+  const currentLocation = currentLocationMatch?.[1]?.trim();
+
+  const permanentLocationMatch = text.match(/permanent\s*location\s*[:\-]\s*([^\n,]{2,40})/i);
+  const permanentLocation = permanentLocationMatch?.[1]?.trim();
+
+  // ── moved up: companyMatch must exist before designationMatch references it ──
+  const companyMatch =
+    text.match(/(?:currently\s*(?:working\s*)?(?:at|with|in)|employer\s*[:\-])\s*([A-Za-z0-9\s&.,]+?)(?:\n|,|\.|\|)/i) ||
+    text.match(/([A-Za-z0-9\s&.]+)\s*[\|–\-]\s*(?:present|current)/i);
+  const currentCompany = companyMatch?.[1]?.trim() || '';
+
+  // ── designation: try an explicit "Designation:" label first, then fall back
+  // to the line immediately preceding a "Present/Current" marker (same pattern
+  // companyMatch uses for the employer line) ──
+  const directDesignationMatch = text.match(
+    /(?:current\s*designation|designation|current\s*role|job\s*title)\s*[:\-]\s*([^\n,]{2,60})/i
+  );
+  const designationFallbackMatch = !directDesignationMatch && companyMatch
+    ? text.match(/^(.*?)(?:\n).*?(?:present|current)/im)
+    : null;
+  const candidateDesignation =
+    (directDesignationMatch?.[1] || designationFallbackMatch?.[1])?.trim();
+
+  const onsiteMatch = text.match(/comfortable\s*(?:working\s*)?onsite\s*[:\-]?\s*(yes|no)/i);
+  const isComfortableOnsite: "Yes" | "No" | undefined =
+    onsiteMatch ? (onsiteMatch[1].toLowerCase() === 'yes' ? 'Yes' : 'No') : undefined;
 
   let nameLine = '';
   const nameLabelMatch = text.match(/(?:^|\n)\s*name\s*[:\-]\s*([A-Za-z\s]{3,40}?)(?:\n|$)/im);
@@ -91,11 +123,6 @@ function parseResumeText(text: string): CandidateResumeExtractionOutput {
     else if (n.includes('90') || n.includes('three month') || n.includes('3 month')) noticePeriod = '90 Days';
   }
 
-  const companyMatch =
-    text.match(/(?:currently\s*(?:working\s*)?(?:at|with|in)|employer\s*[:\-])\s*([A-Za-z0-9\s&.,]+?)(?:\n|,|\.|\|)/i) ||
-    text.match(/([A-Za-z0-9\s&.]+)\s*[\|–\-]\s*(?:present|current)/i);
-  const currentCompany = companyMatch?.[1]?.trim() || '';
-
   const skillsMatch = text.match(/skills?\s*[:\-]?\s*([\s\S]{0,500}?)(?:\n\n|\n[A-Z]|experience|education|$)/i);
   let skills: string[] = [];
   if (skillsMatch) {
@@ -111,9 +138,13 @@ function parseResumeText(text: string): CandidateResumeExtractionOutput {
     candidateEmail: email    || undefined,
     phoneNumber:    phone    || undefined,
     experience:     experience || undefined,
+    currentLocation:      currentLocation || undefined,
+    permanentLocation:    permanentLocation || undefined,
+    candidateDesignation: candidateDesignation || undefined,
     currentCtc:     currentCtc || undefined,
     expectedCtc:    expectedCtc || undefined,
     noticePeriod,
+    isComfortableOnsite,
     currentCompany: currentCompany || undefined,
     skills:         skills.length > 0 ? skills : undefined,
   };
@@ -127,6 +158,8 @@ export async function candidateResumeExtraction(
   const empty: CandidateResumeExtractionOutput = {
     candidateName: undefined, candidateEmail: undefined,
     phoneNumber: undefined, experience: undefined,
+    currentLocation: undefined, permanentLocation: undefined,
+    candidateDesignation: undefined, isComfortableOnsite: undefined,
     currentCtc: undefined, expectedCtc: undefined,
     noticePeriod: undefined, currentCompany: undefined, skills: undefined,
   };

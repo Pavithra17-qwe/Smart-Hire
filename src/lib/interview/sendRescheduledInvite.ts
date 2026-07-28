@@ -18,6 +18,7 @@
 // never runs if sendInterviewEmail didn't succeed.
 
 import { adminDb } from '@/lib/firebaseAdmin';
+import { getBaseUrl } from '@/lib/getBaseUrl';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { randomUUID } from 'crypto';
 import { sendInterviewEmail } from '@/ai/flows/send-interview-email-flow';
@@ -70,7 +71,8 @@ export async function sendRescheduledInterviewInvite(
 
   const oldToken: string | undefined = data.l1AIInterviewToken;
   const newToken = randomUUID();
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+  // const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://smart-hire-six.vercel.app';
+  const baseUrl = getBaseUrl();
   const interviewUrl = `${baseUrl}/interview/${newToken}`;
 
   const sentAt = Timestamp.now();

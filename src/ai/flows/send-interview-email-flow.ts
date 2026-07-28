@@ -81,7 +81,8 @@ function getSubject(input: SendInterviewEmailInput): string {
   if (input.emailType === 'interview_rescheduled_invite') {
     return `Interview Rescheduled – Updated Interview Details for ${input.jobRole} Position`;
   }
-  return `Candidate Update – ${input.candidateName} (${input.jobRole})`;
+  //return `Candidate Update – ${input.candidateName} (${input.jobRole})`;
+  return `Candidate Update – ${input.candidateName}`;
 }
 
 

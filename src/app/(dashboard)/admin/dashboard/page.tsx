@@ -43,6 +43,13 @@ function buildRole(base: string, role: string) {
 function buildUploader(base: string, uid: string) {
   return `${base}?createdBy=${encodeURIComponent(uid)}`;
 }
+// FIX 3: Builds a URL using the exact candidate ids behind a given count, so
+// "View Candidates" always shows precisely the same set the count reflects —
+// regardless of which combination of filters (role, final status) is active.
+function buildIdsUrl(base: string, ids: string[]) {
+  const p = new URLSearchParams({ ids: ids.length > 0 ? ids.join(",") : "__empty__" });
+  return `${base}?${p.toString()}`;
+}
 
 // ─── CHART CONFIGS ────────────────────────────────────────────────────────────
 const pipelineConfig = {
@@ -68,12 +75,62 @@ function normalizeStatus(s: any): string {
   if (v === "selected")    return "Selected";
   if (v === "rejected")    return "Rejected";
   if (v === "scheduled")   return "Scheduled";
+  if (v === "rescheduled") return "Rescheduled";
   if (v === "pending")     return "Pending";
   if (v === "locked")      return "Locked";
   if (v === "released")    return "Released";
   if (v === "completed")   return "Completed";
   if (v === "in progress") return "In Progress";
+  if (v === "on hold")     return "On Hold";
+  if (v === "expired")     return "Expired";
   return s || "Pending";
+}
+
+// ─── STAGE PROGRESSION HELPER (copied verbatim from HR Dashboard) ───────────
+// This is the SAME derivation the HR Dashboard uses to decide a candidate's
+// single "current stage" so they're counted in exactly one status bucket
+// instead of every stage they've historically passed through. It is used
+// ONLY by the Interview Stage Breakdown below — nothing else on this page
+// reads from it, so Pipeline Progress, the donut, and the Panel Users card
+// keep their existing (unrelated) counting untouched.
+//
+// FIELD MAPPING (matches HR Dashboard / Candidate History exactly):
+//   Screening Status (AI Screening Round) → l1Status
+//   L1 Status (L1 Interview)              → l2Status
+//   L2 Status (L2 Interview)              → l2ManagerStatus
+const STAGE_ORDER = ["resume", "screening", "l1", "l2", "hr", "offer"] as const;
+type StageKey = typeof STAGE_ORDER[number];
+
+function getCandidateProgress(c: any) {
+  const statuses: Record<StageKey, string> = {
+    resume: c.resumeReviewStatus || "Pending",
+    screening: c.l1Status || "Pending",
+    l1: c.l2Status || "Pending",
+    l2: c.l2ManagerStatus || "Pending",
+    hr: c.hrStatus || "Pending",
+    offer: c.offerStatus || "Pending",
+  };
+  const isPassed: Record<StageKey, (s: string) => boolean> = {
+    resume: s => s === "Accepted",
+    screening: s => s === "Selected",
+    l1: s => s === "Selected",
+    l2: s => s === "Selected",
+    hr: s => s === "Selected",
+    offer: s => s === "Released" || s === "Accepted",
+  };
+
+  let lastPassedIdx = -1;
+  for (let i = 0; i < STAGE_ORDER.length; i++) {
+    if (isPassed[STAGE_ORDER[i]](statuses[STAGE_ORDER[i]])) lastPassedIdx = i;
+    else break;
+  }
+
+  const currentIdx = Math.min(lastPassedIdx + 1, STAGE_ORDER.length - 1);
+
+  return {
+    currentKey: STAGE_ORDER[currentIdx],
+    currentStatus: statuses[STAGE_ORDER[currentIdx]],
+  };
 }
 
 // ─── SUB-COMPONENTS ───────────────────────────────────────────────────────────
@@ -179,7 +236,6 @@ export default function AdminDashboard() {
   const [requirements,    setRequirements]    = useState<any[]>([]);
   const [projectEntries,  setProjectEntries]  = useState<any[]>([]);
   const [filterRole,   setFilterRole]   = useState("all");
-  const [filterStage,  setFilterStage]  = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [isMounted, setIsMounted] = useState(false);
   const [carouselApi, setCarouselApi] = useState<CarouselApi>();
@@ -329,6 +385,7 @@ jdFileType: r.jdFileType || null,
           resumeReviewStatus: normalizeStatus(r.resumeReviewStatus),
           l1Status:    normalizeStatus(r.l1Status),
           l2Status:    normalizeStatus(r.l2Status),
+          l2ManagerStatus: normalizeStatus(r.l2ManagerStatus),
           hrStatus:    normalizeStatus(r.hrStatus),
           offerStatus: normalizeStatus(r.offerStatus),
           finalStatus: r.finalStatus || "In Progress",
@@ -344,28 +401,40 @@ jdFileType: r.jdFileType || null,
     return () => { u1(); u2(); };
   }, []);
 
+  // FIX 1: Stage dropdown removed — this filter now only ever needs to know
+  // about role (Uploaded/Handled by) and the Final Status dropdown, so the
+  // stage-based branch of this filter (and the stageMap it used) is gone.
   const filtered = useMemo(() => {
-    const stageMap: Record<string, string> = {
-      resume: "resumeReviewStatus", l1: "l1Status", l2: "l2Status",
-      hr: "hrStatus", offer: "offerStatus", final: "finalStatus",
-    };
     return candidates.filter(c => {
       if (filterRole === "hr" || filterRole === "agency") {
         const uploader = users.find(u => u.id === c.createdBy);
         if (!uploader || (uploader.role || "").toLowerCase() !== filterRole) return false;
-      } else if (filterRole === "panel") {
-        const panelUids = users.filter(u => (u.role||"").toLowerCase()==="panel").map(u => u.id);
-        if (!panelUids.includes(c.l1InterviewerUid) && !panelUids.includes(c.l2InterviewerUid)) return false;
       }
-      if (filterStage !== "all" && filterStatus !== "all") {
-        const field = stageMap[filterStage];
-        if (field && c[field] !== filterStatus) return false;
-      } else if (filterStage === "all" && filterStatus !== "all") {
+      if (filterStatus !== "all") {
         if (c.finalStatus !== filterStatus) return false;
       }
       return true;
     });
-  }, [candidates, users, filterRole, filterStage, filterStatus]);
+  }, [candidates, users, filterRole, filterStatus]);
+
+  // FIX 3: exact candidate ids behind the current filtered set — used so
+  // "View Candidates" on the Total Candidates card always shows precisely
+  // what the count reflects, for any combination of active filters.
+  const filteredIds = useMemo(() => filtered.map(c => c.id), [filtered]);
+
+  // ── NEW FIX: exact candidate ids behind Active Pipeline / Hired / Rejected.
+  // These are derived from the SAME `filtered` array (which already applies
+  // the Uploaded/Handled By role filter) that stats.inProgress / stats.completed
+  // / stats.rejected are computed from below, so the card count and the ids
+  // used for "View Candidates" can never drift apart or leak the other
+  // role's candidates back in.
+  const categoryIds = useMemo(() => ({
+    inProgress: filtered
+      .filter(c => { const f = (c.finalStatus ?? "").toLowerCase(); return f !== "completed" && f !== "rejected"; })
+      .map(c => c.id),
+    completed: filtered.filter(c => c.finalStatus === "Completed").map(c => c.id),
+    rejected:  filtered.filter(c => c.finalStatus === "Rejected").map(c => c.id),
+  }), [filtered]);
 
   const userCounts = useMemo(() => ({
     hr:     users.filter(u => (u.role||"").toLowerCase()==="hr").length,
@@ -415,7 +484,107 @@ jdFileType: r.jdFileType || null,
     offerReleased: filtered.filter(c => c.offerStatus==="Released").length,
     offerAccepted: filtered.filter(c => c.offerStatus==="Accepted").length,
     offerRejected: filtered.filter(c => c.offerStatus==="Rejected").length,
+    // NOTE: these raw field-based counts (including the aiScreening* below)
+    // are kept EXACTLY as before and are still used by Pipeline Progress /
+    // the Panel Users card elsewhere on this page. They are intentionally
+    // NOT touched by this fix — only the Interview Stage Breakdown section
+    // below has been switched to `stageBreakdown` (see next block).
+    aiScreeningScheduled:   filtered.filter(c => c.l1Status==="Scheduled").length,
+    aiScreeningRejected:    filtered.filter(c => c.l1Status==="Rejected").length,
+    aiScreeningOnHold:      filtered.filter(c => c.l1Status==="On Hold").length,
+    aiScreeningExpired:     filtered.filter(c => c.l1Status==="Expired").length,
+    aiScreeningRescheduled: filtered.filter(c => c.l1Status==="Rescheduled").length,
   }), [filtered]);
+
+  // ─── INTERVIEW STAGE BREAKDOWN — matches HR Dashboard exactly ────────────
+  // Unlike `stats` above (raw field-value filters, which can double-count a
+  // candidate across stages since old field values are never cleared as a
+  // candidate progresses), this uses the SAME "current stage only" derivation
+  // as the HR Dashboard: each candidate is placed in exactly one stage/status
+  // bucket via getCandidateProgress. This is the only thing that feeds the
+  // Interview Stage Breakdown section — Pipeline Progress, the donut, and
+  // the Panel Users card above still read from `stats` and are unaffected.
+  //
+  // FIX 4: Alongside the counts, this also derives `stageBreakdownIds` — the
+  // exact candidate ids behind each stage/status bucket, computed from the
+  // SAME `progress` array as the counts (so they can never disagree). Both
+  // are derived from `filtered`, which already applies the Uploaded/Handled
+  // By (HR/Agency) selection, so a bucket's count and its "View Candidates"
+  // destination always represent identical, role-filtered candidate sets.
+  const { stageBreakdown, stageBreakdownIds } = useMemo(() => {
+    const progress = filtered.map(c => ({ id: c.id, ...getCandidateProgress(c) }));
+    const bucket = (key: StageKey, status: string) =>
+      progress.filter(p => p.currentKey === key && p.currentStatus === status);
+    const count = (key: StageKey, status: string) => bucket(key, status).length;
+    const ids   = (key: StageKey, status: string) => bucket(key, status).map(p => p.id);
+
+    return {
+      stageBreakdown: {
+        resumeRejected: count("resume", "Rejected"),
+        resumeOnHold:   count("resume", "On Hold"),
+        resumePending:  count("resume", "Pending"),
+
+        screeningScheduled:   count("screening", "Scheduled"),
+        screeningRejected:    count("screening", "Rejected"),
+        screeningOnHold:      count("screening", "On Hold"),
+        screeningExpired:     count("screening", "Expired"),
+        screeningRescheduled: count("screening", "Rescheduled"),
+
+        l1Scheduled: count("l1", "Scheduled"),
+        l1Rejected:  count("l1", "Rejected"),
+        l1OnHold:    count("l1", "On Hold"),
+        l1Pending:   count("l1", "Pending"),
+
+        l2Scheduled: count("l2", "Scheduled"),
+        l2Rejected:  count("l2", "Rejected"),
+        l2OnHold:    count("l2", "On Hold"),
+        l2Pending:   count("l2", "Pending"),
+
+        hrScheduled: count("hr", "Scheduled"),
+        hrRejected:  count("hr", "Rejected"),
+        hrOnHold:    count("hr", "On Hold"),
+        hrPending:   count("hr", "Pending"),
+
+        offerReleased: count("offer", "Released"),
+        offerAccepted: count("offer", "Accepted"),
+        offerRejected: count("offer", "Rejected"),
+        offerOnHold:   count("offer", "On Hold"),
+        offerPending:  count("offer", "Pending"),
+      },
+      stageBreakdownIds: {
+        resumeRejected: ids("resume", "Rejected"),
+        resumeOnHold:   ids("resume", "On Hold"),
+        resumePending:  ids("resume", "Pending"),
+
+        screeningScheduled:   ids("screening", "Scheduled"),
+        screeningRejected:    ids("screening", "Rejected"),
+        screeningOnHold:      ids("screening", "On Hold"),
+        screeningExpired:     ids("screening", "Expired"),
+        screeningRescheduled: ids("screening", "Rescheduled"),
+
+        l1Scheduled: ids("l1", "Scheduled"),
+        l1Rejected:  ids("l1", "Rejected"),
+        l1OnHold:    ids("l1", "On Hold"),
+        l1Pending:   ids("l1", "Pending"),
+
+        l2Scheduled: ids("l2", "Scheduled"),
+        l2Rejected:  ids("l2", "Rejected"),
+        l2OnHold:    ids("l2", "On Hold"),
+        l2Pending:   ids("l2", "Pending"),
+
+        hrScheduled: ids("hr", "Scheduled"),
+        hrRejected:  ids("hr", "Rejected"),
+        hrOnHold:    ids("hr", "On Hold"),
+        hrPending:   ids("hr", "Pending"),
+
+        offerReleased: ids("offer", "Released"),
+        offerAccepted: ids("offer", "Accepted"),
+        offerRejected: ids("offer", "Rejected"),
+        offerOnHold:   ids("offer", "On Hold"),
+        offerPending:  ids("offer", "Pending"),
+      },
+    };
+  }, [filtered]);
 
   const pipelineData = useMemo(() => [
     { name:"L1 Selected", value:stats.l1Selected, fill:"#6366F1", stage:"l1",    status:"Selected" },
@@ -452,9 +621,17 @@ jdFileType: r.jdFileType || null,
   
     filtered.forEach(c => {
       [
-        { key: "l1", label: "L1 Interview", df: "l1ScheduledDate", sf: "l1TimeSlot", st: "l1Status" },
-        { key: "l2", label: "L2 Interview", df: "l2ScheduledDate", sf: "l2TimeSlot", st: "l2Status" },
-        { key: "hr", label: "HR Round",     df: "hrScheduledDate", sf: "hrTimeSlot", st: "hrStatus" },
+        // FIX 4: Round-name mapping corrected to match the actual scheduled
+        // round, same as the candidate detail page / HR Dashboard use:
+        //   l1* fields   → the AI/HR "Screening Round" (NOT a panel L1/L2 round)
+        //   l2* fields   → "L1 Technical Round"  → shown here as "L1 Interview"
+        //   l2Manager*   → "L2 Manager Round"    → shown here as "L2 Interview"
+        // Previously this list read from l1*/l2* directly, which displayed the
+        // real L1 Technical Round (l2* data) mislabeled as "L2 Interview" and
+        // vice versa.
+        { key: "l1", label: "L1 Interview", df: "l2ScheduledDate",        sf: "l2TimeSlot",        st: "l2Status" },
+        { key: "l2", label: "L2 Interview", df: "l2ManagerScheduledDate", sf: "l2ManagerTimeSlot", st: "l2ManagerStatus" },
+        { key: "hr", label: "HR Round",     df: "hrScheduledDate",        sf: "hrTimeSlot",        st: "hrStatus" },
       ].forEach(({ key, label, df, sf, st }) => {
   
         const dateStr = c[df];
@@ -492,7 +669,8 @@ jdFileType: r.jdFileType || null,
   
     return list.sort((a, b) => a.date.localeCompare(b.date));
   }, [filtered]);
-  const hasFilters = filterRole!=="all" || filterStage!=="all" || filterStatus!=="all";
+  // FIX 1: Stage dropdown removed, so "has filters" only tracks role + status now.
+  const hasFilters = filterRole!=="all" || filterStatus!=="all";
 
   if (!isMounted) return (
     <div className="h-screen flex items-center justify-center">
@@ -514,50 +692,35 @@ jdFileType: r.jdFileType || null,
       {/* FILTERS */}
       <div className="bg-card border rounded-xl p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3 items-end">
-          <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Uploaded / Handled by</label>
+              {/* FIX 2: "Panel (handled L1 / L2)" option removed — HR and Agency remain */}
               <Select onValueChange={v=>{setFilterRole(v);}} value={filterRole}>
                 <SelectTrigger className="h-10 text-sm rounded-lg"><SelectValue placeholder="All Roles" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Roles</SelectItem>
                   <SelectItem value="hr">HR (uploaded by HR)</SelectItem>
                   <SelectItem value="agency">Agency (uploaded by Agency)</SelectItem>
-                  <SelectItem value="panel">Panel (handled L1 / L2)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Stage</label>
-              <Select onValueChange={v=>{setFilterStage(v);setFilterStatus("all");}} value={filterStage}>
-                <SelectTrigger className="h-10 text-sm rounded-lg"><SelectValue placeholder="All Stages" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Stages</SelectItem>
-                  <SelectItem value="resume">Resume Review</SelectItem>
-                  <SelectItem value="l1">L1 Interview</SelectItem>
-                  <SelectItem value="l2">L2 Interview</SelectItem>
-                  <SelectItem value="hr">HR Round</SelectItem>
-                  <SelectItem value="offer">Offer Stage</SelectItem>
-                  <SelectItem value="final">Final Status</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {/* FIX 1: Stage dropdown removed entirely */}
             <div className="space-y-1.5">
               <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Status</label>
               <Select onValueChange={setFilterStatus} value={filterStatus}>
                 <SelectTrigger className="h-10 text-sm rounded-lg"><SelectValue placeholder="All Statuses" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
-                  {filterStage==="resume" && <><SelectItem value="Accepted">Accepted</SelectItem><SelectItem value="Rejected">Rejected</SelectItem><SelectItem value="Pending">Pending</SelectItem></>}
-                  {(filterStage==="l1"||filterStage==="l2"||filterStage==="hr") && <><SelectItem value="Scheduled">Scheduled</SelectItem><SelectItem value="Selected">Selected</SelectItem><SelectItem value="Rejected">Rejected</SelectItem><SelectItem value="Pending">Pending</SelectItem></>}
-                  {filterStage==="offer" && <><SelectItem value="Pending">Pending</SelectItem><SelectItem value="Released">Released</SelectItem><SelectItem value="Accepted">Accepted</SelectItem><SelectItem value="Rejected">Rejected</SelectItem></>}
-                  {(filterStage==="final"||filterStage==="all") && <><SelectItem value="In Progress">In Progress</SelectItem><SelectItem value="Completed">Completed</SelectItem><SelectItem value="Rejected">Rejected</SelectItem></>}
+                  <SelectItem value="In Progress">In Progress</SelectItem>
+                  <SelectItem value="Completed">Completed</SelectItem>
+                  <SelectItem value="Rejected">Rejected</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
           {hasFilters && (
-            <Button variant="ghost" size="sm" onClick={()=>{setFilterRole("all");setFilterStage("all");setFilterStatus("all");}} className="h-10 gap-1.5 text-xs rounded-lg border shrink-0">
+            <Button variant="ghost" size="sm" onClick={()=>{setFilterRole("all");setFilterStatus("all");}} className="h-10 gap-1.5 text-xs rounded-lg border shrink-0">
               <XCircle className="h-3.5 w-3.5" /> Clear filters
             </Button>
           )}
@@ -566,7 +729,6 @@ jdFileType: r.jdFileType || null,
           <p className="text-[11px] text-muted-foreground mt-2 pt-2 border-t">
             Showing <span className="font-semibold text-foreground">{filtered.length}</span> of <span className="font-semibold text-foreground">{candidates.length}</span> total candidates
             {filterRole!=="all" && <span> · Role: <span className="font-semibold capitalize">{filterRole}</span></span>}
-            {filterStage!=="all" && <span> · Stage: <span className="font-semibold capitalize">{filterStage}</span></span>}
             {filterStatus!=="all" && <span> · Status: <span className="font-semibold">{filterStatus}</span></span>}
           </p>
         )}
@@ -576,10 +738,22 @@ jdFileType: r.jdFileType || null,
       <div>
         <SectionLabel>Candidate Overview</SectionLabel>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard title="Total Candidates" value={stats.total}      icon={Users}        accent="bg-slate-500"   href={ROUTES.candidateHistory} />
-          <StatCard title="Active Pipeline"   value={stats.inProgress} icon={Activity}     accent="bg-blue-500"   href={`${ROUTES.candidateHistory}?active=true`} />
-          <StatCard title="Hired"             value={stats.completed}  icon={CheckCircle2} accent="bg-emerald-500" href={buildFilter(ROUTES.candidateHistory,"final","Completed")} />
-          <StatCard title="Rejected"          value={stats.rejected}   icon={TrendingDown} accent="bg-rose-500"    href={buildFilter(ROUTES.candidateHistory,"final","Rejected")} />
+          {/* FIX 3: Total Candidates now links to the exact ids behind the count,
+              so selecting Agency (or any filter) and clicking View Candidates
+              shows precisely that filtered set — never the full candidate list. */}
+          {/* FIX (new): Active Pipeline / Hired / Rejected now link to the exact
+              ids behind each count (categoryIds), derived from the same
+              `filtered` array as stats.inProgress / stats.completed / stats.rejected.
+              Previously "Active Pipeline" used a plain `?active=true` link and
+              "Hired"/"Rejected" used stage+status query params — neither carried
+              the Uploaded/Handled By (HR/Agency) selection forward, so View
+              Candidates could show candidates from the other role. Using
+              buildIdsUrl guarantees the destination list always matches the
+              card's count exactly, for any combination of active filters. */}
+          <StatCard title="Total Candidates" value={stats.total}      icon={Users}        accent="bg-slate-500"   href={buildIdsUrl(ROUTES.candidateHistory, filteredIds)} />
+          <StatCard title="Active Pipeline"   value={stats.inProgress} icon={Activity}     accent="bg-blue-500"   href={buildIdsUrl(ROUTES.candidateHistory, categoryIds.inProgress)} />
+          <StatCard title="Hired"             value={stats.completed}  icon={CheckCircle2} accent="bg-emerald-500" href={buildIdsUrl(ROUTES.candidateHistory, categoryIds.completed)} />
+          <StatCard title="Rejected"          value={stats.rejected}   icon={TrendingDown} accent="bg-rose-500"    href={buildIdsUrl(ROUTES.candidateHistory, categoryIds.rejected)} />
         </div>
       </div>
 
@@ -598,7 +772,6 @@ jdFileType: r.jdFileType || null,
               </div>
               <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
                 <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-semibold">{jobRequisitions.length} JR</span>
-                <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 font-semibold">{requirements.length} REQ</span>
               </div>
             </div>
             {/* Source legend */}
@@ -606,10 +779,6 @@ jdFileType: r.jdFileType || null,
               <div className="flex items-center gap-1">
                 <div className="h-2 w-2 rounded-full bg-blue-500" />
                 <span className="text-[10px] text-muted-foreground font-medium">Job Requisition (Admin/HR)</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="h-2 w-2 rounded-full bg-amber-500" />
-                <span className="text-[10px] text-muted-foreground font-medium">Requirement (Agency)</span>
               </div>
             </div>
           </CardHeader>
@@ -812,38 +981,59 @@ jdFileType: r.jdFileType || null,
         <SectionLabel>Interview Stage Breakdown</SectionLabel>
         <Card className="shadow-sm border">
           <CardContent className="p-5">
-            {/* ── FIX 2: Horizontal scrollbar — wraps the 5-column grid so it
+            {/* ── FIX 2: Horizontal scrollbar — wraps the 6-column grid so it
                 doesn't squash on small screens. Scroll appears automatically   ── */}
             <div className="overflow-x-auto">
-              <div className="grid grid-cols-5 gap-4 min-w-[700px]">
+              <div className="grid grid-cols-6 gap-4 min-w-[840px]">
+                {/* All six columns below now read counts from `stageBreakdown`
+                    and link using `stageBreakdownIds` — the exact candidate ids
+                    behind each count, derived from the SAME `filtered` array
+                    (which already applies the Uploaded/Handled By role filter).
+                    This guarantees clicking a count always shows precisely the
+                    candidates it represents, correctly scoped to HR/Agency when
+                    that filter is active. Field mapping matches HR Dashboard:
+                      L1 Interview → l2Status (was incorrectly l1Status)
+                      L2 Interview → l2ManagerStatus (was incorrectly l2Status)
+                    Statuses shown per column now match the HR Dashboard's
+                    Interview Stage Breakdown 1:1 (e.g. Resume Review no
+                    longer shows "Accepted" — an accepted resume candidate's
+                    current stage has already moved to Screening). */}
                 <StageCol title="Resume Review" accent="bg-slate-100 dark:bg-slate-800" items={[
-                  {label:"Accepted",count:stats.resumeAccepted,dot:"bg-emerald-500",href:buildFilter(ROUTES.candidateHistory,"resume","Accepted")},
-                  {label:"Rejected",count:stats.resumeRejected,dot:"bg-rose-500",   href:buildFilter(ROUTES.candidateHistory,"resume","Rejected")},
-                  {label:"Pending", count:stats.resumePending, dot:"bg-slate-400",  href:buildFilter(ROUTES.candidateHistory,"resume","Pending")},
+                  {label:"Rejected",count:stageBreakdown.resumeRejected,dot:"bg-rose-500", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.resumeRejected)},
+                  {label:"On Hold", count:stageBreakdown.resumeOnHold, dot:"bg-amber-400", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.resumeOnHold)},
+                  {label:"Pending", count:stageBreakdown.resumePending,dot:"bg-slate-400", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.resumePending)},
+                ]} />
+                <StageCol title="AI Screening Round" accent="bg-purple-50 dark:bg-purple-950/30" items={[
+                  {label:"Scheduled",   count:stageBreakdown.screeningScheduled,   dot:"bg-blue-400",   href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.screeningScheduled)},
+                  {label:"Rejected",    count:stageBreakdown.screeningRejected,    dot:"bg-rose-500",    href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.screeningRejected)},
+                  {label:"On Hold",     count:stageBreakdown.screeningOnHold,      dot:"bg-amber-400",   href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.screeningOnHold)},
+                  {label:"Expired",     count:stageBreakdown.screeningExpired,     dot:"bg-red-600",     href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.screeningExpired)},
+                  {label:"Rescheduled", count:stageBreakdown.screeningRescheduled, dot:"bg-indigo-400",  href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.screeningRescheduled)},
                 ]} />
                 <StageCol title="L1 Interview" accent="bg-indigo-50 dark:bg-indigo-950/30" items={[
-                  {label:"Selected", count:stats.l1Selected, dot:"bg-indigo-500",href:buildFilter(ROUTES.candidateHistory,"l1","Selected")},
-                  {label:"Scheduled",count:stats.l1Scheduled,dot:"bg-blue-400", href:buildFilter(ROUTES.candidateHistory,"l1","Scheduled")},
-                  {label:"Rejected", count:stats.l1Rejected, dot:"bg-rose-400", href:buildFilter(ROUTES.candidateHistory,"l1","Rejected")},
-                  {label:"Pending",  count:stats.l1Pending,  dot:"bg-slate-300",href:buildFilter(ROUTES.candidateHistory,"l1","Pending")},
+                  {label:"Scheduled",count:stageBreakdown.l1Scheduled,dot:"bg-blue-400", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l1Scheduled)},
+                  {label:"Rejected", count:stageBreakdown.l1Rejected, dot:"bg-rose-400", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l1Rejected)},
+                  {label:"On Hold",  count:stageBreakdown.l1OnHold,   dot:"bg-amber-400",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l1OnHold)},
+                  {label:"Pending",  count:stageBreakdown.l1Pending,  dot:"bg-slate-300",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l1Pending)},
                 ]} />
                 <StageCol title="L2 Interview" accent="bg-blue-50 dark:bg-blue-950/30" items={[
-                  {label:"Selected", count:stats.l2Selected, dot:"bg-indigo-500",href:buildFilter(ROUTES.candidateHistory,"l2","Selected")},
-                  {label:"Scheduled",count:stats.l2Scheduled,dot:"bg-blue-400", href:buildFilter(ROUTES.candidateHistory,"l2","Scheduled")},
-                  {label:"Rejected", count:stats.l2Rejected, dot:"bg-rose-600", href:buildFilter(ROUTES.candidateHistory,"l2","Rejected")},
-                  {label:"Pending",  count:stats.l2Pending,  dot:"bg-slate-300",href:buildFilter(ROUTES.candidateHistory,"l2","Pending")},
+                  {label:"Scheduled",count:stageBreakdown.l2Scheduled,dot:"bg-blue-400", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l2Scheduled)},
+                  {label:"Rejected", count:stageBreakdown.l2Rejected, dot:"bg-rose-600", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l2Rejected)},
+                  {label:"On Hold",  count:stageBreakdown.l2OnHold,   dot:"bg-amber-400",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l2OnHold)},
+                  {label:"Pending",  count:stageBreakdown.l2Pending,  dot:"bg-slate-300",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.l2Pending)},
                 ]} />
                 <StageCol title="HR Round" accent="bg-amber-50 dark:bg-amber-950/30" items={[
-                  {label:"Selected", count:stats.hrSelected, dot:"bg-amber-500",href:buildFilter(ROUTES.candidateHistory,"hr","Selected")},
-                  {label:"Scheduled",count:stats.hrScheduled,dot:"bg-amber-300",href:buildFilter(ROUTES.candidateHistory,"hr","Scheduled")},
-                  {label:"Rejected", count:stats.hrRejected, dot:"bg-rose-700", href:buildFilter(ROUTES.candidateHistory,"hr","Rejected")},
-                  {label:"Pending",  count:stats.hrPending,  dot:"bg-slate-300",href:buildFilter(ROUTES.candidateHistory,"hr","Pending")},
+                  {label:"Scheduled",count:stageBreakdown.hrScheduled,dot:"bg-amber-300",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.hrScheduled)},
+                  {label:"Rejected", count:stageBreakdown.hrRejected, dot:"bg-rose-700", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.hrRejected)},
+                  {label:"On Hold",  count:stageBreakdown.hrOnHold,   dot:"bg-amber-400",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.hrOnHold)},
+                  {label:"Pending",  count:stageBreakdown.hrPending,  dot:"bg-slate-300",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.hrPending)},
                 ]} />
                 <StageCol title="Offer Stage" accent="bg-emerald-50 dark:bg-emerald-950/30" items={[
-                  {label:"Released",count:stats.offerReleased,dot:"bg-purple-500", href:buildFilter(ROUTES.candidateHistory,"offer","Released")},
-                  {label:"Accepted",count:stats.offerAccepted,dot:"bg-emerald-500",href:buildFilter(ROUTES.candidateHistory,"offer","Accepted")},
-                  {label:"Rejected",count:stats.offerRejected,dot:"bg-rose-500",   href:buildFilter(ROUTES.candidateHistory,"offer","Rejected")},
-                  {label:"Pending", count:stats.offerPending, dot:"bg-slate-300",  href:buildFilter(ROUTES.candidateHistory,"offer","Pending")},
+                  {label:"Released",count:stageBreakdown.offerReleased,dot:"bg-purple-500", href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.offerReleased)},
+                  {label:"Accepted",count:stageBreakdown.offerAccepted,dot:"bg-emerald-500",href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.offerAccepted)},
+                  {label:"Rejected",count:stageBreakdown.offerRejected,dot:"bg-rose-500",   href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.offerRejected)},
+                  {label:"On Hold", count:stageBreakdown.offerOnHold,  dot:"bg-amber-400",  href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.offerOnHold)},
+                  {label:"Pending", count:stageBreakdown.offerPending, dot:"bg-slate-300",  href:buildIdsUrl(ROUTES.candidateHistory, stageBreakdownIds.offerPending)},
                 ]} />
               </div>
             </div>
@@ -946,4 +1136,3 @@ jdFileType: r.jdFileType || null,
 </div> 
   );
 }
-  

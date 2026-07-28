@@ -2,6 +2,7 @@
 
 
 import { useState, useEffect } from "react";
+import { getBaseUrl } from '@/lib/getBaseUrl';
 import {
   collection, addDoc, onSnapshot, serverTimestamp,
   query, where, getDocs, doc, getDoc, updateDoc,
@@ -44,7 +45,68 @@ const NOTICE_PERIOD_OPTIONS = ["Immediate", "0-15 days", "15-30 days", "30-60 da
 const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
 const phoneRegex = /^[6-9]\d{9}$/;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RE-EVALUATION: fields to clear when starting a fresh evaluation cycle.
+// Only round-specific interview/evaluation lifecycle data is listed here —
+// core candidate profile fields (name, email, phone, resume, experience,
+// location, designation, CTC, notice period, project) are never touched.
+// ─────────────────────────────────────────────────────────────────────────────
+const RESET_INTERVIEW_CYCLE_DATA: Record<string, any> = {
+  // Resume Review
+  resumePanelUid:        null, resumePanelName:  null, resumePanelEmail: null,
+  resumeAssignedByEmail: null, resumeAssignedByUid: null,
+  resumeFeedback:        '',   resumeHRFeedback: '', resumePanelFeedback: null, resumePanelDecision: null,
+  resumeHoldFeedback:    null, resumeReviewPrevStatus: null,
+  resumeReviewedByEmail: null, resumeReviewedByUid: null, resumeReviewedByName: null,
 
+  // Screening Round / L1 (AI or manual interview)
+  l1InterviewType:       null,
+  l1ScheduledDate:       null, l1TimeSlot: null, l1SchedulingNotes: null,
+  l1PanelUid:            null, l1PanelName: null, l1PanelEmail: null,
+  l1InterviewerUid:      null, l1InterviewerName: null, l1InterviewerEmail: null,
+  l1Feedback:            null,
+  l1HoldFeedback:        null, l1PrevStatus: null,
+  l1AIInterviewToken:    null, l1AIInterviewUrl: null, l1AIInterviewSentAt: null,
+  l1AIStatus:            null,
+  l1AIScore:             null, l1AITechnicalScore: null, l1AICommunicationScore: null,
+  l1AIBodyLanguageScore: null, l1AIEyeContactScore: null,
+  l1AISummary:           '',   l1AIFeedback: '', l1AIRecommendation: null,
+  l1AIStrengths:         [],   l1AIImprovements: [],
+  l1AIAnsweredCount:     null, l1AITotalQuestions: null,
+  l1AISuspicionFlags:    [],   l1AIGazeBreakdown: null, l1AIIntegrityStatus: null,
+  l1AIQuestions:         [],   l1AITranscripts: [], l1AITimings: [],
+  l1AIVideoAnalysisSource: null, l1AIEvaluationStatus: null,
+  l1AIVideoUrl:          '',   l1AICodeAnswer: '',
+  l1AIExpiredReason:     null, l1AIExpiredAt: null,
+  l1RescheduleUsed:      false,
+  l1PreviousScheduledDate: null, l1PreviousTimeSlot: null,
+  l1RescheduledBy:       null, l1RescheduledAt: null,
+
+  // L1 Technical Round (l2)
+  l2ScheduledDate:       null, l2TimeSlot: null, l2SchedulingNotes: null,
+  l2PanelUid:            null, l2PanelName: null, l2PanelEmail: null,
+  l2InterviewerUid:      null, l2InterviewerName: null, l2InterviewerEmail: null,
+  l2Feedback:            null,
+  l2HoldFeedback:        null, l2PrevStatus: null,
+
+  // L2 Manager Round — status was previously NEVER reset on re-evaluation
+  l2ManagerStatus:            'Locked',
+  l2ManagerScheduledDate:     null, l2ManagerTimeSlot: null, l2ManagerSchedulingNotes: null,
+  l2ManagerPanelUid:          null, l2ManagerPanelName: null, l2ManagerPanelEmail: null,
+  l2ManagerInterviewerUid:    null, l2ManagerInterviewerName: null, l2ManagerInterviewerEmail: null,
+  l2ManagerFeedback:          null,
+  l2ManagerHoldFeedback:      null, l2ManagerPrevStatus: null,
+
+  // HR Round
+  hrScheduledDate:       null, hrTimeSlot: null, hrSchedulingNotes: null,
+  hrInterviewerEmail:    null, hrInterviewerUid: null,
+  hrFeedback:            null,
+  hrHoldFeedback:        null, hrPrevStatus: null,
+
+  // Offer Stage
+  offerFeedback:         null,
+  offerHoldFeedback:     null, offerPrevStatus: null,
+};
 // ─── AI Scoring helper (unchanged) ────────────────────────────────────────────
 async function computeMatchScore(
   resumeFile: { data: string; type: string } | null,
@@ -244,6 +306,23 @@ function ProjectQuestionsPreview({ questions }: { questions: ProjectQuestion[] }
   );
 }
 
+function openOrDownloadResume(
+  resumeFile: { name: string; type: string; data: string },
+  mode: 'view' | 'download'
+) {
+  const bytes = atob(resumeFile.data);
+  const arr = new Uint8Array(bytes.length).map((_, i) => bytes.charCodeAt(i));
+  const blob = new Blob([arr], { type: resumeFile.type || 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  if (mode === 'view' && resumeFile.type?.includes('pdf')) {
+    window.open(url, '_blank');
+  } else {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = resumeFile.name || 'resume';
+    a.click();
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RE-EVALUATION BANNER — rendered only when isReEvaluation === true
@@ -323,27 +402,41 @@ export default function CandidateEvaluation() {
   const searchParams                                = useSearchParams();
   const reEvalCandidateId                           = searchParams.get("reEvaluate");
   const isReEvaluation                              = !!reEvalCandidateId;
+
+   // ── EDIT PROFILE EXTENSION: detect ?editProfile=<candidateId> query param ───
+   const editProfileCandidateId                      = searchParams.get("editProfile");
+   const isEditProfile                               = !!editProfileCandidateId;
+
   const [reEvalCandidate,   setReEvalCandidate]     = useState<any>(null);
   const [reEvalLoading,     setReEvalLoading]       = useState(isReEvaluation);
   const [reEvalNotFound,    setReEvalNotFound]      = useState(false);
+  // ── FIX: moved up here (was previously declared just above the
+  //     `reEvalNotFound` early-return block, i.e. AFTER a conditional
+  //     `return` in this component). Because `reEvalLoading` starts `true`
+  //     whenever `isReEvaluation` is true, the very first render hit that
+  //     early return and never reached the old `useState` line — so the
+  //     setter was never initialized in that render's closure. When the
+  //     useEffect below later called `setExistingResumeUploadedAt(...)`,
+  //     it threw "Cannot access before initialization" (a TDZ error) and
+  //     was also a Rules-of-Hooks violation (a hook conditionally skipped).
+  //     Declaring it here, before any early returns, fixes both issues.
+  const [existingResumeUploadedAt, setExistingResumeUploadedAt] = useState<string>('');
 
-
-  // ── RE-EVAL EXTENSION: fetch + prefill when in re-evaluation mode ────────────
   useEffect(() => {
-    if (!isReEvaluation || !reEvalCandidateId) return;
-
+    const targetId = reEvalCandidateId || editProfileCandidateId;
+    if (!targetId) return;
 
     (async () => {
       try {
-        const snap = await getDoc(doc(db, "candidates", reEvalCandidateId));
+        const snap = await getDoc(doc(db, "candidates", targetId));
         if (!snap.exists()) { setReEvalNotFound(true); setReEvalLoading(false); return; }
-
-
         const data = snap.data();
         setReEvalCandidate({ id: snap.id, ...data });
-
-
-        // Prefill all form fields from the stored candidate document
+        setExistingResumeUploadedAt(
+          data.createdDate?.seconds
+            ? new Date(data.createdDate.seconds * 1000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+            : ''
+        );
         setFormData({
           candidateName:        data.candidateName        ?? "",
           candidateEmail:       data.candidateEmail       ?? "",
@@ -360,40 +453,33 @@ export default function CandidateEvaluation() {
           noticePeriod:         data.noticePeriod         ?? "",
           isComfortableOnsite:  data.isComfortableOnsite  ?? "",
           comments:             data.comments             ?? "",
-          // Prefill resume if stored on the candidate doc
           resumeFile: data.resumeFile
-            ? data.resumeFile
-            : data.resumeData
-              ? { name: data.resumeName ?? "resume", type: data.resumeType ?? "application/pdf", data: data.resumeData }
-              : null,
+  ? data.resumeFile
+  : data.resumeData
+    ? { name: data.resumeName ?? "resume", type: data.resumeType ?? "application/pdf", data: data.resumeData }
+    : null,
         });
 
-
-        // ── RE-EVAL EXTENSION: log "Re-Evaluation Started" audit event ─────────
-        await addDoc(collection(db, "candidate_history"), {
-          candidateId:      snap.id,
-          event:            "Re-Evaluation Started",
-          stage:            "Sourcing",
-          performedByUid:   "",   // populated after auth resolves — see submit
-          performedByName:  "",
-          performedByEmail: "",
-          timestamp:        serverTimestamp(),
-          note:             "Candidate opened for re-evaluation from the Rejected Candidates module.",
-        });
-
-
+        if (reEvalCandidateId) {
+          await addDoc(collection(db, "candidate_history"), {
+            candidateId: snap.id,
+            event: "Re-Evaluation Started",
+            stage: "Sourcing",
+            performedByUid: "", performedByName: "", performedByEmail: "",
+            timestamp: serverTimestamp(),
+            note: "Candidate opened for re-evaluation from the Rejected Candidates module.",
+          });
+        }
       } catch (err) {
-        console.error("Failed to load candidate for re-evaluation:", err);
+        console.error("Failed to load candidate:", err);
         toast({ variant: "destructive", title: "Error", description: "Could not load candidate data." });
       } finally {
         setReEvalLoading(false);
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reEvalCandidateId]);
-  // ── END RE-EVAL EXTENSION ───────────────────────────────────────────────────
-
-
+  }, [reEvalCandidateId, editProfileCandidateId]);
+   
   // ── Fetch projects ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!role || !user) { setProjects([]); return; }
@@ -480,18 +566,11 @@ export default function CandidateEvaluation() {
 
     setErrors(prev => ({ ...prev, resumeFile: "" }));
     setIsLoadingExtracting(true);
-
+    setExistingResumeUploadedAt(''); 
 
     setFormData(prev => ({
       ...prev,
-      resumeFile:     { name: file.name, type: file.type, data: "" },
-      candidateName:  "",
-      candidateEmail: "",
-      phoneNumber:    "",
-      experience:     "",
-      currentCtc:     "",
-      expectedCtc:    "",
-      noticePeriod:   "",
+      resumeFile: { name: file.name, type: file.type, data: "" },
     }));
 
 
@@ -511,17 +590,18 @@ export default function CandidateEvaluation() {
 
         setFormData(prev => ({
           ...prev,
-          candidateName:  extracted.candidateName  ?? "",
-          candidateEmail: extracted.candidateEmail ?? "",
-          phoneNumber:    extracted.phoneNumber    ?? "",
-          experience:     String(extracted.experience ?? ""),
-          currentCtc:     extracted.currentCtc    ?? "",
-          expectedCtc:    extracted.expectedCtc   ?? "",
-          noticePeriod:   extracted.noticePeriod  ?? "",
-          currentLocation:   "",
-          permanentLocation: "",
+          candidateName:        prev.candidateName        || extracted.candidateName        || "",
+          candidateEmail:       prev.candidateEmail       || extracted.candidateEmail       || "",
+          phoneNumber:          prev.phoneNumber          || extracted.phoneNumber          || "",
+          currentLocation:      prev.currentLocation      || extracted.currentLocation      || "",
+          permanentLocation:    prev.permanentLocation    || extracted.permanentLocation    || "",
+          candidateDesignation: prev.candidateDesignation || extracted.candidateDesignation || "",
+          experience:           prev.experience           || String(extracted.experience ?? ""),
+          currentCtc:           prev.currentCtc           || extracted.currentCtc           || "",
+          expectedCtc:          prev.expectedCtc          || extracted.expectedCtc          || "",
+          noticePeriod:         prev.noticePeriod         || extracted.noticePeriod         || "",
+          isComfortableOnsite:  prev.isComfortableOnsite  || extracted.isComfortableOnsite  || "",
         }));
-
 
         toast({ title: "Resume Parsed", description: "Details auto-filled from resume." });
       } catch (err) {
@@ -566,11 +646,102 @@ export default function CandidateEvaluation() {
     const formErrors = validateForm();
     if (Object.keys(formErrors).length > 0) { setErrors(formErrors); return; }
 
+    // ── EDIT PROFILE: update Professional Background fields only, then return ──
+    if (isEditProfile && editProfileCandidateId) {
+      setIsLoading(true);
+      try {
+        // ── FIX: read authoritative current state from DB (not stale UI state) ──
+        const freshSnap = await getDoc(doc(db, "candidates", editProfileCandidateId));
+        const freshData: any = freshSnap.exists() ? freshSnap.data() : {};
+    
+        const previousProjectId: string = freshData.jobRequisitionId || freshData.projectId || "";
+        const isProjectCleared = !formData.projectId || formData.projectId === "none";
+        const newProjectId = isProjectCleared ? "" : formData.projectId;
+    
+        const selectedProjectForUpdate = !isProjectCleared
+          ? projects.find(p => p.id === formData.projectId) || null
+          : null;
+    
+        // ── FIX: persist Client Project selection ────────────────────────────────
+        const updateFields: any = {
+          candidateName:        formData.candidateName,
+          candidateEmail:       formData.candidateEmail.trim().toLowerCase(),
+          phoneNumber:          formData.phoneNumber,
+          currentLocation:      formData.currentLocation,
+          permanentLocation:    formData.permanentLocation,
+          experience:           formData.experience,
+          candidateDesignation: formData.candidateDesignation,
+          currentCtc:           formData.currentCtc,
+          expectedCtc:          formData.expectedCtc,
+          noticePeriod:         formData.noticePeriod,
+          isComfortableOnsite:  formData.isComfortableOnsite,
+          lastUpdated:          serverTimestamp(),
+          jobRequisitionId: isProjectCleared ? null : newProjectId,
+          projectName: isProjectCleared
+            ? "—"
+            : (selectedProjectForUpdate?.projectName ?? "—"),
+        };
+        if (formData.resumeFile?.data) {
+          updateFields.resumeFile = formData.resumeFile;
+        }
+    
+        // ── FIX: strict, backend-verified trigger for AI re-score ───────────────
+        // Genuine stage check: l1Status === 'Locked' means the candidate has not
+        // left Resume Review yet (it flips away only when Resume Review is Accepted).
+        const isGenuinelyInResumeReview = freshData.l1Status === 'Locked';
+        const wasProjectPreviouslyEmpty = !previousProjectId;
+        const isNewProjectNowSelected   = !isProjectCleared && !!selectedProjectForUpdate;
+    
+        const shouldRecalculateAiScore =
+          isGenuinelyInResumeReview &&
+          wasProjectPreviouslyEmpty &&
+          isNewProjectNowSelected;
+    
+        if (shouldRecalculateAiScore) {
+          // Reuses the EXISTING AI scoring function/algorithm — unchanged.
+          const { matchScore, matchSummary } = await computeMatchScore(
+            updateFields.resumeFile?.data ? updateFields.resumeFile : formData.resumeFile,
+            selectedProjectForUpdate,
+            formData,
+            role,
+            toast
+          );
+          updateFields.matchScore   = matchScore;
+          updateFields.matchSummary = matchSummary;
+          updateFields.aiScore      = matchScore;
+        }
+    
+        await updateDoc(doc(db, "candidates", editProfileCandidateId), updateFields);
+    
+        await addDoc(collection(db, "candidate_history"), {
+          candidateId: editProfileCandidateId,
+          event: "Professional Background Updated",
+          stage: "Professional Background",
+          performedByUid:   user?.uid    || '',
+          performedByName:  loggedInName || '',
+          performedByEmail: user?.email  || '',
+          timestamp: serverTimestamp(),
+          note: shouldRecalculateAiScore
+            ? `Client Project assigned (${selectedProjectForUpdate?.projectName || newProjectId}) and AI Resume Score recalculated by ${loggedInName || user?.email}.`
+            : `Missing professional background fields completed by ${loggedInName || user?.email}.`,
+        });
+    
+        toast({
+          title: shouldRecalculateAiScore ? "✅ Professional Background Updated — AI Score Recalculated" : "✅ Professional Background Updated",
+        });
+        router.push(`/candidates/${editProfileCandidateId}`);
+      } catch (error: any) {
+        console.error("Edit Profile Submission Error:", error);
+        toast({ variant: "destructive", title: "Update Failed", description: error.message });
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
 
     setIsLoading(true);
     try {
       const emailLower = formData.candidateEmail.trim().toLowerCase();
-
 
       // ── RE-EVAL EXTENSION: skip duplicate email check for re-evaluation ──────
       if (!isReEvaluation) {
@@ -625,7 +796,8 @@ export default function CandidateEvaluation() {
       // ✅ CHANGED — was only inside autoAdvance, now also covers manual mode
       if (autoAdvance || isManualWithProject) {
         l1Token = globalThis.crypto.randomUUID();
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+        // const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://smart-hire-six.vercel.app';
+        const baseUrl = getBaseUrl();
         l1Url   = `${baseUrl}/interview/${l1Token}`;
       }
 
@@ -707,8 +879,24 @@ export default function CandidateEvaluation() {
 
 
       if (isReEvaluation && reEvalCandidateId) {
-        // Update the existing candidate document in-place (preserves ID + history)
+        // Update the existing candidate document in-place (preserves ID + history).
+        //
+        // ── FIX: isolate the new evaluation cycle from old interview data ──────
+        // updateDoc() only merges the fields it's given — it never clears fields
+        // that already exist on the document. RESET_INTERVIEW_CYCLE_DATA is
+        // spread FIRST so every round-specific field from the previous cycle is
+        // explicitly nulled/cleared, and `candidateData` is spread AFTER it so
+        // any fresh values computed for THIS submission (new match score, new
+        // resumeReviewStatus/l1Status, and — for auto-advance/manual candidates —
+        // freshly generated l1AIInterviewToken/Url/SentAt) always take
+        // precedence over the reset defaults.
+        //
+        // Nothing is deleted from Firestore: the previous ai_interviews document
+        // (keyed by its own token) and every candidate_history entry are left
+        // completely untouched, so the prior evaluation stays fully available
+        // for audit under Candidate History.
         const reEvalUpdateFields = {
+          ...RESET_INTERVIEW_CYCLE_DATA,
           ...candidateData,
           // Clear rejection metadata
           rejectedStage:      null,
@@ -773,7 +961,7 @@ export default function CandidateEvaluation() {
 
         try {
           const { sendInterviewEmail } = await import('@/ai/flows/send-interview-email-flow');
-          await sendInterviewEmail({
+          const emailResult = await sendInterviewEmail({
             candidateName:     formData.candidateName,
             candidateEmail:    emailLower,
             jobRole:           formData.candidateDesignation,
@@ -792,8 +980,20 @@ export default function CandidateEvaluation() {
             threadMessageId:   '',
             interviewLink:     l1Url,
           });
+          if (!emailResult.success) {
+            toast({
+              variant: "destructive",
+              title: "Interview Scheduled, Email Not Sent",
+              description: "The candidate was scheduled, but the invitation email failed to deliver. Check SMTP configuration or resend manually.",
+            });
+          }
         } catch (emailErr) {
           console.error('Auto-advance email failed:', emailErr);
+          toast({
+            variant: "destructive",
+            title: "Interview Scheduled, Email Not Sent",
+            description: "The candidate was scheduled, but the invitation email failed to deliver.",
+          });
         }
 
 
@@ -844,7 +1044,7 @@ export default function CandidateEvaluation() {
 
         try {
           const { sendInterviewEmail } = await import('@/ai/flows/send-interview-email-flow');
-          await sendInterviewEmail({
+          const emailResult = await sendInterviewEmail({
             candidateName:     formData.candidateName,
             candidateEmail:    emailLower,
             jobRole:           formData.candidateDesignation,
@@ -854,7 +1054,7 @@ export default function CandidateEvaluation() {
             interviewerEmail:  user?.email  || '',
             interviewDate:     new Date().toISOString().split('T')[0],
             interviewTime:     '',
-            schedulingNotes:   `AI interview link: ${l1Url}\n\nPlease complete within 48 hours.`,
+            schedulingNotes:   `Your AI interview link: ${l1Url}\n\nPlease complete within 48 hours.`,
             interviewFeedback: '',
             stage:             'L1 Interview',
             senderRole:        'hr',
@@ -863,8 +1063,20 @@ export default function CandidateEvaluation() {
             threadMessageId:   '',
             interviewLink:     l1Url,
           });
+          if (!emailResult.success) {
+            toast({
+              variant: "destructive",
+              title: "Interview Scheduled, Email Not Sent",
+              description: "The candidate was scheduled, but the invitation email failed to deliver. Check SMTP configuration or resend manually.",
+            });
+          }
         } catch (emailErr) {
-          console.error('Manual interview email failed:', emailErr);
+          console.error('Auto-advance email failed:', emailErr);
+          toast({
+            variant: "destructive",
+            title: "Interview Scheduled, Email Not Sent",
+            description: "The candidate was scheduled, but the invitation email failed to deliver.",
+          });
         }
 
 
@@ -979,7 +1191,6 @@ export default function CandidateEvaluation() {
     );
   }
 
-
   if (isReEvaluation && reEvalNotFound) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
@@ -1011,8 +1222,8 @@ export default function CandidateEvaluation() {
               : <UserPlus  className="w-6 h-6 text-primary"  />
             }
             <CardTitle className="text-2xl font-bold">
-              {isReEvaluation ? "Re-Evaluate Candidate" : "New Candidate Profile"}
-            </CardTitle>
+  {isReEvaluation ? "Re-Evaluate Candidate" : isEditProfile ? "Complete Professional Background" : "New Candidate Profile"}
+</CardTitle>
           </div>
           <CardDescription>
             {isReEvaluation
@@ -1033,10 +1244,33 @@ export default function CandidateEvaluation() {
 
 
             {/* ── Resume Upload ──────────────────────────────────────────── */}
-            <div className="space-y-2">
+          {/* ── Resume Upload ──────────────────────────────────────────── */}
+          <div className="space-y-2">
               <Label className="font-bold flex items-center gap-2">
                 Upload Resume <Sparkles className="w-4 h-4 text-primary" />
               </Label>
+
+              {/* ── Existing resume actions — shown for re-eval/edit-profile when a
+                   resume is already on file, so HR isn't forced to re-upload ── */}
+              {formData.resumeFile?.data && (isReEvaluation || isEditProfile) && (
+                <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
+                  <div className="text-sm">
+                    <span className="font-medium">{formData.resumeFile.name}</span>
+                    {existingResumeUploadedAt && (
+                      <span className="text-muted-foreground ml-2 text-xs">Uploaded {existingResumeUploadedAt}</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => openOrDownloadResume(formData.resumeFile!, 'view')}>
+                      View
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => openOrDownloadResume(formData.resumeFile!, 'download')}>
+                      Download
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <label
                 className={cn(
                   "flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors",
@@ -1066,7 +1300,7 @@ export default function CandidateEvaluation() {
                     {isLoadingExtracting
                       ? "Extracting details from resume…"
                       : formData.resumeFile
-                        ? formData.resumeFile.name
+                        ? (isReEvaluation || isEditProfile) ? "Click to replace this resume" : formData.resumeFile.name
                         : "Click to upload or drag and drop (PDF / DOCX)"
                     }
                   </p>
@@ -1342,13 +1576,17 @@ export default function CandidateEvaluation() {
              * ── RE-EVAL EXTENSION: Cancel button added in re-evaluation mode ──
              * Submit button text/label changes; underlying handler is unchanged.
              */}
-            <div className={cn("flex gap-3", !isReEvaluation && "block")}>
-              {isReEvaluation && (
+            {/*
+             * ── RE-EVAL / EDIT-PROFILE EXTENSION: Cancel button + label changes ──
+             * Underlying submit handler is unchanged; only what's rendered here differs.
+             */}
+            <div className={cn("flex gap-3", !isReEvaluation && !isEditProfile && "block")}>
+              {(isReEvaluation || isEditProfile) && (
                 <Button
                   type="button"
                   variant="outline"
                   className="flex-1"
-                  onClick={() => router.push("/candidates/rejected")}
+                  onClick={() => router.push(isEditProfile ? `/candidates/${editProfileCandidateId}` : "/candidates/rejected")}
                   disabled={isLoading || isLoadingExtracting}
                 >
                   Cancel
@@ -1358,15 +1596,17 @@ export default function CandidateEvaluation() {
                 type="submit"
                 className={cn(
                   "h-12 text-lg",
-                  isReEvaluation ? "flex-1 bg-blue-600 hover:bg-blue-700 gap-2" : "w-full",
+                  (isReEvaluation || isEditProfile) ? "flex-1 bg-blue-600 hover:bg-blue-700 gap-2" : "w-full",
                 )}
                 disabled={isLoading || isLoadingExtracting}
               >
                 {isLoading
-                  ? <><Loader2 className="animate-spin mr-2 h-5 w-5" /> {isReEvaluation ? "Re-Submitting…" : "Submitting & Scoring…"}</>
+                  ? <><Loader2 className="animate-spin mr-2 h-5 w-5" /> {isReEvaluation ? "Re-Submitting…" : isEditProfile ? "Saving…" : "Submitting & Scoring…"}</>
                   : isReEvaluation
                     ? <><RotateCcw className="h-5 w-5" /> Re-Submit to Active Pipeline</>
-                    : "Submit Candidate"
+                    : isEditProfile
+                      ? <>Save Professional Background</>
+                      : "Submit Candidate"
                 }
               </Button>
             </div>
@@ -1379,4 +1619,3 @@ export default function CandidateEvaluation() {
     </div>
   );
 }
-

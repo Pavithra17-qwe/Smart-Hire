@@ -15,30 +15,80 @@ import {
 } from "@/components/ui/carousel";
 import { ChevronLeft} from "lucide-react";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import {
   ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig,
 } from "@/components/ui/chart";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import {
   Calendar, Clock, CheckCircle2, ClipboardList, Users,
   Loader2, CalendarDays, ChevronRight, AlertCircle,
-  BarChart3, UserCheck, MessageSquare, XCircle,
+  BarChart3, UserCheck, MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── types ────────────────────────────────────────────────────────────────────
+// ============================================================================
+// ROUND MAPPING — VERIFIED AGAINST candidate/[id]/page.tsx, NOT ASSUMED
+//
+// The candidate page has three interview-round cards. Their internal field
+// prefixes do NOT line up with their UI titles the way you'd guess:
+//
+//   UI title            field prefix    candidate_history "stage"   panel-assignable?
+//   "Screening Round"    l1*             "L1 Interview"               NO  (AI/HR only —
+//                                                                          canHRSchedule's
+//                                                                          "Assign Panel
+//                                                                          Member" dropdown
+//                                                                          never renders for
+//                                                                          stageKey==='l1')
+//   "L1 Technical Round" l2*             "L2 Interview"               YES (real panel round)
+//   "L2 Manager Round"   l2Manager*      "L2 Manager Round"           YES (real panel round)
+//
+// Only l2* and l2Manager* ever get a panel member assigned (the dropdown only
+// renders for stageKey 'l2'/'l2manager'). So the l1* round can never be what a
+// panel member means by "my L1 interview" — it's an AI screening step nobody
+// gets manually assigned to. The two REAL panel-conducted rounds are l2*
+// ("L1 Technical Round") and l2Manager* ("L2 Manager Round").
+//
+// This dashboard's "L1 Interview" / "L2 Interview" round-breakdown therefore
+// map to:
+//   Dashboard "L1 Interview"  →  l2* fields        (history stage "L2 Interview")
+//   Dashboard "L2 Interview"  →  l2Manager* fields  (history stage "L2 Manager Round")
+//
+// This was the root cause of "L1 shown as L2": the previous version mapped
+// l1*→"L1 Interview" / l2*→"L2 Interview", which displayed the real,
+// panel-assigned technical round (l2* data) under the "L2 Interview" label.
+// ============================================================================
 interface Candidate {
   id: string;
   candidateName?: string;
   candidateDesignation?: string;
   finalStatus?: string;
-  l1Status?: string; l1ScheduledDate?: string; l1TimeSlot?: string;
-  l1InterviewerUid?: string; l1Feedback?: string; l1Result?: string;
+
+  // "L1 Technical Round" data — this is Dashboard "L1 Interview"
   l2Status?: string; l2ScheduledDate?: string; l2TimeSlot?: string;
-  l2InterviewerUid?: string; l2Feedback?: string; l2Result?: string;
+  l2PanelUid?: string; l2PanelEmail?: string; l2PanelName?: string;
+  l2InterviewerUid?: string; l2InterviewerEmail?: string; // legacy fallback only
+  l2Feedback?: string; l2Result?: string;
+
+  // "L2 Manager Round" data — this is Dashboard "L2 Interview"
+  l2ManagerStatus?: string; l2ManagerScheduledDate?: string; l2ManagerTimeSlot?: string;
+  l2ManagerPanelUid?: string; l2ManagerPanelEmail?: string; l2ManagerPanelName?: string;
+  l2ManagerInterviewerUid?: string; l2ManagerInterviewerEmail?: string; // legacy fallback only
+  l2ManagerFeedback?: string; l2ManagerResult?: string;
+
   createdAt?: any;
+}
+
+// One entry per action recorded in the `candidate_history` collection. This
+// is the ONLY place "who actually selected/rejected/held this candidate" is
+// recorded — candidate docs themselves have no l2SelectedBy-style field, so
+// counting "Selected by me" from candidate.l2Status alone would count
+// anyone currently assigned, not who actually made the call.
+interface HistoryRecord {
+  candidateId: string;
+  stage: string;
+  action: string;
+  updatedBy: string;
+  updatedAt: Date;
 }
 
 interface MonthlyData {
@@ -51,6 +101,8 @@ const trendConfig = {
   selected:  { label: "Selected",  color: "#10B981" },
 } satisfies ChartConfig;
 
+const TERMINAL_STATUSES = ["Selected", "Rejected", "On Hold"];
+
 function normalize(s: any): string {
   const v = (s || "").toLowerCase().trim();
   if (v === "selected")  return "Selected";
@@ -58,12 +110,94 @@ function normalize(s: any): string {
   if (v === "scheduled") return "Scheduled";
   if (v === "pending")   return "Pending";
   if (v === "completed") return "Completed";
+  if (v === "on hold") return "On Hold";
   return s || "Pending";
 }
 
+// Matches the logged-in panel member against an assignment. Primary keys are
+// the *Panel* fields (what the scheduling flow actually writes as "who is
+// assigned"). Interviewer fields are checked only as a legacy fallback.
+function matchesPanelUser(
+  panelUidField: string | undefined | null,
+  panelEmailField: string | undefined | null,
+  interviewerUidField: string | undefined | null,
+  interviewerEmailField: string | undefined | null,
+  userUid: string,
+  userEmail: string
+): boolean {
+  if (!userUid && !userEmail) return false;
+  const uid = userUid?.trim();
+  const email = userEmail?.trim().toLowerCase();
+
+  if (panelUidField && uid && panelUidField.trim() === uid) return true;
+  if (panelEmailField && email && panelEmailField.trim().toLowerCase() === email) return true;
+  if (interviewerUidField && uid && interviewerUidField.trim() === uid) return true;
+  if (interviewerEmailField && email && interviewerEmailField.trim().toLowerCase() === email) return true;
+
+  return false;
+}
+
+function toDateOnlyStr(value: any): string {
+  if (!value) return "";
+  if (typeof value === "object" && typeof value.toDate === "function") {
+    const d = value.toDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+  if (typeof value === "string") {
+    return value.slice(0, 10);
+  }
+  return "";
+}
+
+function hasFeedback(resultField?: string, feedbackField?: string): boolean {
+  return !!(resultField && resultField.trim()) || !!(feedbackField && feedbackField.trim());
+}
+
+// ─── Round configs ──────────────────────────────────────────────────────────
+// Single source of truth for the L1/L2 field mapping described above. Every
+// piece of UI (Round Breakdown counts+links, Upcoming Interviews) is driven
+// from these two configs so L1 and L2 are always handled independently and
+// identically to each other.
+type RoundConfig = {
+  label: "L1 Interview" | "L2 Interview";
+  historyStage: string;
+  statusField: keyof Candidate;
+  dateField: keyof Candidate;
+  slotField: keyof Candidate;
+  panelUidField: keyof Candidate;
+  panelEmailField: keyof Candidate;
+  interviewerUidField: keyof Candidate;
+  interviewerEmailField: keyof Candidate;
+  feedbackField: keyof Candidate;
+  resultField: keyof Candidate;
+};
+
+const ROUND_L1: RoundConfig = {
+  label: "L1 Interview",
+  historyStage: "L2 Interview", // internal history stage name for the "L1 Technical Round" card
+  statusField: "l2Status", dateField: "l2ScheduledDate", slotField: "l2TimeSlot",
+  panelUidField: "l2PanelUid", panelEmailField: "l2PanelEmail",
+  interviewerUidField: "l2InterviewerUid", interviewerEmailField: "l2InterviewerEmail",
+  feedbackField: "l2Feedback", resultField: "l2Result",
+};
+
+const ROUND_L2: RoundConfig = {
+  label: "L2 Interview",
+  historyStage: "L2 Manager Round",
+  statusField: "l2ManagerStatus", dateField: "l2ManagerScheduledDate", slotField: "l2ManagerTimeSlot",
+  panelUidField: "l2ManagerPanelUid", panelEmailField: "l2ManagerPanelEmail",
+  interviewerUidField: "l2ManagerInterviewerUid", interviewerEmailField: "l2ManagerInterviewerEmail",
+  feedbackField: "l2ManagerFeedback", resultField: "l2ManagerResult",
+};
+
+const SELECT_ACTIONS = ["panel-select", "ai-select"];
+const REJECT_ACTIONS = ["panel-reject", "ai-reject"];
+const HOLD_ACTIONS   = ["hold"];
+
 // ─── URL builder for candidate history with filters ───────────────────────────
-// Navigates to the candidate history page pre-filtered so only matching
-// candidates appear. All params are explicit so the history page can read them.
 const HISTORY_BASE = "/candidates/history";
 
 function buildHistoryUrl(params: Record<string, string>) {
@@ -123,87 +257,35 @@ function StatCard({
   );
 }
 
-function InterviewCard({
-  candidate, round, date, timeSlot, isToday, isPast, candidateId,
-}: {
-  candidate: string; round: string; date: string; timeSlot: string;
-  isToday: boolean; isPast: boolean; candidateId: string;
-}) {
-  return (
-    <Link href={`/candidates/${candidateId}`} className="block group">
-      <div className={cn(
-        "p-4 rounded-xl border bg-card hover:bg-muted/30 hover:border-primary/40 transition-all",
-        isToday && "border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/10",
-        isPast  && "border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/10"
-      )}>
-        <div className="flex items-start justify-between mb-2.5">
-          <span className={cn(
-            "text-xs font-bold px-2 py-0.5 rounded-md",
-            round === "L1 Interview"
-              ? "text-indigo-700 bg-indigo-100 dark:text-indigo-300 dark:bg-indigo-950/50"
-              : "text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-950/50"
-          )}>
-            {round}
-          </span>
-          {isToday && <Badge className="bg-emerald-500 text-[9px] h-4 px-1.5">TODAY</Badge>}
-          {isPast  && <Badge className="bg-amber-500 text-[9px] h-4 px-1.5">PENDING</Badge>}
-          {!isToday && !isPast && <Badge variant="outline" className="text-[9px] h-4 px-1.5">Upcoming</Badge>}
-        </div>
-        <div className="space-y-1 mb-3">
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <CalendarDays className="h-3 w-3 text-primary shrink-0" />
-            <span>
-              {isToday ? "Today" : new Date(date + "T00:00:00").toLocaleDateString("en-IN", {
-                day: "2-digit", month: "short", year: "numeric",
-              })}
-            </span>
-          </div>
-          {timeSlot && (
-            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Clock className="h-3 w-3 text-primary shrink-0" />
-              <span>{timeSlot}</span>
-            </div>
-          )}
-        </div>
-        <div className="pt-2.5 border-t">
-          <p className="text-sm font-semibold truncate group-hover:text-primary transition-colors">{candidate}</p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">Click to manage interview →</p>
-        </div>
-      </div>
-    </Link>
-  );
-}
-
 // ─── main component ───────────────────────────────────────────────────────────
 export default function PanelDashboard() {
   const { user } = useAuth();
-  const panelUid  = user?.uid ?? "";
+  const panelUid   = user?.uid ?? "";
+  const panelEmail = user?.email ?? "";
   const router    = useRouter();
 
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [isMounted,  setIsMounted]  = useState(false);
 
   const [panelCarouselApi, setPanelCarouselApi] = useState<CarouselApi>();
-const [panelCanScrollPrev, setPanelCanScrollPrev] = useState(false);
-const [panelCanScrollNext, setPanelCanScrollNext] = useState(true);
+  const [panelCanScrollPrev, setPanelCanScrollPrev] = useState(false);
+  const [panelCanScrollNext, setPanelCanScrollNext] = useState(true);
 
-useEffect(() => {
-  if (!panelCarouselApi) return;
-  const update = () => {
-    setPanelCanScrollPrev(panelCarouselApi.canScrollPrev());
-    setPanelCanScrollNext(panelCarouselApi.canScrollNext());
-  };
-  update();
-  panelCarouselApi.on("select", update);
-  return () => { panelCarouselApi.off("select", update); };
-}, [panelCarouselApi]);
-
-  // ── FILTERS (mirrors admin dashboard pattern) ─────────────────────────────
-  const [filterStage,  setFilterStage]  = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
+  useEffect(() => {
+    if (!panelCarouselApi) return;
+    const update = () => {
+      setPanelCanScrollPrev(panelCarouselApi.canScrollPrev());
+      setPanelCanScrollNext(panelCarouselApi.canScrollNext());
+    };
+    update();
+    panelCarouselApi.on("select", update);
+    return () => { panelCarouselApi.off("select", update); };
+  }, [panelCarouselApi]);
 
   useEffect(() => { setIsMounted(true); }, []);
+
   useEffect(() => {
     if (!panelUid) return;
     const unsub = onSnapshot(collection(db, "candidates"), snap => {
@@ -211,149 +293,226 @@ useEffect(() => {
         const r = doc.data();
         return {
           id: doc.id, ...r,
-          l1Status: normalize(r.l1Status),
           l2Status: normalize(r.l2Status),
+          l2ManagerStatus: normalize(r.l2ManagerStatus),
           createdAt: r.createdAt?.toDate?.() || new Date(),
         } as Candidate;
       });
-
-      // ← NO filter by panelUid — panel sees all candidates
       setCandidates(all);
       setLoading(false);
     });
     return () => unsub();
   }, [panelUid]);
 
-  const today    = new Date(); today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().split("T")[0];
-
-  // ── Apply stage/status filter to assigned candidates ──────────────────────
-  // This mirrors what admin does: filter the local list and update counts live.
-  const filtered = useMemo(() => {
-    if (filterStage === "all" && filterStatus === "all") return candidates;
-
-    const stageFieldMap: Record<string, "l1Status" | "l2Status"> = {
-      l1: "l1Status",
-      l2: "l2Status",
-    };
-
-    return candidates.filter(c => {
-      if (filterStage !== "all" && filterStatus !== "all") {
-        const field = stageFieldMap[filterStage];
-        if (!field) return false;
-        return c[field] === filterStatus;
-      }
-      // Stage only — include candidates participating in that stage
-      if (filterStage !== "all") {
-        const field = stageFieldMap[filterStage];
-        return field ? c[field] !== undefined : false;
-      }
-      // Status only — match either round's status
-      if (filterStatus !== "all") {
-        return c.l1Status === filterStatus || c.l2Status === filterStatus;
-      }
-      return true;
+  // NEW: subscribe to candidate_history — the only place "who actually
+  // selected/rejected/put on hold" is recorded (see HistoryRecord comment).
+  useEffect(() => {
+    if (!panelUid) return;
+    const unsub = onSnapshot(collection(db, "candidate_history"), snap => {
+      const records: HistoryRecord[] = snap.docs.map(d => {
+        const r = d.data();
+        const updatedAt =
+          r.updatedAt?.toDate ? r.updatedAt.toDate() :
+          r.updatedAt instanceof Date ? r.updatedAt : new Date(0);
+        return {
+          candidateId: r.candidateId || "",
+          stage: r.stage || "",
+          action: r.action || "",
+          updatedBy: r.updatedBy || "",
+          updatedAt,
+        };
+      });
+      setHistoryRecords(records);
     });
-  }, [candidates, filterStage, filterStatus]);
+    return () => unsub();
+  }, [panelUid]);
 
-  const hasFilters = filterStage !== "all" || filterStatus !== "all";
+  const today    = new Date(); today.setHours(0, 0, 0, 0);
+  const todayStr = toDateOnlyStr(today);
 
-  // ── ID sets for each stat card (always from full `candidates` list) ──────────
-  // Guarantees: count on card == rows shown in history when you click it.
-// stat cards → still filtered by panelUid
-const myAssigned = useMemo(() =>
-  candidates.filter(c =>
-    c.l1InterviewerUid === panelUid || c.l2InterviewerUid === panelUid
-  ),
-[candidates, panelUid]);
+  // ── Group history by candidate+stage for fast "who last did X" lookups ──
+  const historyByCandidateStage = useMemo(() => {
+    const map = new Map<string, HistoryRecord[]>();
+    historyRecords.forEach(h => {
+      const key = `${h.candidateId}|${h.stage}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(h);
+    });
+    return map;
+  }, [historyRecords]);
 
-const selectedIds = useMemo(() =>
-  myAssigned
-    .filter(c =>
-      (c.l1InterviewerUid === panelUid && c.l1Status === "Selected") ||
-      (c.l2InterviewerUid === panelUid && c.l2Status === "Selected")
-    )
-    .map(c => c.id),
-[myAssigned, panelUid]);
+  function getLastActionUid(candidateId: string, stage: string, actions: string[]): string | undefined {
+    const list = historyByCandidateStage.get(`${candidateId}|${stage}`);
+    if (!list) return undefined;
+    let latest: HistoryRecord | undefined;
+    for (const h of list) {
+      if (!actions.includes(h.action)) continue;
+      if (!latest || h.updatedAt.getTime() > latest.updatedAt.getTime()) latest = h;
+    }
+    return latest?.updatedBy;
+  }
 
-const pendingFeedbackIds = useMemo(() =>
-  myAssigned
-    .filter(c => {
-      const l1Past = c.l1Status === "Scheduled" && c.l1ScheduledDate && c.l1ScheduledDate < todayStr && !c.l1Result;
-      const l2Past = c.l2Status === "Scheduled" && c.l2ScheduledDate && c.l2ScheduledDate < todayStr && !c.l2Result;
-      return l1Past || l2Past;
-    })
-    .map(c => c.id),
-[myAssigned, todayStr]);
+  // ── Round Breakdown: compute exact ID lists per round/status ─────────────
+  // Scheduled  → assignment (Panel fields) + status === "Scheduled".
+  // Selected   → status === "Selected" AND the most recent select-type action
+  //              in candidate_history for this candidate+round was performed
+  //              by the logged-in panel member.
+  // Rejected   → same, for reject-type actions.
+  // On Hold    → same, for hold actions.
+  // L1 and L2 are computed from completely independent field sets (ROUND_L1
+  // vs ROUND_L2) — L1 status/actions never influence L2 counts or vice versa.
+  function computeRoundIds(round: RoundConfig) {
+    const scheduled: string[] = [];
+    const selected: string[] = [];
+    const rejected: string[] = [];
+    const onHold: string[] = [];
 
-const todayIds = useMemo(() =>
-  myAssigned
-    .filter(c =>
-      (c.l1Status === "Scheduled" && c.l1ScheduledDate === todayStr) ||
-      (c.l2Status === "Scheduled" && c.l2ScheduledDate === todayStr)
-    )
-    .map(c => c.id),
-[myAssigned, todayStr]);
-  
+    candidates.forEach(c => {
+      const status = (c as any)[round.statusField];
+      const panelUidVal = (c as any)[round.panelUidField];
+      const panelEmailVal = (c as any)[round.panelEmailField];
+      const interviewerUidVal = (c as any)[round.interviewerUidField];
+      const interviewerEmailVal = (c as any)[round.interviewerEmailField];
 
-  // ── Stats ─────────────────────────────────────────────────────────────────
-  // Card counts use ID sets (match history). Round breakdown uses `filtered`.
-  const stats = useMemo(() => {
-    const l1Scheduled = filtered.filter(c => c.l1Status === "Scheduled").length;
-    const l2Scheduled = filtered.filter(c => c.l2Status === "Scheduled").length;
-    const l1Selected  = filtered.filter(c => c.l1Status === "Selected").length;
-    const l2Selected  = filtered.filter(c => c.l2Status === "Selected").length;
-    const l1Rejected  = filtered.filter(c => c.l1Status === "Rejected").length;
-    const l2Rejected  = filtered.filter(c => c.l2Status === "Rejected").length;
+      const assignedToMe = matchesPanelUser(
+        panelUidVal, panelEmailVal, interviewerUidVal, interviewerEmailVal, panelUid, panelEmail
+      );
 
-    return {
-      totalAssigned:   myAssigned.length,  // ← only assigned to me
-      todayCount:      todayIds.length,
-      pendingFeedback: pendingFeedbackIds.length,
-      totalSelected:   selectedIds.length,
-      totalScheduled:  l1Scheduled + l2Scheduled,
-      totalRejected:   l1Rejected  + l2Rejected,
-      l1Scheduled, l2Scheduled,
-      l1Selected,  l2Selected,
-      l1Rejected,  l2Rejected,
-    };
-  }, [filtered, myAssigned, todayIds, pendingFeedbackIds, selectedIds]);
+      if (assignedToMe && status === "Scheduled") scheduled.push(c.id);
 
-  // ── Interview lists (from filtered set) ───────────────────────────────────
+      if (status === "Selected") {
+        const actor = getLastActionUid(c.id, round.historyStage, SELECT_ACTIONS);
+        if (actor && actor === panelUid) selected.push(c.id);
+      }
+      if (status === "Rejected") {
+        const actor = getLastActionUid(c.id, round.historyStage, REJECT_ACTIONS);
+        if (actor && actor === panelUid) rejected.push(c.id);
+      }
+      if (status === "On Hold") {
+        const actor = getLastActionUid(c.id, round.historyStage, HOLD_ACTIONS);
+        if (actor && actor === panelUid) onHold.push(c.id);
+      }
+    });
+
+    return { scheduled, selected, rejected, onHold };
+  }
+
+  const l1RoundIds = useMemo(
+    () => computeRoundIds(ROUND_L1),
+    [candidates, historyByCandidateStage, panelUid, panelEmail]
+  );
+  const l2RoundIds = useMemo(
+    () => computeRoundIds(ROUND_L2),
+    [candidates, historyByCandidateStage, panelUid, panelEmail]
+  );
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // NOTE: The four cards below (Assigned to Me / Today's Interviews /
+  // Pending Feedback / Selected by Me) are UNCHANGED from the previous fix
+  // and still use the old l1*/l2* (Screening/Technical) definition of
+  // "assigned," per this request's scope ("fix only Upcoming Interviews and
+  // Round Breakdown"). This means they are no longer using the same L1/L2
+  // definition as Round Breakdown above, which now correctly uses
+  // l2*/l2Manager*. Flagging this clearly — happy to bring these in line
+  // with the corrected mapping in a follow-up if you'd like them consistent.
+  // ═══════════════════════════════════════════════════════════════════════
+  const myAssigned = useMemo(() =>
+    candidates.filter(c =>
+      matchesPanelUser((c as any).l1PanelUid, (c as any).l1PanelEmail, (c as any).l1InterviewerUid, (c as any).l1InterviewerEmail, panelUid, panelEmail) ||
+      matchesPanelUser(c.l2PanelUid, c.l2PanelEmail, c.l2InterviewerUid, c.l2InterviewerEmail, panelUid, panelEmail)
+    ),
+  [candidates, panelUid, panelEmail]);
+
+  const myAssignedIds = useMemo(() => myAssigned.map(c => c.id), [myAssigned]);
+
+  const selectedIds = useMemo(() =>
+    myAssigned
+      .filter(c =>
+        (matchesPanelUser((c as any).l1PanelUid, (c as any).l1PanelEmail, (c as any).l1InterviewerUid, (c as any).l1InterviewerEmail, panelUid, panelEmail) && (c as any).l1Status === "Selected") ||
+        (matchesPanelUser(c.l2PanelUid, c.l2PanelEmail, c.l2InterviewerUid, c.l2InterviewerEmail, panelUid, panelEmail) && c.l2Status === "Selected")
+      )
+      .map(c => c.id),
+  [myAssigned, panelUid, panelEmail]);
+
+  const pendingFeedbackIds = useMemo(() =>
+    myAssigned
+      .filter(c => {
+        const l1Date = toDateOnlyStr((c as any).l1ScheduledDate);
+        const l1Past =
+          matchesPanelUser((c as any).l1PanelUid, (c as any).l1PanelEmail, (c as any).l1InterviewerUid, (c as any).l1InterviewerEmail, panelUid, panelEmail) &&
+          !!l1Date && l1Date < todayStr &&
+          !TERMINAL_STATUSES.includes((c as any).l1Status ?? "") &&
+          !hasFeedback((c as any).l1Result, (c as any).l1Feedback);
+
+        const l2Date = toDateOnlyStr(c.l2ScheduledDate);
+        const l2Past =
+          matchesPanelUser(c.l2PanelUid, c.l2PanelEmail, c.l2InterviewerUid, c.l2InterviewerEmail, panelUid, panelEmail) &&
+          !!l2Date && l2Date < todayStr &&
+          !TERMINAL_STATUSES.includes(c.l2Status ?? "") &&
+          !hasFeedback(c.l2Result, c.l2Feedback);
+
+        return l1Past || l2Past;
+      })
+      .map(c => c.id),
+  [myAssigned, todayStr, panelUid, panelEmail]);
+
+  const todayIds = useMemo(() =>
+    myAssigned
+      .filter(c =>
+        (matchesPanelUser((c as any).l1PanelUid, (c as any).l1PanelEmail, (c as any).l1InterviewerUid, (c as any).l1InterviewerEmail, panelUid, panelEmail) && (c as any).l1Status === "Scheduled" && toDateOnlyStr((c as any).l1ScheduledDate) === todayStr) ||
+        (matchesPanelUser(c.l2PanelUid, c.l2PanelEmail, c.l2InterviewerUid, c.l2InterviewerEmail, panelUid, panelEmail) && c.l2Status === "Scheduled" && toDateOnlyStr(c.l2ScheduledDate) === todayStr)
+      )
+      .map(c => c.id),
+  [myAssigned, todayStr, panelUid, panelEmail]);
+
+  const stats = useMemo(() => ({
+    totalAssigned:   myAssigned.length,
+    todayCount:      todayIds.length,
+    pendingFeedback: pendingFeedbackIds.length,
+    totalSelected:   selectedIds.length,
+  }), [myAssigned, todayIds, pendingFeedbackIds, selectedIds]);
+
+  // ── Upcoming Interviews / Pending Feedback list ───────────────────────────
+  // FIXED: now driven by ROUND_L1 (l2* fields) and ROUND_L2 (l2Manager*
+  // fields) — the actual panel-assignable rounds — with labels matching
+  // exactly what Round Breakdown uses, so a round can never be mislabeled.
   const { upcomingInterviews, pendingFeedbackList } = useMemo(() => {
     const maxDate = new Date(today);
     maxDate.setDate(today.getDate() + 6);
     maxDate.setHours(23, 59, 59, 999);
-    const maxStr = maxDate.toISOString().split("T")[0];
+    const maxStr = toDateOnlyStr(maxDate);
 
     const upcomingList: any[] = [], pendingList: any[] = [];
 
-    // Use `candidates` directly — NOT `filtered` — so filters don't affect upcoming
     candidates.forEach(c => {
-      [
-        { label: "L1 Interview", df: "l1ScheduledDate", sf: "l1TimeSlot", st: "l1Status", rf: "l1Result" },
-        { label: "L2 Interview", df: "l2ScheduledDate", sf: "l2TimeSlot", st: "l2Status", rf: "l2Result" },
-      ].forEach(({ label, df, sf, st, rf }) => {
-        const ds     = (c as any)[df];
-        const status = (c as any)[st];
-        const result = (c as any)[rf];
+      [ROUND_L1, ROUND_L2].forEach(round => {
+        const ds       = toDateOnlyStr((c as any)[round.dateField]);
+        const status   = (c as any)[round.statusField];
+        const result   = (c as any)[round.resultField];
+        const feedback = (c as any)[round.feedbackField];
+        const panelUidVal   = (c as any)[round.panelUidField];
+        const panelEmailVal = (c as any)[round.panelEmailField];
+        const interviewerUidVal   = (c as any)[round.interviewerUidField];
+        const interviewerEmailVal = (c as any)[round.interviewerEmailField];
 
-        // Only show Scheduled ones
-        if (!ds || status !== "Scheduled") return;
+        const assignedToMe = matchesPanelUser(
+          panelUidVal, panelEmailVal, interviewerUidVal, interviewerEmailVal, panelUid, panelEmail
+        );
+        if (!assignedToMe || !ds || status !== "Scheduled") return;
 
         const item = {
-          id: `${c.id}-${label}`,
+          id: `${c.id}-${round.label}`,
           candidateId: c.id,
           candidate: c.candidateName || "Unknown",
-          round: label,
+          round: round.label, // "L1 Interview" or "L2 Interview" — matches Round Breakdown exactly
           date: ds,
-          timeSlot: (c as any)[sf] || "",
+          timeSlot: (c as any)[round.slotField] || "",
           isToday: ds === todayStr,
           isPast: ds < todayStr,
-          hasResult: !!result,
+          hasResult: hasFeedback(result, feedback),
         };
 
-        if (ds < todayStr && !result) {
+        if (ds < todayStr && !item.hasResult) {
           pendingList.push(item);
         } else if (ds >= todayStr && ds <= maxStr) {
           upcomingList.push(item);
@@ -361,31 +520,13 @@ const todayIds = useMemo(() =>
       });
     });
 
-    console.log("DEBUG upcoming:", upcomingList); // ← check browser console
-    console.log("DEBUG candidates:", candidates.map(c => ({
-      name: c.candidateName,
-      l1Status: c.l1Status,
-      l1Date: c.l1ScheduledDate,
-      l2Status: c.l2Status,
-      l2Date: c.l2ScheduledDate,
-    })));
-
     return {
       upcomingInterviews:  upcomingList.sort((a, b) => a.date.localeCompare(b.date)),
       pendingFeedbackList: pendingList.sort((a, b) => b.date.localeCompare(a.date)),
     };
-  }, [candidates, todayStr]);
-  
+  }, [candidates, todayStr, panelUid, panelEmail]);
 
-  // ── Recent decisions (from filtered set) ──────────────────────────────────
-  const recentDecisions = useMemo(() =>
-    myAssigned.filter(c =>
-      (c.l1InterviewerUid === panelUid && ["Selected", "Rejected"].includes(c.l1Status ?? "")) ||
-      (c.l2InterviewerUid === panelUid && ["Selected", "Rejected"].includes(c.l2Status ?? ""))
-    ).slice(0, 5),
-  [myAssigned, panelUid]);
-
-  // ── Trend chart (always from full assigned list, not filtered) ────────────
+  // ── Trend chart (unrelated to this fix — left as-is) ──────────────────────
   const trendData = useMemo<MonthlyData[]>(() => {
     const months: MonthlyData[] = [];
     for (let i = 5; i >= 0; i--) {
@@ -396,17 +537,17 @@ const todayIds = useMemo(() =>
       const cDate = c.createdAt instanceof Date ? c.createdAt : new Date();
       const idx = months.findIndex(m => m.monthNum === cDate.getMonth() && m.year === cDate.getFullYear());
       if (idx === -1) return;
-      if (c.l1InterviewerUid === panelUid && ["Selected", "Rejected"].includes(c.l1Status ?? "")) {
+      if (matchesPanelUser((c as any).l1PanelUid, (c as any).l1PanelEmail, (c as any).l1InterviewerUid, (c as any).l1InterviewerEmail, panelUid, panelEmail) && ["Selected", "Rejected"].includes((c as any).l1Status ?? "")) {
         months[idx].conducted++;
-        if (c.l1Status === "Selected") months[idx].selected++;
+        if ((c as any).l1Status === "Selected") months[idx].selected++;
       }
-      if (c.l2InterviewerUid === panelUid && ["Selected", "Rejected"].includes(c.l2Status ?? "")) {
+      if (matchesPanelUser(c.l2PanelUid, c.l2PanelEmail, c.l2InterviewerUid, c.l2InterviewerEmail, panelUid, panelEmail) && ["Selected", "Rejected"].includes(c.l2Status ?? "")) {
         months[idx].conducted++;
         if (c.l2Status === "Selected") months[idx].selected++;
       }
     });
     return months;
-  }, [candidates, panelUid]);
+  }, [candidates, panelUid, panelEmail]);
 
   if (!isMounted || loading) return (
     <div className="h-screen flex items-center justify-center gap-3">
@@ -429,98 +570,18 @@ const todayIds = useMemo(() =>
         </div>
       </div>
 
-      {/* ── FILTERS ── */}
-      {/* Mirrors admin dashboard: stage + status dropdowns, live count badge, clear button */}
-      <div className="bg-card border rounded-xl p-4 shadow-sm">
-        <div className="flex flex-col sm:flex-row gap-3 items-end">
-          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
-
-            {/* Stage filter */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Interview Stage
-              </label>
-              <Select
-                value={filterStage}
-                onValueChange={v => { setFilterStage(v); setFilterStatus("all"); }}
-              >
-                <SelectTrigger className="h-10 text-sm rounded-lg">
-                  <SelectValue placeholder="All Stages" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Stages</SelectItem>
-                  <SelectItem value="l1">L1 Interview</SelectItem>
-                  <SelectItem value="l2">L2 Interview</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Status filter */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Status
-              </label>
-              <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="h-10 text-sm rounded-lg">
-                  <SelectValue placeholder="All Statuses" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="Scheduled">Scheduled</SelectItem>
-                  <SelectItem value="Selected">Selected</SelectItem>
-                  <SelectItem value="Rejected">Rejected</SelectItem>
-                  <SelectItem value="Pending">Pending</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {hasFilters && (
-            <Button
-              variant="ghost" size="sm"
-              onClick={() => { setFilterStage("all"); setFilterStatus("all"); }}
-              className="h-10 gap-1.5 text-xs rounded-lg border shrink-0"
-            >
-              <XCircle className="h-3.5 w-3.5" /> Clear filters
-            </Button>
-          )}
-        </div>
-
-        {/* Live count summary */}
-        {hasFilters && (
-          <p className="text-[11px] text-muted-foreground mt-2 pt-2 border-t">
-            Showing{" "}
-            <span className="font-semibold text-foreground">{filtered.length}</span>
-            {" "}of{" "}
-            <span className="font-semibold text-foreground">{candidates.length}</span>
-            {" "}assigned candidates
-            {filterStage !== "all" && (
-              <span> · Stage: <span className="font-semibold capitalize">{filterStage.toUpperCase()}</span></span>
-            )}
-            {filterStatus !== "all" && (
-              <span> · Status: <span className="font-semibold">{filterStatus}</span></span>
-            )}
-          </p>
-        )}
-      </div>
-
-      {/* ── ROW 1: Summary Stats ── */}
-      {/* href uses pre-computed ID arrays so count on card == rows in history */}
+      {/* ── ROW 1: Summary Stats (unrelated to this fix) ── */}
       <div>
         <SectionLabel>My Interview Overview</SectionLabel>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-
-          {/* Total assigned */}
           <StatCard
             title="Assigned to Me"
             value={stats.totalAssigned}
             icon={Users}
             accent="bg-slate-500"
-            href={buildHistoryUrl({ panelUid })}
+            href={buildHistoryUrl({ panelUid, ids: myAssignedIds.length > 0 ? myAssignedIds.join(",") : "__empty__" })}
             description="Total candidates assigned"
           />
-
-          {/* Today's interviews — uses todayIds (computed from full candidates list) */}
           <StatCard
             title="Today's Interviews"
             value={stats.todayCount}
@@ -529,8 +590,6 @@ const todayIds = useMemo(() =>
             href={buildHistoryUrl({ panelUid, ids: todayIds.length > 0 ? todayIds.join(",") : "__empty__" })}
             description="Scheduled for today"
           />
-
-          {/* Pending feedback — uses pendingFeedbackIds */}
           <StatCard
             title="Pending Feedback"
             value={stats.pendingFeedback}
@@ -540,8 +599,6 @@ const todayIds = useMemo(() =>
             description="Feedback not submitted"
             highlight={stats.pendingFeedback > 0}
           />
-
-          {/* Selected by Me — uses selectedIds (deduplicated, L1+L2) */}
           <StatCard
             title="Selected by Me"
             value={stats.totalSelected}
@@ -557,7 +614,12 @@ const todayIds = useMemo(() =>
       {/* ── ROW 2: Round Breakdown + Trend Chart ── */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-        {/* Round breakdown — all hrefs pass panelUid so history shows only this panel's candidates */}
+        {/* FIXED: Round Breakdown now uses l1RoundIds / l2RoundIds — the
+            corrected L1 (l2* fields) / L2 (l2Manager* fields) mapping, with
+            Selected/Rejected/On Hold verified against candidate_history so
+            only the panel member who actually made the call is counted.
+            Every link below passes the exact ids array used for the count,
+            so count and Candidate History list can never disagree. */}
         <Card className="lg:col-span-2 shadow-sm border">
           <CardHeader className="pb-2 pt-5 px-5">
             <div className="flex items-center gap-2">
@@ -575,18 +637,22 @@ const todayIds = useMemo(() =>
                 <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">L1 Interview</p>
               </div>
               <div className="space-y-1.5">
-                {[
+              {[
                   {
-                    label: "Scheduled", count: stats.l1Scheduled, dot: "bg-blue-400",
-                    href: buildHistoryUrl({ panelUid, stage: "l1", status: "Scheduled" }),
+                    label: "Scheduled", count: l1RoundIds.scheduled.length, dot: "bg-blue-400",
+                    href: buildHistoryUrl({ panelUid, round: "L1 Interview", status: "Scheduled", ids: l1RoundIds.scheduled.length > 0 ? l1RoundIds.scheduled.join(",") : "__empty__" }),
                   },
                   {
-                    label: "Selected",  count: stats.l1Selected,  dot: "bg-emerald-500",
-                    href: buildHistoryUrl({ panelUid, stage: "l1", status: "Selected" }),
+                    label: "Selected",  count: l1RoundIds.selected.length,  dot: "bg-emerald-500",
+                    href: buildHistoryUrl({ panelUid, round: "L1 Interview", status: "Selected", ids: l1RoundIds.selected.length > 0 ? l1RoundIds.selected.join(",") : "__empty__" }),
                   },
                   {
-                    label: "Rejected",  count: stats.l1Rejected,  dot: "bg-rose-500",
-                    href: buildHistoryUrl({ panelUid, stage: "l1", status: "Rejected" }),
+                    label: "Rejected",  count: l1RoundIds.rejected.length,  dot: "bg-rose-500",
+                    href: buildHistoryUrl({ panelUid, round: "L1 Interview", status: "Rejected", ids: l1RoundIds.rejected.length > 0 ? l1RoundIds.rejected.join(",") : "__empty__" }),
+                  },
+                  {
+                    label: "On Hold",   count: l1RoundIds.onHold.length,    dot: "bg-amber-400",
+                    href: buildHistoryUrl({ panelUid, round: "L1 Interview", status: "On Hold", ids: l1RoundIds.onHold.length > 0 ? l1RoundIds.onHold.join(",") : "__empty__" }),
                   },
                 ].map(item => (
                   <Link key={item.label} href={item.href} className="block group">
@@ -608,18 +674,22 @@ const todayIds = useMemo(() =>
                 <p className="text-[10px] font-black uppercase tracking-widest text-foreground/70">L2 Interview</p>
               </div>
               <div className="space-y-1.5">
-                {[
+              {[
                   {
-                    label: "Scheduled", count: stats.l2Scheduled, dot: "bg-sky-400",
-                    href: buildHistoryUrl({ panelUid, stage: "l2", status: "Scheduled" }),
+                    label: "Scheduled", count: l2RoundIds.scheduled.length, dot: "bg-sky-400",
+                    href: buildHistoryUrl({ panelUid, round: "L2 Interview", status: "Scheduled", ids: l2RoundIds.scheduled.length > 0 ? l2RoundIds.scheduled.join(",") : "__empty__" }),
                   },
                   {
-                    label: "Selected",  count: stats.l2Selected,  dot: "bg-emerald-500",
-                    href: buildHistoryUrl({ panelUid, stage: "l2", status: "Selected" }),
+                    label: "Selected",  count: l2RoundIds.selected.length,  dot: "bg-emerald-500",
+                    href: buildHistoryUrl({ panelUid, round: "L2 Interview", status: "Selected", ids: l2RoundIds.selected.length > 0 ? l2RoundIds.selected.join(",") : "__empty__" }),
                   },
                   {
-                    label: "Rejected",  count: stats.l2Rejected,  dot: "bg-rose-500",
-                    href: buildHistoryUrl({ panelUid, stage: "l2", status: "Rejected" }),
+                    label: "Rejected",  count: l2RoundIds.rejected.length,  dot: "bg-rose-500",
+                    href: buildHistoryUrl({ panelUid, round: "L2 Interview", status: "Rejected", ids: l2RoundIds.rejected.length > 0 ? l2RoundIds.rejected.join(",") : "__empty__" }),
+                  },
+                  {
+                    label: "On Hold",   count: l2RoundIds.onHold.length,    dot: "bg-amber-400",
+                    href: buildHistoryUrl({ panelUid, round: "L2 Interview", status: "On Hold", ids: l2RoundIds.onHold.length > 0 ? l2RoundIds.onHold.join(",") : "__empty__" }),
                   },
                 ].map(item => (
                   <Link key={item.label} href={item.href} className="block group">
@@ -637,7 +707,7 @@ const todayIds = useMemo(() =>
           </CardContent>
         </Card>
 
-        {/* Trend chart */}
+        {/* Trend chart (unrelated to this fix) */}
         <Card className="lg:col-span-3 shadow-sm border">
           <CardHeader className="pb-2 pt-5 px-5">
             <div className="flex items-center gap-2">
@@ -662,6 +732,7 @@ const todayIds = useMemo(() =>
           </CardContent>
         </Card>
       </div>
+
     {/* ── ROW 4: Upcoming Interviews — Next 6 Days ── */}
     <div>
         <div className="flex items-center justify-between mb-3">

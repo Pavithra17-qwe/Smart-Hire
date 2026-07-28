@@ -1,0 +1,179 @@
+<!-- desktop-agent/consent-window.html -->
+<!--
+  Consent screen shown the moment the agent launches, before anything is
+  monitored or sent anywhere. No monitoring starts until the candidate
+  explicitly clicks "I consent, start monitoring".
+-->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>SmartHire Integrity Agent</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 28px;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .subtitle { color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card h2 { font-size: 13px; margin: 0 0 8px; color: #cbd5e1; }
+    ul { margin: 0; padding-left: 18px; font-size: 13px; color: #cbd5e1; }
+    li { margin-bottom: 6px; }
+    .will-check { border-color: #334155; }
+    .wont-collect { border-color: #334155; }
+    .wont-collect h2 { color: #86efac; }
+    .interview-meta {
+      font-size: 12px;
+      color: #94a3b8;
+      background: #0b1220;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+    }
+    .error {
+      font-size: 12px;
+      color: #fca5a5;
+      background: #2a1414;
+      border: 1px solid #7f1d1d;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+    }
+    .consent-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 13px;
+      margin: 16px 0;
+    }
+    .actions { display: flex; gap: 10px; margin-top: 8px; }
+    button {
+      flex: 1;
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #declineBtn { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+    #consentBtn { background: #4f46e5; color: white; }
+    #consentBtn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    #statusView { display: none; text-align: center; padding: 40px 0; }
+    #statusView.active { display: block; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #4ade80; display: inline-block; margin-right: 6px;
+      animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  </style>
+</head>
+<body>
+
+  <div id="consentView">
+    <h1>SmartHire Integrity Agent</h1>
+    <div class="subtitle">Optional desktop check-in for this interview</div>
+
+    <div id="metaBox" class="interview-meta">Loading interview details…</div>
+
+    <div class="card will-check">
+      <h2>This will check, while running:</h2>
+      <ul>
+        <li>Whether a known remote-access app (AnyDesk, TeamViewer, UltraViewer, RustDesk, Chrome Remote Desktop, Quick Assist) is running — by name only</li>
+        <li>How many monitors are connected to this computer</li>
+        <li>The name of the app currently in focus (app name only)</li>
+      </ul>
+    </div>
+
+    <div class="card wont-collect">
+      <h2>This will never collect:</h2>
+      <ul>
+        <li>Screen contents or screenshots</li>
+        <li>Window titles, file names, or file contents</li>
+        <li>Full list of every running process</li>
+        <li>Keystrokes or clipboard contents</li>
+      </ul>
+    </div>
+
+    <div class="consent-row">
+      <input type="checkbox" id="consentCheckbox" />
+      <label for="consentCheckbox">
+        I understand and agree to this monitoring for the duration of my interview. I can stop it at any time by closing this app.
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="declineBtn">Decline</button>
+      <button id="consentBtn" disabled>I consent, start monitoring</button>
+    </div>
+  </div>
+
+  <div id="statusView">
+    <h1><span class="dot"></span>Monitoring active</h1>
+    <p class="subtitle">You can close this window at any time to stop.</p>
+  </div>
+
+  <script>
+    const metaBox = document.getElementById('metaBox');
+    const consentCheckbox = document.getElementById('consentCheckbox');
+    const consentBtn = document.getElementById('consentBtn');
+    const declineBtn = document.getElementById('declineBtn');
+    const consentView = document.getElementById('consentView');
+    const statusView = document.getElementById('statusView');
+
+    let loadedConfig = null;
+
+    async function init() {
+      loadedConfig = await window.integrityAgent.getConfig();
+
+      if (!loadedConfig || !loadedConfig.interviewId || !loadedConfig.apiBaseUrl) {
+        metaBox.outerHTML =
+          '<div class="error">No interview configuration found. Please re-download this agent from your interview invitation link rather than running it standalone.</div>';
+        consentBtn.disabled = true;
+        consentCheckbox.disabled = true;
+        return;
+      }
+
+      metaBox.textContent = `Interview ID: ${loadedConfig.interviewId} — connecting to ${loadedConfig.apiBaseUrl}`;
+    }
+
+    consentCheckbox.addEventListener('change', () => {
+      consentBtn.disabled = !consentCheckbox.checked;
+    });
+
+    consentBtn.addEventListener('click', async () => {
+      if (!loadedConfig) return;
+      consentBtn.disabled = true;
+      consentBtn.textContent = 'Starting…';
+      await window.integrityAgent.grantConsent(loadedConfig);
+      consentView.style.display = 'none';
+      statusView.classList.add('active');
+    });
+
+    declineBtn.addEventListener('click', async () => {
+      await window.integrityAgent.declineConsent();
+    });
+
+    // If main.js reloads this file with #monitoring-active after consent
+    // (e.g. app restart edge case), show the status view immediately.
+    if (window.location.hash === '#monitoring-active') {
+      consentView.style.display = 'none';
+      statusView.classList.add('active');
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>

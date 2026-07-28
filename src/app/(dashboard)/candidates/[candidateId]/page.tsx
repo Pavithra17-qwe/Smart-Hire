@@ -76,6 +76,23 @@
  *      save and surfaces an error.
  *
  * ============================================================
+ * BUG FIX — "Reject Candidate" / "Resend (Reschedule) Interview
+ * Link" buttons remaining visible after a rejection triggered
+ * from the "Session Terminated" (e.g. Tab Switch) card.
+ *
+ *   ROOT CAUSE: the card's outer visibility condition was
+ *     status === 'Expired' || l1AIStatus === 'expired'
+ *   The `ai-reject` action updates l1Status to 'Rejected' but
+ *   never resets l1AIStatus away from 'expired', so the second
+ *   half of that OR kept the whole card (and its HR action
+ *   buttons) rendering forever, even after rejection was saved.
+ *
+ *   FIX: the HR action buttons block inside that card now also
+ *   requires `status !== 'Rejected'`. Since `status` is read
+ *   directly from the live Firestore candidate doc (onSnapshot),
+ *   this holds true across refreshes, re-navigation, and re-opens
+ *   — not just within the current session's local state.
+ * ============================================================
  */
 
 import React, { useState, useEffect, use } from 'react'
@@ -85,6 +102,7 @@ import {
   collection, Timestamp, query, where,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { getBaseUrl } from '@/lib/getBaseUrl';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -132,7 +150,33 @@ interface PanelUser {
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+const PLACEHOLDER = '-';
 
+function formatUploadedDate(ts: any): string {
+  if (!ts) return '';
+  const date = ts?.seconds ? new Date(ts.seconds * 1000) : new Date(ts);
+  return isNaN(date.getTime()) ? '' : date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function getProfessionalBackgroundFields(candidate: Candidate): [string, string][] {
+  const raw: [string, any][] = [
+    ['Full Name',          candidate.candidateName],
+    ['Email',              candidate.candidateEmail],
+    ['Phone',              candidate.phoneNumber || (candidate as any).candidatePhone || (candidate as any).phone],
+    ['Current Location',   (candidate as any).currentLocation],
+    ['Permanent Location', (candidate as any).permanentLocation],
+    ['Experience',         candidate.experience ? `${candidate.experience} Years` : ''],
+    ['Current Designation',(candidate as any).candidateDesignation],
+    ['Current CTC',        candidate.currentCtc],
+    ['Expected CTC',       candidate.expectedCtc],
+    ['Notice Period',      candidate.noticePeriod],
+    ['Onsite Comfort',     candidate.isComfortableOnsite],
+    ['Applied Project',    (candidate as any).projectName && (candidate as any).projectName !== '—' ? (candidate as any).projectName : ''],
+    ['Resume Link',        candidate.resumeFile?.name || ''],
+    ['Uploaded Date',      formatUploadedDate((candidate as any).createdDate)],
+  ];
+  return raw.map(([label, value]) => [label, value && String(value).trim() ? String(value) : PLACEHOLDER]);
+}
 async function getUserInfo(uid: string): Promise<{ email: string | null; name: string | null }> {
   if (!uid) return { email: null, name: null };
   try {
@@ -202,7 +246,7 @@ async function sendEmail(params: {
     '| thread:', params.threadMessageId || '(first email)',
   );
   try {
-    await sendInterviewEmail({
+    const result = await sendInterviewEmail({
       candidateName:     params.candidateName,
       candidateEmail:    email,
       jobRole:           params.jobRole,
@@ -223,12 +267,19 @@ async function sendEmail(params: {
       rescheduleToken:   params.rescheduleToken || '',
       l1RescheduleUsed:  params.l1RescheduleUsed ?? false,
     });
-    console.log('[sendEmail] ✅ Sent to:', email);
+    if (!result.success) {
+      console.error(
+        '[sendEmail] ❌ SMTP send FAILED for', email,
+        '| type:', params.emailType, '| stage:', params.stage,
+        '— check the "notifications" Firestore collection for the exact SMTP error.'
+      );
+      return;
+    }
+    console.log('[sendEmail] ✅ Sent to:', email, '| messageId:', result.messageId);
   } catch (err) {
-    console.error('[sendEmail] ❌ Failed for', email, err);
+    console.error('[sendEmail] ❌ Threw unexpectedly for', email, err);
   }
 }
-
 // ─── PANEL AVAILABILITY HELPERS ───────────────────────────────────────────────
 //
 // These utilities are the ONLY additions to the existing code.
@@ -1881,8 +1932,12 @@ const InterviewStageCard: React.FC<{
       </div>
     )}
 
-    {/* HR actions */}
-    {role === 'hr' && (
+    {/* HR actions — hidden once the candidate has already been rejected,
+        so "Reject Candidate" and "Resend/Reschedule Interview Link" cannot
+        be used again. `status` here comes straight from the live Firestore
+        candidate doc (onSnapshot), so this reflects the latest saved state
+        on every load/refresh, not just local component state. */}
+    {role === 'hr' && status !== 'Rejected' && (
       <div style={{
         background: '#F8F7FF', borderRadius: '10px', padding: '14px',
         border: '1px solid #DDD6FE',
@@ -1916,6 +1971,21 @@ const InterviewStageCard: React.FC<{
             ✕ Reject Candidate
           </button>
         </div>
+      </div>
+    )}
+
+    {/* Rejected indicator — shown once l1Status has been persisted as
+        'Rejected', in place of the action buttons above. Purely informational;
+        does not add any new interactive controls. */}
+    {status === 'Rejected' && (
+      <div style={{
+        background: '#FEF2F2', borderRadius: '10px', padding: '12px 14px',
+        border: '1px solid #FECACA', display: 'flex', alignItems: 'center', gap: '8px',
+      }}>
+        <span style={{ fontSize: '16px' }}>✕</span>
+        <p style={{ fontSize: '13px', fontWeight: 600, color: '#991B1B', margin: 0 }}>
+          Candidate has been rejected. No further action available for this session.
+        </p>
       </div>
     )}
   </div>
@@ -2544,7 +2614,8 @@ export default function CandidatePage({ params }: { params: Promise<{ candidateI
           historyData.status = 'Panel Reviewed';
         } else if (action === 'accept') {
           const token = globalThis.crypto.randomUUID();
-          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+          // const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://smart-hire-six.vercel.app';
+          const baseUrl = getBaseUrl();
           const interviewUrl = `${baseUrl}/interview/${token}`;
           const resumeText = [
             `Name: ${candidate.candidateName}`,
@@ -2608,7 +2679,7 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
           historyData.status = 'Rejected';
         } else if (action === 'ai-schedule') {
           const token = globalThis.crypto.randomUUID();
-          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://smart-hire-six.vercel.app';
           const interviewUrl = `${baseUrl}/interview/${token}`;
           const resumeText = [`Name: ${candidate.candidateName}`, `Role: ${candidate.candidateDesignation}`, `Experience: ${(candidate as any).experience} years`, `Skills: ${(candidate as any).skills || ''}`, `Current Company: ${(candidate as any).currentCompany || ''}`, `Notice Period: ${(candidate as any).noticePeriod || ''}`].filter(Boolean).join('\n');
           const jobDescription = (candidate as any).jobDescription || (candidate as any).jdText || `Role: ${candidate.candidateDesignation}`;
@@ -2632,7 +2703,7 @@ await sendEmail({ toEmail: uploaderEmailForAI, candidateName: candidate.candidat
 
   } else if (action === 'resend-ai-link') {   // ← ADD FROM HERE
     const token = globalThis.crypto.randomUUID();
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://smart-hire-six.vercel.app';
     const interviewUrl = `${baseUrl}/interview/${token}`;
     const sentAt = Timestamp.now();
     const expiresAt = Timestamp.fromMillis(sentAt.toMillis() + 48 * 60 * 60 * 1000);
@@ -2945,7 +3016,13 @@ else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
   return (
     <div style={{ fontFamily: 'Segoe UI, system-ui', background: '#F5F6FA', padding: '24px' }}>
       <div style={{ marginBottom: '20px' }}>
-        <Button variant="outline" onClick={() => router.back()} className="flex items-center gap-2 font-semibold">← Back to History</Button>
+      <Button
+  variant="outline"
+  onClick={() => router.push(`/candidates/history`)}
+  className="flex items-center gap-2 font-semibold"
+>
+  ← Back to History
+</Button>
       </div>
 
       {role === 'admin' && (
@@ -2982,21 +3059,35 @@ else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
           </div>
           <AIMatchCard candidate={candidate} />
           <div style={{ background: 'white', borderRadius: '12px', padding: '20px' }}>
-            <h2 style={{ fontWeight: 'bold', marginBottom: '16px' }}>Professional Background</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontWeight: 'bold', margin: 0 }}>Professional Background</h2>
+              {(() => {
+                const fields = getProfessionalBackgroundFields(candidate);
+                const hasMissing = fields.some(([, value]) => value === PLACEHOLDER);
+                if (!hasMissing) {
+                  return (
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#059669', background: '#D1FAE5', padding: '3px 10px', borderRadius: '999px' }}>
+                      ✓ Complete
+                    </span>
+                  );
+                }
+                if (role !== 'hr') return null;
+                return (
+                  <Button
+                    size="sm"
+                    onClick={() => router.push(`/candidates/evaluation?editProfile=${candidateId}`)}
+                    style={{ background: '#7C3AED', color: 'white', fontWeight: 'bold' }}
+                  >
+                    Edit Professional Background
+                  </Button>
+                );
+              })()}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              {[
-                ['Full Name',      candidate.candidateName],
-                ['Email',          candidate.candidateEmail],
-                ['Phone',          candidate.phoneNumber || candidate.candidatePhone || candidate.phone || '—'],
-                ['Experience',     candidate.experience ? `${candidate.experience} Years` : '—'],
-                ['Current CTC',    candidate.currentCtc   || '—'],
-                ['Expected CTC',   candidate.expectedCtc  || '—'],
-                ['Notice Period',  candidate.noticePeriod  || '—'],
-                ['Onsite Comfort', candidate.isComfortableOnsite || '—'],
-              ].map(([label, value]) => (
-                <div key={label as string}>
+              {getProfessionalBackgroundFields(candidate).map(([label, value]) => (
+                <div key={label}>
                   <p style={{ fontWeight: 'bold', fontSize: '13px', marginBottom: '4px' }}>{label}</p>
-                  <p style={{ color: 'gray', fontSize: '12px', wordBreak: 'break-all' }}>{value as string}</p>
+                  <p style={{ color: value === PLACEHOLDER ? '#D1D5DB' : 'gray', fontSize: '12px', wordBreak: 'break-all' }}>{value}</p>
                 </div>
               ))}
             </div>
@@ -3033,7 +3124,3 @@ else if (stage === 'HR Round' && (action === 'select' || action === 'reject')) {
       </div>
     </div>
   );
-}
-
-
-

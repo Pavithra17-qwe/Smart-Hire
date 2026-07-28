@@ -162,20 +162,35 @@ Applied Designation:  ${profile.designation         || 'Not specified'}
     // ── Build prompt ──────────────────────────────────────────────────────────
     const promptParts: any[] = [];
 
+    // ↓↓↓ REPLACES the old promptParts.push({...}) block that started with
+    // "You are an expert recruiter..." and had the old 5-part scoring
+    // breakdown (Skill Match 35%, Experience Match 20%, etc.)
     promptParts.push({
       text: `You are an expert recruiter and talent evaluator. Evaluate the candidate holistically using three sources: the Job Description, the candidate's resume, and the manually entered profile data.
     
     Scoring breakdown:
-    1. Skill Match (35%)        — technical and soft skills from the resume vs JD requirements
+    1. Skill Match (30%)        — technical and soft skills from the resume vs JD requirements (use semantic/conceptual matching, not exact keyword matching — e.g. "React.js" should match "React")
     2. Experience Match (20%)   — years and quality of experience vs JD requirements
-    3. Role Relevance (15%)     — past roles and projects vs the target position
-    4. Keyword Alignment (10%)  — tools, certifications, domain terms
-    5. Profile Fit (20%)        — evaluate ALL of these from the candidate profile data:
+    3. Role Relevance (15%)     — past roles, projects, and domain experience vs the target position
+    4. Certifications & Keywords (10%) — relevant certifications, tools, domain terms, required technologies
+    5. Responsibilities Alignment (5%) — how well past responsibilities map to the JD's stated responsibilities
+    6. Profile Fit (20%)        — evaluate from the candidate profile data:
        • Does their Expected CTC seem reasonable for this role?
        • Is their notice period acceptable (Immediate/15 days = positive, 60-90 days = slight penalty)?
        • Does their current location match the job location or are they open to relocation?
        • Are they comfortable working onsite if the role requires it?
        • Does their designation/title match the applied role level?
+    
+    IMPORTANT SCORING RULES:
+    - Do NOT penalize a candidate for missing optional/formatting details such as a missing phone number, missing LinkedIn URL, or resume formatting style. Score only on substantive skill/experience/role content.
+    - Use semantic matching for skills and technologies — a candidate does not need the exact same wording as the JD to get credit for a matching skill.
+    - Normalize the final matchScore using these bands so scores are meaningful and not compressed toward the low end:
+      • 95–100 = Excellent match (nearly all requirements met with strong depth)
+      • 85–94  = Very good match (most requirements met, minor gaps)
+      • 75–84  = Good match (solid overlap, some gaps in secondary requirements)
+      • 60–74  = Average match (partial overlap, several gaps)
+      • 0–59   = Poor match (little relevant overlap)
+    A genuinely strong, relevant resume should land in the 75+ range — do not default to conservative low scores out of caution.
     
     Return ONLY a valid JSON object with exactly these two keys:
     {
@@ -188,6 +203,7 @@ Applied Designation:  ${profile.designation         || 'Not specified'}
     --- JOB DESCRIPTION ---
     `,
     });
+    // ↑↑↑ end of replaced block ↑↑↑
 
     if (jdText) {
       promptParts.push({ text: jdText });

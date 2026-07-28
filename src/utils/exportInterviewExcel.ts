@@ -321,6 +321,25 @@ export function exportInterviewsToExcel(data: InterviewExportRow[], filename?: s
 // Reads directly from Firestore candidate doc.
 // ── Date fix: tries l1AICompletedAt (Firestore Timestamp or ISO string) ──────
 // ── Q&A fix:  reads questions / transcripts / timings arrays saved by /api/interview/score
+//
+// ── EXCEL EXPORT FIX (unanswered-questions bug) ──────────────────────────────
+// ROOT CAUSE: "questions exist?" was being decided purely from the question
+// TEXT array (l1AIQuestions / aiQuestions / questions). On candidates who
+// answered ZERO questions, that text array can come back empty even though
+// the interview genuinely had questions — the question COUNT is still saved
+// separately by /api/interview/score as l1AITotalQuestions / totalQuestions.
+// Because the export only looked at the text array, it wrongly treated
+// "no answers" as "no questions" and rendered the "No questions recorded
+// for this candidate." fallback instead of listing the questions with
+// "(No transcript captured)".
+//
+// FIX: if the question-text array is empty but a real question count exists
+// on the doc, synthesize placeholder question rows ("Question 1", "Question
+// 2", …) so every asked question still gets its own row in the export, with
+// the Candidate Answer column showing "(No transcript captured)" via the
+// existing buildQASheet hasAnswer check. No scoring, evaluation, transcript
+// storage, or database logic is touched — this only changes what feeds the
+// Excel export.
 
 export function buildExportRow(candidateDoc: Record<string, any>): InterviewExportRow {
 
@@ -374,10 +393,28 @@ export function buildExportRow(candidateDoc: Record<string, any>): InterviewExpo
     candidateDoc.timings          ??
     [];
 
-  const isCodeQ = (text: string) => /\bwrite\b|\bimplement\b|\bpseudocode\b/i.test(text);
-  const lastQ   = questions.length - 1;
+  // ── FIX: fall back to the saved question COUNT when the question TEXT
+  // array is empty. This is what distinguishes "questions were asked but
+  // none were answered" (export all questions with placeholder text +
+  // "(No transcript captured)") from "no questions were ever asked/recorded"
+  // (export keeps showing the "No questions recorded" message via the empty
+  // array reaching buildQASheet unchanged).
+  const totalQuestionsMeta: number =
+    candidateDoc.l1AITotalQuestions ??
+    candidateDoc.totalQuestions     ??
+    0;
 
-  const questionsAndAnswers = questions.map((q, i) => ({
+  const effectiveQuestions: string[] =
+    questions.length > 0
+      ? questions
+      : totalQuestionsMeta > 0
+        ? Array.from({ length: totalQuestionsMeta }, (_, i) => `Question ${i + 1}`)
+        : [];
+
+  const isCodeQ = (text: string) => /\bwrite\b|\bimplement\b|\bpseudocode\b/i.test(text);
+  const lastQ   = effectiveQuestions.length - 1;
+
+  const questionsAndAnswers = effectiveQuestions.map((q, i) => ({
     questionNumber:   i + 1,
     questionText:     q,
     answerTranscript: transcripts[i]?.trim() ?? '',
